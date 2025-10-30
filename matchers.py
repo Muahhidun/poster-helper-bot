@@ -24,9 +24,11 @@ class CategoryMatcher:
         self.telegram_user_id = telegram_user_id
         self.aliases: Dict[str, Tuple[int, str]] = {}  # alias -> (category_id, category_name)
 
-        # Determine CSV path based on user
+        # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
-            self.csv_path = Path(f"data/users/{telegram_user_id}/alias_category_mapping.csv")
+            user_csv = Path(f"data/users/{telegram_user_id}/alias_category_mapping.csv")
+            # Use global CSV if user-specific one doesn't exist
+            self.csv_path = user_csv if user_csv.exists() else CATEGORY_ALIASES_CSV
         else:
             self.csv_path = CATEGORY_ALIASES_CSV
 
@@ -37,6 +39,8 @@ class CategoryMatcher:
         if not self.csv_path.exists():
             logger.warning(f"Category aliases file not found: {self.csv_path}")
             return
+
+        logger.info(f"Loading category aliases from: {self.csv_path}")
 
         with open(self.csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -116,9 +120,11 @@ class AccountMatcher:
         self.accounts: Dict[int, Dict] = {}  # account_id -> account_info
         self.aliases: Dict[str, int] = {}  # alias -> account_id
 
-        # Determine CSV path based on user
+        # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
-            self.csv_path = Path(f"data/users/{telegram_user_id}/poster_accounts.csv")
+            user_csv = Path(f"data/users/{telegram_user_id}/poster_accounts.csv")
+            # Use global CSV if user-specific one doesn't exist
+            self.csv_path = user_csv if user_csv.exists() else ACCOUNTS_CSV
         else:
             self.csv_path = ACCOUNTS_CSV
 
@@ -129,6 +135,8 @@ class AccountMatcher:
         if not self.csv_path.exists():
             logger.warning(f"Accounts file not found: {self.csv_path}")
             return
+
+        logger.info(f"Loading accounts from: {self.csv_path}")
 
         with open(self.csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
