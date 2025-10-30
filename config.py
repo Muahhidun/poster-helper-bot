@@ -8,9 +8,20 @@ load_dotenv()
 
 # Project paths
 PROJECT_ROOT = Path(__file__).parent
-DATA_DIR = PROJECT_ROOT / "data"
-STORAGE_DIR = PROJECT_ROOT / "storage"
-LOGS_DIR = PROJECT_ROOT / "logs"
+
+# Use Railway Volume if available, otherwise use local directories
+# Railway Volume provides persistent storage across deploys
+RAILWAY_VOLUME = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+if RAILWAY_VOLUME:
+    # On Railway: use persistent volume
+    DATA_DIR = Path(RAILWAY_VOLUME)
+    STORAGE_DIR = Path(RAILWAY_VOLUME) / "storage"
+    LOGS_DIR = Path(RAILWAY_VOLUME) / "logs"
+else:
+    # Local development: use project directories
+    DATA_DIR = PROJECT_ROOT / "data"
+    STORAGE_DIR = PROJECT_ROOT / "storage"
+    LOGS_DIR = PROJECT_ROOT / "logs"
 
 # Ensure directories exist
 DATA_DIR.mkdir(exist_ok=True)
@@ -46,7 +57,14 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # File paths
 CATEGORY_ALIASES_CSV = DATA_DIR / "alias_category_mapping.csv"
 ACCOUNTS_CSV = DATA_DIR / "poster_accounts.csv"
-DATABASE_PATH = STORAGE_DIR / "bot.db"
+DATABASE_PATH = DATA_DIR / "users.db"  # Changed to use DATA_DIR for consistency
+
+# Helper function
+def get_user_data_dir(telegram_user_id: int) -> Path:
+    """Get user-specific data directory (works with both local and Railway)"""
+    user_dir = DATA_DIR / "users" / str(telegram_user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
 
 # Validation
 def validate_config():

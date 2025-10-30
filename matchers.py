@@ -26,7 +26,8 @@ class CategoryMatcher:
 
         # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
-            user_csv = Path(f"data/users/{telegram_user_id}/alias_category_mapping.csv")
+            user_dir = config.get_user_data_dir(telegram_user_id)
+            user_csv = user_dir / "alias_category_mapping.csv"
             # Use global CSV if user-specific one doesn't exist
             self.csv_path = user_csv if user_csv.exists() else CATEGORY_ALIASES_CSV
         else:
@@ -122,7 +123,8 @@ class AccountMatcher:
 
         # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
-            user_csv = Path(f"data/users/{telegram_user_id}/poster_accounts.csv")
+            user_dir = config.get_user_data_dir(telegram_user_id)
+            user_csv = user_dir / "poster_accounts.csv"
             # Use global CSV if user-specific one doesn't exist
             self.csv_path = user_csv if user_csv.exists() else ACCOUNTS_CSV
         else:
@@ -228,9 +230,10 @@ class SupplierMatcher:
 
         # Determine CSV path based on user
         if telegram_user_id:
-            self.csv_path = Path(f"data/users/{telegram_user_id}/poster_suppliers.csv")
+            user_dir = config.get_user_data_dir(telegram_user_id)
+            self.csv_path = user_dir / "poster_suppliers.csv"
         else:
-            self.csv_path = Path(config.DATA_DIR) / "poster_suppliers.csv"
+            self.csv_path = config.DATA_DIR / "poster_suppliers.csv"
 
         self.load_suppliers()
 
@@ -318,11 +321,12 @@ class IngredientMatcher:
 
         # Determine CSV paths based on user
         if telegram_user_id:
-            self.ingredients_csv = Path(f"data/users/{telegram_user_id}/poster_ingredients.csv")
-            self.aliases_csv = Path(f"data/users/{telegram_user_id}/alias_item_mapping.csv")
+            user_dir = config.get_user_data_dir(telegram_user_id)
+            self.ingredients_csv = user_dir / "poster_ingredients.csv"
+            self.aliases_csv = user_dir / "alias_item_mapping.csv"
         else:
-            self.ingredients_csv = Path(config.DATA_DIR) / "poster_ingredients.csv"
-            self.aliases_csv = Path(config.DATA_DIR) / "alias_item_mapping.csv"
+            self.ingredients_csv = config.DATA_DIR / "poster_ingredients.csv"
+            self.aliases_csv = config.DATA_DIR / "alias_item_mapping.csv"
 
         self.load_ingredients()
         self.load_aliases()
@@ -550,11 +554,12 @@ class ProductMatcher:
 
         # Determine CSV paths based on user
         if telegram_user_id:
-            self.products_csv = Path(f"data/users/{telegram_user_id}/poster_products.csv")
-            self.aliases_csv = Path(f"data/users/{telegram_user_id}/alias_item_mapping.csv")
+            user_dir = config.get_user_data_dir(telegram_user_id)
+            self.products_csv = user_dir / "poster_products.csv"
+            self.aliases_csv = user_dir / "alias_item_mapping.csv"
         else:
-            self.products_csv = Path(config.DATA_DIR) / "poster_products.csv"
-            self.aliases_csv = Path(config.DATA_DIR) / "alias_item_mapping.csv"
+            self.products_csv = config.DATA_DIR / "poster_products.csv"
+            self.aliases_csv = config.DATA_DIR / "alias_item_mapping.csv"
 
         self.load_products()
         self.load_aliases()

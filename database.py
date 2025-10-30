@@ -4,10 +4,11 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime, timedelta
+from config import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("data/users.db")
+DB_PATH = DATABASE_PATH
 
 
 class UserDatabase:

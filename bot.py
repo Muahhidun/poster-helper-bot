@@ -1038,7 +1038,7 @@ async def handle_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                         # Create user's data directory
                         from pathlib import Path
                         import csv as csv_module
-                        user_data_dir = Path(f"data/users/{telegram_user_id}")
+                        user_data_dir = config.get_user_data_dir(telegram_user_id)
                         user_data_dir.mkdir(parents=True, exist_ok=True)
 
                         # Create empty CSV files with headers only
@@ -1193,7 +1193,7 @@ async def handle_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 # Create user's data directory
                 from pathlib import Path
                 import csv as csv_module
-                user_data_dir = Path(f"data/users/{telegram_user_id}")
+                user_data_dir = config.get_user_data_dir(telegram_user_id)
                 user_data_dir.mkdir(parents=True, exist_ok=True)
 
                 # Create empty CSV files with headers only
