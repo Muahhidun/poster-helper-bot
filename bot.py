@@ -19,6 +19,7 @@ from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
     DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config
 )
+from database import get_database
 from poster_client import get_poster_client
 from stt_service import get_stt_service
 from parser_service import get_parser_service
@@ -4282,6 +4283,9 @@ def main():
         # Validate configuration
         validate_config()
         logger.info("✅ Configuration validated")
+
+        # Initialize database (creates tables if needed)
+        get_database()
 
         # Create application
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
