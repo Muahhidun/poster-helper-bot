@@ -32,5 +32,7 @@ logs/
 .coverage
 htmlcov/
 
-# Data files
-data/
+# Data files - allow CSV mappings, exclude databases
+data/*.db
+data/*.sqlite
+data/*.sqlite3
