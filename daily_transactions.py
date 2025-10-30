@@ -76,23 +76,23 @@ class DailyTransactionScheduler:
         )
         transactions_created.append(f"Повара: {tx_id}")
 
-        # 1× Повара (ID=17) - 10000₸, комментарий "Мадира"
+        # 1× Повара (ID=17) - 1₸, комментарий "Мадира"
         tx_id = await poster_client.create_transaction(
             transaction_type=0,
             category_id=17,  # Повара
             account_from_id=4,
-            amount=10000,
+            amount=1,
             date=current_time,
             comment="Мадира"
         )
         transactions_created.append(f"Повара (Мадира): {tx_id}")
 
-        # 1× Повара (ID=17) - 10000₸, комментарий "Нургуль"
+        # 1× Повара (ID=17) - 1₸, комментарий "Нургуль"
         tx_id = await poster_client.create_transaction(
             transaction_type=0,
             category_id=17,  # Повара
             account_from_id=4,
-            amount=10000,
+            amount=1,
             date=current_time,
             comment="Нургуль"
         )
