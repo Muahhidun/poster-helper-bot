@@ -25,6 +25,7 @@ from parser_service import get_parser_service
 from simple_parser import get_simple_parser
 from matchers import get_category_matcher, get_account_matcher, get_supplier_matcher, get_ingredient_matcher, get_product_matcher
 from daily_transactions import DailyTransactionScheduler, is_daily_transactions_enabled
+from alias_generator import AliasGenerator
 import re
 
 # APScheduler для автоматических задач
@@ -1064,18 +1065,23 @@ async def handle_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                         try:
                             poster_client = get_poster_client(telegram_user_id)
 
-                            # Fetch categories
+                            # Fetch categories and generate aliases
                             categories = await poster_client.get_categories()
                             logger.info(f"Fetched {len(categories)} categories for user {telegram_user_id}")
 
-                            # Fetch accounts
+                            # Auto-generate category aliases
+                            AliasGenerator.create_category_aliases_csv(
+                                categories,
+                                user_data_dir / 'alias_category_mapping.csv'
+                            )
+
+                            # Fetch accounts and generate aliases
                             accounts = await poster_client.get_accounts()
-                            with open(user_data_dir / 'poster_accounts.csv', 'w', encoding='utf-8', newline='') as f:
-                                writer = csv_module.writer(f)
-                                writer.writerow(['account_id', 'account_name', 'account_type'])
-                                for acc in accounts:
-                                    writer.writerow([acc['account_id'], acc['name'], acc.get('type', '')])
-                            logger.info(f"Saved {len(accounts)} accounts for user {telegram_user_id}")
+                            AliasGenerator.create_account_aliases_csv(
+                                accounts,
+                                user_data_dir / 'poster_accounts.csv'
+                            )
+                            logger.info(f"Saved {len(accounts)} accounts with aliases for user {telegram_user_id}")
 
                             # Fetch ingredients
                             ingredients = await poster_client.get_ingredients()
@@ -1109,13 +1115,16 @@ async def handle_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                                 if supplier_id and supplier_name:
                                     suppliers_dict[supplier_id] = supplier_name
 
-                            # Save suppliers
-                            with open(user_data_dir / 'poster_suppliers.csv', 'w', encoding='utf-8', newline='') as f:
-                                writer = csv_module.writer(f)
-                                writer.writerow(['supplier_id', 'name', 'aliases'])
-                                for supplier_id, supplier_name in suppliers_dict.items():
-                                    writer.writerow([supplier_id, supplier_name, ''])
-                            logger.info(f"Saved {len(suppliers_dict)} suppliers for user {telegram_user_id}")
+                            # Save suppliers with auto-generated aliases
+                            suppliers_list = [
+                                {'supplier_id': sid, 'supplier_name': sname}
+                                for sid, sname in suppliers_dict.items()
+                            ]
+                            AliasGenerator.create_supplier_aliases_csv(
+                                suppliers_list,
+                                user_data_dir / 'poster_suppliers.csv'
+                            )
+                            logger.info(f"Saved {len(suppliers_dict)} suppliers with aliases for user {telegram_user_id}")
 
                         except Exception as e:
                             logger.error(f"Failed to fetch Poster data: {e}")
