@@ -1,71 +1,134 @@
-"""Database management for multi-tenant bot"""
-import sqlite3
+"""Database management for multi-tenant bot - supports both SQLite and PostgreSQL"""
+import os
 import logging
 from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime, timedelta
-from config import DATABASE_PATH
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = DATABASE_PATH
+# Detect database type based on environment
+DATABASE_URL = os.getenv("DATABASE_URL")  # Railway provides this for PostgreSQL
+
+if DATABASE_URL:
+    # PostgreSQL on Railway
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    DB_TYPE = "postgresql"
+    logger.info("Using PostgreSQL database")
+else:
+    # SQLite locally
+    import sqlite3
+    from config import DATABASE_PATH
+    DB_TYPE = "sqlite"
+    logger.info(f"Using SQLite database at {DATABASE_PATH}")
 
 
 class UserDatabase:
     """Database for managing user accounts"""
 
     def __init__(self):
-        self.db_path = DB_PATH
+        if DB_TYPE == "sqlite":
+            from config import DATABASE_PATH
+            self.db_path = DATABASE_PATH
+        else:
+            self.db_url = DATABASE_URL
+
         self._init_db()
+
+    def _get_connection(self):
+        """Get database connection based on type"""
+        if DB_TYPE == "sqlite":
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+        else:
+            # PostgreSQL
+            return psycopg2.connect(self.db_url)
 
     def _init_db(self):
         """Initialize database with tables"""
-        # Create data directory if not exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if DB_TYPE == "sqlite":
+            # Create data directory if not exists
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                telegram_user_id INTEGER PRIMARY KEY,
-                poster_token TEXT NOT NULL,
-                poster_user_id TEXT NOT NULL,
-                poster_base_url TEXT NOT NULL DEFAULT 'https://joinposter.com/api',
-                subscription_status TEXT NOT NULL DEFAULT 'trial',
-                subscription_expires_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
+        if DB_TYPE == "sqlite":
+            # SQLite syntax
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    telegram_user_id INTEGER PRIMARY KEY,
+                    poster_token TEXT NOT NULL,
+                    poster_user_id TEXT NOT NULL,
+                    poster_base_url TEXT NOT NULL DEFAULT 'https://joinposter.com/api',
+                    subscription_status TEXT NOT NULL DEFAULT 'trial',
+                    subscription_expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
 
-        # User settings table (optional features)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_settings (
-                telegram_user_id INTEGER PRIMARY KEY,
-                language TEXT DEFAULT 'ru',
-                timezone TEXT DEFAULT 'UTC+6',
-                notifications_enabled INTEGER DEFAULT 1,
-                FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
-            )
-        """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    telegram_user_id INTEGER PRIMARY KEY,
+                    language TEXT DEFAULT 'ru',
+                    timezone TEXT DEFAULT 'UTC+6',
+                    notifications_enabled INTEGER DEFAULT 1,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
+                )
+            """)
+        else:
+            # PostgreSQL syntax
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    telegram_user_id BIGINT PRIMARY KEY,
+                    poster_token TEXT NOT NULL,
+                    poster_user_id TEXT NOT NULL,
+                    poster_base_url TEXT NOT NULL DEFAULT 'https://joinposter.com/api',
+                    subscription_status TEXT NOT NULL DEFAULT 'trial',
+                    subscription_expires_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    telegram_user_id BIGINT PRIMARY KEY,
+                    language TEXT DEFAULT 'ru',
+                    timezone TEXT DEFAULT 'UTC+6',
+                    notifications_enabled INTEGER DEFAULT 1,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
+                )
+            """)
 
         conn.commit()
         conn.close()
-        logger.info(f"✅ Database initialized: {self.db_path}")
+
+        if DB_TYPE == "sqlite":
+            logger.info(f"✅ SQLite database initialized: {self.db_path}")
+        else:
+            logger.info(f"✅ PostgreSQL database initialized")
 
     def get_user(self, telegram_user_id: int) -> Optional[Dict]:
         """Get user by Telegram ID"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        conn = self._get_connection()
 
-        cursor.execute("""
-            SELECT * FROM users WHERE telegram_user_id = ?
-        """, (telegram_user_id,))
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM users WHERE telegram_user_id = ?
+            """, (telegram_user_id,))
+            row = cursor.fetchone()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT * FROM users WHERE telegram_user_id = %s
+            """, (telegram_user_id,))
+            row = cursor.fetchone()
 
-        row = cursor.fetchone()
         conn.close()
 
         if row:
@@ -81,33 +144,56 @@ class UserDatabase:
     ) -> bool:
         """Create new user"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
 
-            now = datetime.now().isoformat()
-            trial_expires = (datetime.now() + timedelta(days=14)).isoformat()
+            now = datetime.now()
+            trial_expires = now + timedelta(days=14)
 
-            cursor.execute("""
-                INSERT INTO users (
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO users (
+                        telegram_user_id,
+                        poster_token,
+                        poster_user_id,
+                        poster_base_url,
+                        subscription_status,
+                        subscription_expires_at,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
                     telegram_user_id,
                     poster_token,
                     poster_user_id,
                     poster_base_url,
-                    subscription_status,
-                    subscription_expires_at,
-                    created_at,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                telegram_user_id,
-                poster_token,
-                poster_user_id,
-                poster_base_url,
-                'trial',
-                trial_expires,
-                now,
-                now
-            ))
+                    'trial',
+                    trial_expires.isoformat(),
+                    now.isoformat(),
+                    now.isoformat()
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO users (
+                        telegram_user_id,
+                        poster_token,
+                        poster_user_id,
+                        poster_base_url,
+                        subscription_status,
+                        subscription_expires_at,
+                        created_at,
+                        updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    telegram_user_id,
+                    poster_token,
+                    poster_user_id,
+                    poster_base_url,
+                    'trial',
+                    trial_expires,
+                    now,
+                    now
+                ))
 
             conn.commit()
             conn.close()
@@ -115,9 +201,6 @@ class UserDatabase:
             logger.info(f"✅ User created: telegram_id={telegram_user_id}")
             return True
 
-        except sqlite3.IntegrityError:
-            logger.error(f"User already exists: telegram_id={telegram_user_id}")
-            return False
         except Exception as e:
             logger.error(f"Failed to create user: {e}")
             return False
@@ -132,7 +215,7 @@ class UserDatabase:
     ) -> bool:
         """Update user info"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
 
             updates = []
@@ -155,11 +238,19 @@ class UserDatabase:
                 return False
 
             updates.append("updated_at = ?")
-            params.append(datetime.now().isoformat())
-            params.append(telegram_user_id)
 
-            query = f"UPDATE users SET {', '.join(updates)} WHERE telegram_user_id = ?"
-            cursor.execute(query, params)
+            if DB_TYPE == "sqlite":
+                params.append(datetime.now().isoformat())
+                params.append(telegram_user_id)
+                query = f"UPDATE users SET {', '.join(updates)} WHERE telegram_user_id = ?"
+                cursor.execute(query, params)
+            else:
+                # For PostgreSQL, replace ? with %s
+                updates_pg = [u.replace("?", "%s") for u in updates]
+                params.append(datetime.now())
+                params.append(telegram_user_id)
+                query = f"UPDATE users SET {', '.join(updates_pg)} WHERE telegram_user_id = %s"
+                cursor.execute(query, params)
 
             conn.commit()
             conn.close()
@@ -174,10 +265,13 @@ class UserDatabase:
     def delete_user(self, telegram_user_id: int) -> bool:
         """Delete user (for testing or user request)"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute("DELETE FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
+            else:
+                cursor.execute("DELETE FROM users WHERE telegram_user_id = %s", (telegram_user_id,))
 
             conn.commit()
             conn.close()
@@ -201,7 +295,11 @@ class UserDatabase:
 
         # Check expiration date
         if user['subscription_expires_at']:
-            expires_at = datetime.fromisoformat(user['subscription_expires_at'])
+            if DB_TYPE == "sqlite":
+                expires_at = datetime.fromisoformat(user['subscription_expires_at'])
+            else:
+                expires_at = user['subscription_expires_at']
+
             if datetime.now() > expires_at:
                 # Update status to expired
                 self.update_user(telegram_user_id, subscription_status='expired')
