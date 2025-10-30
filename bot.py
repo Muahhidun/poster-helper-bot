@@ -1,0 +1,4317 @@
+"""Main Telegram Bot module for Poster Helper"""
+import logging
+import asyncio
+from pathlib import Path
+from datetime import datetime
+from typing import Dict
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
+
+# Local imports
+from config import (
+    TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
+    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config
+)
+from poster_client import get_poster_client
+from stt_service import get_stt_service
+from parser_service import get_parser_service
+from simple_parser import get_simple_parser
+from matchers import get_category_matcher, get_account_matcher, get_supplier_matcher, get_ingredient_matcher, get_product_matcher
+from daily_transactions import DailyTransactionScheduler, is_daily_transactions_enabled
+import re
+
+# APScheduler для автоматических задач
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+
+# Setup logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+
+# === Helper Functions ===
+
+def extract_packing_size(item_name: str) -> int:
+    """
+    Extract packing size from canonical item name in Poster.
+
+    Examples:
+        "Булочка кунжут 11,4 (30шт)" -> 30
+        "Тортилья сырная (12шт)" -> 12
+        "Сырные палочки 1кг" -> 1 (no packing)
+
+    Returns:
+        Packing size or 1 if no packing info found
+    """
+    # Look for patterns like (30шт), (12шт), etc.
+    match = re.search(r'\((\d+)шт\)', item_name)
+    if match:
+        return int(match.group(1))
+    return 1
+
+
+def adjust_for_packing(item_name: str, qty: float, price: float, original_name: str) -> tuple:
+    """
+    Adjust quantity and price if item is sold in packages.
+
+    If canonical name has packing info (e.g., "(30шт)") and original qty looks like
+    number of packages (small integer like 10), then:
+    - qty = qty * packing_size
+    - price = price / packing_size
+
+    Args:
+        item_name: Canonical name from Poster (e.g., "Булочка кунжут 11,4 (30шт)")
+        qty: Quantity from invoice
+        price: Price from invoice
+        original_name: Original name from invoice
+
+    Returns:
+        (adjusted_qty, adjusted_price, packing_size)
+    """
+    packing_size = extract_packing_size(item_name)
+
+    # If no packing info, return as is
+    if packing_size == 1:
+        return (qty, price, 1)
+
+    # Check if qty looks like number of packages (< 100 and is integer)
+    # This heuristic helps determine if invoice lists packages or individual items
+    if qty < 100 and qty == int(qty):
+        # Looks like packages - convert to items
+        adjusted_qty = qty * packing_size
+        adjusted_price = price / packing_size
+        logger.info(f"Adjusted packing for '{item_name}': {qty} упак × {packing_size}шт = {adjusted_qty}шт, {price}₸/упак → {adjusted_price:.2f}₸/шт")
+        return (adjusted_qty, adjusted_price, packing_size)
+
+    # Otherwise, assume it's already in items
+    return (qty, price, 1)
+
+
+# === Authorization Decorator ===
+
+def authorized_only(func):
+    """Decorator to check if user has active subscription"""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from database import get_database
+
+        user_id = update.effective_user.id
+        db = get_database()
+
+        # Check if user exists in database
+        user_data = db.get_user(user_id)
+
+        if not user_data:
+            # User not registered - ask them to use /start
+            logger.warning(f"Unregistered user attempt by user_id={user_id}")
+            await update.message.reply_text(
+                f"👋 Привет!\n\n"
+                f"Вы еще не зарегистрированы.\n"
+                f"Отправьте команду /start для регистрации и получения 14-дневного триала!"
+            )
+            return
+
+        # Check if subscription is active
+        if not db.is_subscription_active(user_id):
+            # Subscription expired
+            logger.warning(f"Expired subscription attempt by user_id={user_id}")
+            await update.message.reply_text(
+                f"⛔ Ваша подписка истекла.\n\n"
+                f"Для продолжения работы необходимо продлить подписку.\n"
+                f"Используйте /subscription для подробностей."
+            )
+            return
+
+        return await func(update, context)
+
+    return wrapper
+
+
+def admin_only(func):
+    """Decorator to check if user is admin"""
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+
+        if user_id not in ADMIN_USER_IDS:
+            logger.warning(f"Non-admin attempt to use admin command by user_id={user_id}")
+            await update.message.reply_text(
+                "⛔ Эта команда доступна только администраторам."
+            )
+            return
+
+        return await func(update, context)
+
+    return wrapper
+
+
+# === Admin Notifications ===
+
+async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
+    """Send notification to admin users"""
+    if not ADMIN_USER_IDS:
+        return
+
+    for admin_id in ADMIN_USER_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=f"🔔 Уведомление администратора\n\n{message}",
+                parse_mode=None
+            )
+            logger.info(f"Admin notification sent to {admin_id}")
+        except Exception as e:
+            logger.error(f"Failed to send admin notification to {admin_id}: {e}")
+
+
+# === Command Handlers ===
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command with onboarding for new users"""
+    from database import get_database
+
+    user = update.effective_user
+    telegram_user_id = user.id
+    db = get_database()
+
+    # Check if user exists
+    user_data = db.get_user(telegram_user_id)
+
+    if user_data:
+        # Existing user - show welcome back message
+        await update.message.reply_text(
+            f"👋 С возвращением, {user.first_name}!\n\n"
+            f"Я помогу создавать транзакции и поставки в Poster.\n\n"
+            f"📝 Просто отправьте:\n"
+            f"   • Голосовое сообщение для транзакций\n"
+            f"   • Фото накладной для поставок\n\n"
+            f"Команды:\n"
+            f"/settings - настройки аккаунта\n"
+            f"/subscription - статус подписки\n"
+            f"/help - помощь\n"
+            f"/cancel - отменить действие",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        # New user - start onboarding
+        # Notify admin about new user
+        await notify_admin(
+            context,
+            f"👤 Новый пользователь начал регистрацию:\n\n"
+            f"Имя: {user.first_name} {user.last_name or ''}\n"
+            f"Username: @{user.username or 'нет'}\n"
+            f"Telegram ID: {telegram_user_id}"
+        )
+
+        await update.message.reply_text(
+            f"👋 Привет, {user.first_name}!\n\n"
+            f"🤖 Я бот для автоматизации работы с Poster POS.\n\n"
+            f"✨ Что я умею:\n"
+            f"   💸 Создавать транзакции из голосовых сообщений\n"
+            f"   📦 Создавать поставки из фото накладных\n"
+            f"   🎯 Автоматически запоминать ваши алиасы\n\n"
+            f"⚡️ Триал: 14 дней бесплатно\n\n"
+            f"Для начала подключим ваш Poster аккаунт →",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        await update.message.reply_text(
+            f"📍 Шаг 1/2: API Токен\n\n"
+            f"Как получить токен:\n\n"
+            f"1️⃣ Откройте Poster в браузере\n"
+            f"   https://joinposter.com\n\n"
+            f"2️⃣ Войдите в свой аккаунт\n\n"
+            f"3️⃣ Перейдите:\n"
+            f"   Доступ → Интеграция → Личная интеграция\n"
+            f"   (Access → Integration → Personal Integration)\n\n"
+            f"4️⃣ Найдите поле \"API токен\" или \"Access Token\"\n\n"
+            f"5️⃣ Скопируйте весь токен полностью\n"
+            f"   (обычно это строка вида: 881862:abc123def456...)\n\n"
+            f"📨 Отправьте мне скопированный токен следующим сообщением\n\n"
+            f"ℹ️ Токен нужен для безопасного доступа к вашему Poster через API",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        # Set state: waiting for token
+        context.user_data['onboarding_step'] = 'waiting_token'
+
+
+@authorized_only
+async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /myid command - show user's telegram ID"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "нет username"
+    first_name = update.effective_user.first_name or ""
+
+    await update.message.reply_text(
+        f"👤 **Ваши данные:**\n\n"
+        f"🆔 Telegram ID: `{user_id}`\n"
+        f"👤 Имя: {first_name}\n"
+        f"📝 Username: @{username}\n\n"
+        f"Скопируйте ID выше и отправьте администратору для добавления в систему."
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
+    await update.message.reply_text(
+        "📚 **Как использовать бот:**\n\n"
+        "🎤 **Отправьте голосовое или текст:**\n\n"
+        "💸 **Расходы:**\n"
+        '  "Донерщик 7500 Максат"\n'
+        '  "Аренда 50000 со счёта Каспи за октябрь"\n'
+        '  "Логистика 3000 комментарий доставка"\n\n'
+        "🔄 **Переводы:**\n"
+        '  "Перевод 50000 с Касипай в Кассу"\n\n'
+        "📦 **Поставки:**\n"
+        '  "Поставщик Метро. Айсберг 2.2 кг по 1600"\n\n'
+        "📁 **Основные категории:**\n"
+        "  Зарплата: донерщик, повара, кассиры, курьер\n"
+        "  Расходы: логистика, аренда, коммуналка\n"
+        "  Другое: маркетинг, упаковки, мыломойка\n\n"
+        "💰 **Счета:** каспи, касса, закуп, wolt, форте\n\n"
+        "Бот покажет черновик для проверки перед созданием!\n\n"
+        "⚙️ **Команды:**\n"
+        "  /settings - Настройки аккаунта\n"
+        "  /subscription - Информация о подписке\n"
+        "  /sync - Обновить справочники\n"
+        "  /cancel - Отменить текущее действие",
+        parse_mode="Markdown"
+    )
+
+
+@authorized_only
+async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /sync command - reload references"""
+    await update.message.reply_text("🔄 Обновляю справочники...")
+
+    try:
+        telegram_user_id = update.effective_user.id
+
+        # Reload matchers
+        category_matcher = get_category_matcher(telegram_user_id)
+        account_matcher = get_account_matcher(telegram_user_id)
+
+        category_matcher.load_aliases()
+        account_matcher.load_accounts()
+
+        await update.message.reply_text(
+            f"✅ Справочники обновлены:\n"
+            f"   Алиасы категорий: {len(category_matcher.aliases)}\n"
+            f"   Счета: {len(account_matcher.accounts)}"
+        )
+
+    except Exception as e:
+        logger.error(f"Sync failed: {e}")
+        await update.message.reply_text(f"❌ Ошибка обновления: {e}")
+
+
+@authorized_only
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cancel command"""
+    context.user_data.clear()
+    await update.message.reply_text("✖️ Действие отменено.")
+
+
+@admin_only
+async def test_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /test_daily command - ручной запуск ежедневных транзакций (только для админа)"""
+    telegram_user_id = update.effective_user.id
+
+    if not is_daily_transactions_enabled(telegram_user_id):
+        await update.message.reply_text(
+            "❌ Автоматические транзакции не включены для вашего аккаунта."
+        )
+        return
+
+    await update.message.reply_text("⏳ Создаю ежедневные транзакции...")
+
+    try:
+        # Запустить создание транзакций
+        await run_daily_transactions_for_user(telegram_user_id)
+
+        await update.message.reply_text(
+            "✅ Ежедневные транзакции созданы!\n\n"
+            "Проверьте Poster для подтверждения."
+        )
+
+    except Exception as e:
+        logger.error(f"Test daily transactions failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка создания транзакций:\n{str(e)[:300]}"
+        )
+
+
+@admin_only
+async def test_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /test_report command - ручная генерация еженедельного отчёта (только для админа)"""
+    telegram_user_id = update.effective_user.id
+
+    await update.message.reply_text("⏳ Генерирую еженедельный отчёт...")
+
+    try:
+        from weekly_report import WeeklyReportGenerator
+
+        generator = WeeklyReportGenerator(telegram_user_id)
+        result = await generator.generate_weekly_report()
+
+        if result['success']:
+            await update.message.reply_text(
+                result['report_text'],
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка генерации отчёта:\n{result.get('error', 'Неизвестная ошибка')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Test report failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка генерации отчёта:\n{str(e)[:300]}"
+        )
+
+
+@admin_only
+async def test_monthly_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /test_monthly command - ручная генерация ежемесячного отчёта (только для админа)"""
+    telegram_user_id = update.effective_user.id
+
+    await update.message.reply_text("⏳ Генерирую ежемесячный отчёт...")
+
+    try:
+        from monthly_report import MonthlyReportGenerator
+
+        generator = MonthlyReportGenerator(telegram_user_id)
+        result = await generator.generate_monthly_report()
+
+        if result['success']:
+            await update.message.reply_text(
+                result['report_text'],
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка генерации месячного отчёта:\n{result.get('error', 'Неизвестная ошибка')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Test monthly report failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка генерации месячного отчёта:\n{str(e)[:300]}"
+        )
+
+
+@admin_only
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /menu command - показать меню с кнопками"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🏪 Закрыть кассу", callback_data="close_cash_register")
+        ],
+        [
+            InlineKeyboardButton("🗑️ Удалить чек", callback_data="delete_receipt_mode")
+        ],
+        [
+            InlineKeyboardButton("💰 Рассчитать зарплаты", callback_data="calculate_salaries")
+        ],
+        [
+            InlineKeyboardButton("📝 Создать дневные транзакции", callback_data="create_daily_transactions")
+        ],
+        [
+            InlineKeyboardButton("📊 Еженедельный отчёт", callback_data="generate_weekly_report"),
+            InlineKeyboardButton("📈 Месячный отчёт", callback_data="generate_monthly_report")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "🎛️ **Главное меню**\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+@authorized_only
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /settings command - show user settings"""
+    telegram_user_id = update.effective_user.id
+
+    from database import get_database
+    db = get_database()
+    user_data = db.get_user(telegram_user_id)
+
+    if not user_data:
+        await update.message.reply_text(
+            "❌ Пользователь не найден в базе.\n\n"
+            "Пожалуйста, пройдите регистрацию командой /start"
+        )
+        return
+
+    # Mask token for security (show only first 8 and last 4 chars)
+    token = user_data['poster_token']
+    masked_token = f"{token[:8]}...{token[-4:]}" if len(token) > 12 else "***"
+
+    settings_message = (
+        "⚙️ Настройки аккаунта\n\n"
+        f"🔑 API Token: {masked_token}\n"
+        f"👤 User ID: {user_data['poster_user_id']}\n"
+        f"🌐 Poster URL: {user_data['poster_base_url']}\n"
+        f"📅 Создан: {user_data['created_at'][:10]}\n"
+        f"📊 Статус: {user_data['subscription_status']}\n\n"
+        "Для изменения настроек свяжитесь с поддержкой."
+    )
+
+    await update.message.reply_text(settings_message)
+
+
+@authorized_only
+async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /subscription command - show subscription details"""
+    telegram_user_id = update.effective_user.id
+
+    from database import get_database
+    from datetime import datetime
+    db = get_database()
+    user_data = db.get_user(telegram_user_id)
+
+    if not user_data:
+        await update.message.reply_text(
+            "❌ Пользователь не найден в базе.\n\n"
+            "Пожалуйста, пройдите регистрацию командой /start"
+        )
+        return
+
+    subscription_status = user_data['subscription_status']
+    expires_at = user_data['subscription_expires_at']
+
+    # Calculate days remaining
+    if expires_at:
+        try:
+            expires_date = datetime.fromisoformat(expires_at)
+            days_remaining = (expires_date - datetime.now()).days
+        except:
+            days_remaining = 0
+    else:
+        days_remaining = 0
+
+    # Build status message
+    if subscription_status == 'trial':
+        status_emoji = "🆓"
+        status_text = "Триал"
+    elif subscription_status == 'active':
+        status_emoji = "✅"
+        status_text = "Активная"
+    elif subscription_status == 'expired':
+        status_emoji = "⛔"
+        status_text = "Истёк"
+    else:
+        status_emoji = "❓"
+        status_text = subscription_status.capitalize()
+
+    subscription_message = (
+        "💳 Подписка\n\n"
+        f"{status_emoji} Статус: {status_text}\n"
+    )
+
+    if days_remaining > 0:
+        subscription_message += f"⏰ Осталось дней: {days_remaining}\n"
+        subscription_message += f"📅 Истекает: {expires_at[:10]}\n"
+    elif subscription_status != 'active':
+        subscription_message += "❌ Подписка истекла\n"
+
+    subscription_message += "\n"
+
+    if subscription_status == 'expired' or days_remaining <= 0:
+        subscription_message += "⚠️ Продлите подписку для продолжения работы.\n"
+    elif days_remaining <= 3:
+        subscription_message += "⚠️ Подписка скоро истечёт. Не забудьте продлить!\n"
+
+    await update.message.reply_text(subscription_message)
+
+
+@authorized_only
+async def daily_transfers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /daily_transfers command - create daily recurring transfers"""
+    try:
+        telegram_user_id = update.effective_user.id
+        await update.message.reply_text("⏳ Создаю ежедневные переводы...")
+
+        poster = get_poster_client(telegram_user_id)
+        account_matcher = get_account_matcher(telegram_user_id)
+        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Define daily transfers (all accounts from poster_accounts.csv)
+        # ID mapping: 1=Kaspi, 2=Инкассация, 3=Касса, 4=Закуп, 5=Дома, 8=Wolt, 10=Халык
+        transfers = [
+            {
+                'from': 'касипай',  # ID 1: Kaspi Pay
+                'to': 'wolt',       # ID 8: Wolt доставка
+                'amount': 1,
+                'comment': 'Ежедневный перевод'
+            },
+            {
+                'from': 'касипай',  # ID 1: Kaspi Pay
+                'to': 'халык',      # ID 10: Халык банк
+                'amount': 1,
+                'comment': 'Ежедневный перевод'
+            },
+            {
+                'from': 'инкассация',        # ID 2: Инкассация (вечером)
+                'to': 'оставил в кассе',     # ID 4: Оставил в кассе (на закупы)
+                'amount': 1,
+                'comment': 'Ежедневный перевод'
+            },
+            {
+                'from': 'оставил в кассе',   # ID 4: Оставил в кассе (на закупы)
+                'to': 'деньги дома',         # ID 5: Деньги дома (отложенные)
+                'amount': 1,
+                'comment': 'Ежедневный перевод'
+            }
+        ]
+
+        results = []
+        failed = []
+
+        for transfer in transfers:
+            try:
+                # Match accounts
+                from_id = account_matcher.match(transfer['from'])
+                to_id = account_matcher.match(transfer['to'])
+
+                if not from_id or not to_id:
+                    failed.append(f"❌ {transfer['from']} → {transfer['to']}: счета не найдены")
+                    continue
+
+                from_name = account_matcher.get_account_name(from_id)
+                to_name = account_matcher.get_account_name(to_id)
+
+                # Create transfer
+                transaction_id = await poster.create_transaction(
+                    transaction_type=2,  # transfer
+                    category_id=None,
+                    account_from_id=from_id,
+                    account_to_id=to_id,
+                    amount=transfer['amount'],
+                    date=date,
+                    comment=transfer['comment']
+                )
+
+                results.append(f"✅ {from_name} → {to_name}: {transfer['amount']} {CURRENCY}")
+
+            except Exception as e:
+                failed.append(f"❌ {transfer['from']} → {transfer['to']}: {str(e)[:50]}")
+                logger.error(f"Daily transfer failed: {e}", exc_info=True)
+
+        # Build response
+        response = "📊 Результаты ежедневных переводов:\n\n"
+
+        if results:
+            response += "\n".join(results)
+
+        if failed:
+            response += "\n\n" + "\n".join(failed)
+
+        await update.message.reply_text(response)
+
+    except Exception as e:
+        logger.error(f"Daily transfers command failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка создания переводов: {e}")
+
+
+# === Voice Handler ===
+
+@authorized_only
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle voice message"""
+    try:
+        # Log chat info for debugging
+        chat_type = update.message.chat.type
+        user_id = update.effective_user.id
+        logger.info(f"Voice message from user {user_id} in chat type: {chat_type}")
+
+        await update.message.reply_text("🎤 Распознаю голос...")
+
+        # Download voice file
+        voice_file = await update.message.voice.get_file()
+        voice_path = Path(f"storage/voice_{update.message.message_id}.ogg")
+        await voice_file.download_to_drive(voice_path)
+
+        # Transcribe using Whisper
+        stt_service = get_stt_service()
+        text = await stt_service.transcribe(voice_path)
+
+        # Clean up voice file
+        voice_path.unlink()
+
+        await update.message.reply_text(f"📝 Распознано:\n\"{text}\"")
+
+        # Process as text
+        await process_transaction_text(update, context, text)
+
+    except Exception as e:
+        logger.error(f"Voice handling failed: {e}")
+
+        # Check if it's OpenAI quota error
+        error_str = str(e)
+        if 'quota' in error_str.lower() or '429' in error_str:
+            await update.message.reply_text(
+                "❌ Закончилась квота OpenAI для распознавания голоса.\n\n"
+                "**Пожалуйста, отправьте текстом:**\n"
+                'Например: "Донерщик 7500 Максат"'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка обработки голоса:\n{str(e)[:200]}\n\n"
+                f"Попробуйте отправить текстом."
+            )
+
+
+# === Photo Handler ===
+
+@authorized_only
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo message (receipt OCR for order deletion OR invoice recognition)"""
+    try:
+        telegram_user_id = update.effective_user.id
+
+        await update.message.reply_text("📸 Распознаю фото...")
+
+        # Get the largest photo
+        photo = update.message.photo[-1]
+        photo_file = await photo.get_file()
+
+        # Download photo
+        photo_path = Path(f"storage/photo_{update.message.message_id}.jpg")
+        await photo_file.download_to_drive(photo_path)
+
+        # Check if user is in receipt deletion mode
+        waiting_for_receipt = context.user_data.get('waiting_for_receipt_photo', False)
+
+        if waiting_for_receipt:
+            # User explicitly wants to delete a receipt - only use receipt OCR
+            from receipt_handler import process_receipt_photo, format_order_details
+            receipt_result = await process_receipt_photo(telegram_user_id, str(photo_path))
+
+            # Clear the flag
+            context.user_data.pop('waiting_for_receipt_photo', None)
+
+            # Clean up photo file
+            photo_path.unlink()
+
+            if not receipt_result.get('success'):
+                await update.message.reply_text(
+                    f"❌ Не удалось распознать чек:\n{receipt_result.get('error', 'Неизвестная ошибка')}\n\n"
+                    f"Попробуйте сфотографировать чек более чётко, чтобы были видны:\n"
+                    f"- Дата и время\n"
+                    f"- Сумма к оплате"
+                )
+                return
+
+            receipt_data = receipt_result['receipt_data']
+            orders = receipt_result['orders']
+
+            if not orders:
+                await update.message.reply_text(
+                    f"⚠️ Заказы не найдены\n\n"
+                    f"📅 Дата: {receipt_data['date']}\n"
+                    f"🕐 Время: {receipt_data['time']}\n"
+                    f"💰 Сумма: {receipt_data['amount']/100:,.0f}₸\n\n"
+                    f"Возможно:\n"
+                    f"- Заказ уже был удалён\n"
+                    f"- Неверная дата/время/сумма на чеке\n"
+                    f"- Заказ был создан в другой день"
+                )
+                return
+
+            # Показать найденные заказы с кнопками удаления
+            if len(orders) == 1:
+                order = orders[0]
+                message_text = (
+                    f"✅ Найден заказ по чеку:\n\n"
+                    f"{format_order_details(order)}\n\n"
+                    f"Удалить этот заказ?"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_order:{order['transaction_id']}"),
+                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")
+                    ]
+                ]
+            else:
+                # Несколько заказов найдено
+                message_text = f"✅ Найдено {len(orders)} заказ(а/ов) по чеку:\n\n"
+                keyboard = []
+
+                for i, order in enumerate(orders, 1):
+                    message_text += f"{i}. {format_order_details(order)}\n\n"
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"🗑️ Удалить #{order['transaction_id']}",
+                            callback_data=f"delete_order:{order['transaction_id']}"
+                        )
+                    ])
+
+                keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")])
+                message_text += "\nВыберите заказ для удаления:"
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
+
+        # Not in receipt mode - try to detect automatically
+        # Read photo bytes for invoice parser
+        with open(photo_path, 'rb') as f:
+            image_data = f.read()
+
+        # Try receipt OCR first (faster, more specific)
+        from receipt_handler import process_receipt_photo, format_order_details
+        receipt_result = await process_receipt_photo(telegram_user_id, str(photo_path))
+
+        if receipt_result.get('success'):
+            # This looks like a receipt - process as order deletion
+            receipt_data = receipt_result['receipt_data']
+            orders = receipt_result['orders']
+
+            # Clean up photo file
+            photo_path.unlink()
+
+            if not orders:
+                await update.message.reply_text(
+                    f"⚠️ Заказы не найдены\n\n"
+                    f"📅 Дата: {receipt_data['date']}\n"
+                    f"🕐 Время: {receipt_data['time']}\n"
+                    f"💰 Сумма: {receipt_data['amount']/100:,.0f}₸\n\n"
+                    f"Возможно:\n"
+                    f"- Заказ уже был удалён\n"
+                    f"- Неверная дата/время/сумма на чеке\n"
+                    f"- Заказ был создан в другой день"
+                )
+                return
+
+            # Показать найденные заказы с кнопками удаления
+            if len(orders) == 1:
+                order = orders[0]
+                message_text = (
+                    f"✅ Найден заказ по чеку:\n\n"
+                    f"{format_order_details(order)}\n\n"
+                    f"Удалить этот заказ?"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_order:{order['transaction_id']}"),
+                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")
+                    ]
+                ]
+            else:
+                # Несколько заказов найдено
+                message_text = f"✅ Найдено {len(orders)} заказ(а/ов) по чеку:\n\n"
+                keyboard = []
+
+                for i, order in enumerate(orders, 1):
+                    message_text += f"{i}. {format_order_details(order)}\n\n"
+                    keyboard.append([
+                        InlineKeyboardButton(
+                            f"🗑️ Удалить #{order['transaction_id']}",
+                            callback_data=f"delete_order:{order['transaction_id']}"
+                        )
+                    ])
+
+                keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")])
+                message_text += "\nВыберите заказ для удаления:"
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+            return
+
+        # Receipt OCR failed - try invoice parser
+        logger.info("Receipt OCR failed, trying invoice parser...")
+        parser = get_parser_service()
+        parsed = await parser.parse_invoice_image(image_data, media_type="image/jpeg")
+
+        # Clean up photo file
+        photo_path.unlink()
+
+        if not parsed:
+            await update.message.reply_text(
+                "❌ Не удалось распознать фото.\n\n"
+                "Попробуйте:\n"
+                "- Если это чек - сфотографируйте его более чётко, чтобы были видны дата, время и сумма\n"
+                "- Если это накладная - убедитесь, что таблица с позициями хорошо видна\n"
+                "- Проверьте освещение и чёткость фото"
+            )
+            return
+
+        await update.message.reply_text(
+            f"✅ Накладная распознана!\n\n"
+            f"Поставщик из накладной: {parsed.get('supplier')}\n"
+            f"Позиций найдено: {len(parsed.get('items', []))}"
+        )
+
+        # Process as supply (same logic as voice)
+        if parsed.get('type') == 'supply':
+            await process_supply(update, context, parsed)
+        else:
+            await update.message.reply_text("❌ Неизвестный тип данных из накладной")
+
+    except Exception as e:
+        logger.error(f"Photo handling failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка обработки фото:\n{str(e)[:200]}\n\n"
+            f"Попробуйте переснять фото."
+        )
+
+
+@authorized_only
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle PDF document (invoice recognition)"""
+    try:
+        document = update.message.document
+        mime_type = document.mime_type
+
+        # Check if it's a supported format (PDF or image)
+        supported_images = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+        if mime_type == "application/pdf":
+            file_type = "PDF"
+            extension = "pdf"
+            emoji = "📄"
+        elif mime_type in supported_images:
+            file_type = "изображение"
+            extension = mime_type.split("/")[1]
+            emoji = "🖼️"
+        else:
+            await update.message.reply_text(
+                "❌ Поддерживаются только PDF и изображения (JPG, PNG, WEBP).\n\n"
+                "Для накладных также можно отправить фото или голосовое сообщение."
+            )
+            return
+
+        await update.message.reply_text(f"{emoji} Распознаю накладную из {file_type} (без сжатия)...")
+
+        # Download file
+        doc_file = await document.get_file()
+        file_path = Path(f"storage/doc_{update.message.message_id}.{extension}")
+        await doc_file.download_to_drive(file_path)
+
+        # Read file bytes
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+
+        # Parse invoice using Claude Vision
+        parser = get_parser_service()
+        parsed = await parser.parse_invoice_image(file_data, media_type=mime_type)
+
+        # Clean up file
+        file_path.unlink()
+
+        if not parsed:
+            await update.message.reply_text(
+                f"❌ Не удалось распознать накладную из {file_type}.\n\n"
+                "Попробуйте:\n"
+                "- Убедиться, что файл содержит таблицу с позициями\n"
+                "- Проверить, что есть название поставщика\n"
+                "- Отправить накладную другим способом"
+            )
+            return
+
+        await update.message.reply_text(
+            f"✅ Накладная из {file_type} распознана!\n\n"
+            f"Поставщик из накладной: {parsed.get('supplier')}\n"
+            f"Позиций найдено: {len(parsed.get('items', []))}"
+        )
+
+        # Process as supply (same logic as photo/voice)
+        if parsed.get('type') == 'supply':
+            await process_supply(update, context, parsed)
+        else:
+            await update.message.reply_text("❌ Неизвестный тип данных из накладной")
+
+    except Exception as e:
+        logger.error(f"Document handling failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка обработки PDF:\n{str(e)[:200]}\n\n"
+            f"Попробуйте отправить накладную фотографией или голосом."
+        )
+
+
+# === Onboarding Handler ===
+
+async def handle_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, step: str):
+    """Handle onboarding flow for new users"""
+    from database import get_database
+    import aiohttp
+
+    telegram_user_id = update.effective_user.id
+    text = update.message.text.strip()
+    db = get_database()
+
+    if step == 'waiting_token':
+        # User sent Poster API token
+        await update.message.reply_text("🔍 Проверяю токен...")
+
+        # Validate token by making test request
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://joinposter.com/api/access.getTablets",
+                    params={'token': text},
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    result = await response.json()
+
+                    if 'error' in result:
+                        await update.message.reply_text(
+                            "❌ Неверный токен!\n\n"
+                            "Проверьте:\n"
+                            "1. Скопирован ли токен полностью\n"
+                            "2. Нет ли лишних пробелов\n"
+                            "3. Действителен ли токен в Poster\n\n"
+                            "Попробуйте еще раз или /cancel для отмены:"
+                        )
+                        return
+
+            # Token is valid - now try to get User ID automatically
+            await update.message.reply_text("✅ Токен принят!\n\n⏳ Получаю ваш User ID...")
+
+            # Get current user info from Poster API
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        "https://joinposter.com/api/access.getUsers",
+                        params={'token': text},
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as response:
+                        result = await response.json()
+
+                        if 'error' in result or 'response' not in result:
+                            raise Exception("Failed to get users list")
+
+                        # Find the user with access rights (usually the first one with role_id 1)
+                        users = result.get('response', [])
+                        if not users:
+                            raise Exception("No users found")
+
+                        # Get the first user (owner/admin) - usually the one who created the token
+                        owner_user = None
+                        for usr in users:
+                            if int(usr.get('role_id', 0)) == 1:  # Role 1 = Owner/Admin
+                                owner_user = usr
+                                break
+
+                        if not owner_user:
+                            # If no owner found, just take first user
+                            owner_user = users[0]
+
+                        poster_user_id = str(owner_user['user_id'])
+                        poster_user_name = owner_user.get('name', 'Unknown')
+
+                        # Save user to database
+                        success = db.create_user(
+                            telegram_user_id=telegram_user_id,
+                            poster_token=text,
+                            poster_user_id=poster_user_id,
+                            poster_base_url="https://joinposter.com/api"
+                        )
+
+                        if not success:
+                            await update.message.reply_text(
+                                "❌ Ошибка при создании аккаунта.\n\n"
+                                "Возможно вы уже зарегистрированы?\n"
+                                "Попробуйте /start"
+                            )
+                            return
+
+                        # Clear onboarding data
+                        context.user_data.clear()
+
+                        # Create user's data directory
+                        from pathlib import Path
+                        import csv as csv_module
+                        user_data_dir = Path(f"data/users/{telegram_user_id}")
+                        user_data_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Create empty CSV files with headers only
+                        csv_files = {
+                            'alias_category_mapping.csv': ['alias_text', 'poster_category_id', 'poster_category_name', 'notes'],
+                            'alias_item_mapping.csv': ['alias_text', 'poster_item_id', 'poster_item_name', 'notes'],
+                            'poster_suppliers.csv': ['supplier_id', 'name', 'aliases'],
+                            'poster_accounts.csv': ['account_id', 'account_name', 'account_type'],
+                            'poster_ingredients.csv': ['ingredient_id', 'ingredient_name', 'unit'],
+                            'poster_products.csv': ['product_id', 'product_name', 'category']
+                        }
+
+                        for filename, headers in csv_files.items():
+                            csv_path = user_data_dir / filename
+                            with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                                writer = csv_module.writer(f)
+                                writer.writerow(headers)
+
+                        logger.info(f"Created empty CSV files for user {telegram_user_id}")
+
+                        # Fetch user's real data from Poster API
+                        await update.message.reply_text("⏳ Загружаю данные из вашего Poster аккаунта...")
+
+                        try:
+                            poster_client = get_poster_client(telegram_user_id)
+
+                            # Fetch categories
+                            categories = await poster_client.get_categories()
+                            logger.info(f"Fetched {len(categories)} categories for user {telegram_user_id}")
+
+                            # Fetch accounts
+                            accounts = await poster_client.get_accounts()
+                            with open(user_data_dir / 'poster_accounts.csv', 'w', encoding='utf-8', newline='') as f:
+                                writer = csv_module.writer(f)
+                                writer.writerow(['account_id', 'account_name', 'account_type'])
+                                for acc in accounts:
+                                    writer.writerow([acc['account_id'], acc['name'], acc.get('type', '')])
+                            logger.info(f"Saved {len(accounts)} accounts for user {telegram_user_id}")
+
+                            # Fetch ingredients
+                            ingredients = await poster_client.get_ingredients()
+                            with open(user_data_dir / 'poster_ingredients.csv', 'w', encoding='utf-8', newline='') as f:
+                                writer = csv_module.writer(f)
+                                writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
+                                for ing in ingredients:
+                                    writer.writerow([ing['ingredient_id'], ing['ingredient_name'], ing.get('unit', '')])
+                            logger.info(f"Saved {len(ingredients)} ingredients for user {telegram_user_id}")
+
+                            # Fetch products
+                            products = await poster_client.get_products()
+                            with open(user_data_dir / 'poster_products.csv', 'w', encoding='utf-8', newline='') as f:
+                                writer = csv_module.writer(f)
+                                writer.writerow(['product_id', 'product_name', 'category'])
+                                for prod in products:
+                                    writer.writerow([prod['product_id'], prod['product_name'], prod.get('category_name', '')])
+                            logger.info(f"Saved {len(products)} products for user {telegram_user_id}")
+
+                            # Fetch suppliers from recent supplies (last 30 days)
+                            from datetime import datetime, timedelta
+                            date_to = datetime.now().strftime("%Y%m%d")
+                            date_from = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+                            supplies = await poster_client.get_supplies(date_from=date_from, date_to=date_to)
+
+                            # Extract unique suppliers
+                            suppliers_dict = {}
+                            for supply in supplies:
+                                supplier_id = supply.get('supplier_id')
+                                supplier_name = supply.get('supplier_name', '')
+                                if supplier_id and supplier_name:
+                                    suppliers_dict[supplier_id] = supplier_name
+
+                            # Save suppliers
+                            with open(user_data_dir / 'poster_suppliers.csv', 'w', encoding='utf-8', newline='') as f:
+                                writer = csv_module.writer(f)
+                                writer.writerow(['supplier_id', 'name', 'aliases'])
+                                for supplier_id, supplier_name in suppliers_dict.items():
+                                    writer.writerow([supplier_id, supplier_name, ''])
+                            logger.info(f"Saved {len(suppliers_dict)} suppliers for user {telegram_user_id}")
+
+                        except Exception as e:
+                            logger.error(f"Failed to fetch Poster data: {e}")
+                            await update.message.reply_text(
+                                "⚠️ Не удалось загрузить данные из Poster.\n"
+                                "Но регистрация завершена - вы можете начать работу!"
+                            )
+
+                        # Notify admin about successful registration
+                        user = update.effective_user
+                        user_data = db.get_user(telegram_user_id)
+                        await notify_admin(
+                            context,
+                            f"🎉 Регистрация завершена!\n\n"
+                            f"Пользователь: {user.first_name} {user.last_name or ''}\n"
+                            f"Username: @{user.username or 'нет'}\n"
+                            f"Telegram ID: {telegram_user_id}\n"
+                            f"Poster User: {poster_user_name}\n"
+                            f"Poster User ID: {poster_user_id}\n"
+                            f"Триал до: {user_data['subscription_expires_at'][:10] if user_data else 'N/A'}"
+                        )
+
+                        await update.message.reply_text(
+                            "🎉 Настройка завершена!\n\n"
+                            "✅ Ваш аккаунт подключен\n"
+                            f"✅ Определён пользователь: {poster_user_name}\n"
+                            "✅ Триал на 14 дней активирован\n\n"
+                            "Теперь можете:\n"
+                            "   • 🎤 Отправлять голосовые для транзакций\n"
+                            "   • 📸 Отправлять фото накладных для поставок\n\n"
+                            "Попробуйте отправить голосовое сообщение:\n"
+                            "\"Оставил в кассе 5000 кассир Айгуль\"\n\n"
+                            "Команды:\n"
+                            "/settings - настройки\n"
+                            "/subscription - подписка\n"
+                            "/help - помощь"
+                        )
+                        return
+
+            except Exception as e:
+                logger.error(f"Auto User ID detection failed: {e}")
+                # Fallback to User ID = 1 (owner is always 1 in Poster)
+                logger.info("Using default User ID = 1 (owner)")
+
+                poster_user_id = "1"
+
+                # Save user to database
+                success = db.create_user(
+                    telegram_user_id=telegram_user_id,
+                    poster_token=text,
+                    poster_user_id=poster_user_id,
+                    poster_base_url="https://joinposter.com/api"
+                )
+
+                if not success:
+                    await update.message.reply_text(
+                        "❌ Ошибка при создании аккаунта.\n\n"
+                        "Возможно вы уже зарегистрированы?\n"
+                        "Попробуйте /start"
+                    )
+                    return
+
+                # Clear onboarding data
+                context.user_data.clear()
+
+                # Create user's data directory
+                from pathlib import Path
+                import csv as csv_module
+                user_data_dir = Path(f"data/users/{telegram_user_id}")
+                user_data_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create empty CSV files with headers only
+                csv_files = {
+                    'alias_category_mapping.csv': ['alias_text', 'poster_category_id', 'poster_category_name', 'notes'],
+                    'alias_item_mapping.csv': ['alias_text', 'poster_item_id', 'poster_item_name', 'notes'],
+                    'poster_suppliers.csv': ['supplier_id', 'name', 'aliases'],
+                    'poster_accounts.csv': ['account_id', 'account_name', 'account_type'],
+                    'poster_ingredients.csv': ['ingredient_id', 'ingredient_name', 'unit'],
+                    'poster_products.csv': ['product_id', 'product_name', 'category']
+                }
+
+                for filename, headers in csv_files.items():
+                    csv_path = user_data_dir / filename
+                    with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                        writer = csv_module.writer(f)
+                        writer.writerow(headers)
+
+                logger.info(f"Created empty CSV files for user {telegram_user_id}")
+
+                # Fetch user's real data from Poster API
+                await update.message.reply_text("⏳ Загружаю данные из вашего Poster аккаунта...")
+
+                try:
+                    poster_client = get_poster_client(telegram_user_id)
+
+                    # Fetch categories
+                    categories = await poster_client.get_categories()
+                    logger.info(f"Fetched {len(categories)} categories for user {telegram_user_id}")
+
+                    # Fetch accounts
+                    accounts = await poster_client.get_accounts()
+                    with open(user_data_dir / 'poster_accounts.csv', 'w', encoding='utf-8', newline='') as f:
+                        writer = csv_module.writer(f)
+                        writer.writerow(['account_id', 'account_name', 'account_type'])
+                        for acc in accounts:
+                            writer.writerow([acc['account_id'], acc['name'], acc.get('type', '')])
+                    logger.info(f"Saved {len(accounts)} accounts for user {telegram_user_id}")
+
+                    # Fetch ingredients
+                    ingredients = await poster_client.get_ingredients()
+                    with open(user_data_dir / 'poster_ingredients.csv', 'w', encoding='utf-8', newline='') as f:
+                        writer = csv_module.writer(f)
+                        writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
+                        for ing in ingredients:
+                            writer.writerow([ing['ingredient_id'], ing['ingredient_name'], ing.get('unit', '')])
+                    logger.info(f"Saved {len(ingredients)} ingredients for user {telegram_user_id}")
+
+                    # Fetch products
+                    products = await poster_client.get_products()
+                    with open(user_data_dir / 'poster_products.csv', 'w', encoding='utf-8', newline='') as f:
+                        writer = csv_module.writer(f)
+                        writer.writerow(['product_id', 'product_name', 'category'])
+                        for prod in products:
+                            writer.writerow([prod['product_id'], prod['product_name'], prod.get('category_name', '')])
+                    logger.info(f"Saved {len(products)} products for user {telegram_user_id}")
+
+                    # Fetch suppliers from recent supplies (last 30 days)
+                    from datetime import datetime, timedelta
+                    date_to = datetime.now().strftime("%Y%m%d")
+                    date_from = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+                    supplies = await poster_client.get_supplies(date_from=date_from, date_to=date_to)
+
+                    # Extract unique suppliers
+                    suppliers_dict = {}
+                    for supply in supplies:
+                        supplier_id = supply.get('supplier_id')
+                        supplier_name = supply.get('supplier_name', '')
+                        if supplier_id and supplier_name:
+                            suppliers_dict[supplier_id] = supplier_name
+
+                    # Save suppliers
+                    with open(user_data_dir / 'poster_suppliers.csv', 'w', encoding='utf-8', newline='') as f:
+                        writer = csv_module.writer(f)
+                        writer.writerow(['supplier_id', 'name', 'aliases'])
+                        for supplier_id, supplier_name in suppliers_dict.items():
+                            writer.writerow([supplier_id, supplier_name, ''])
+                    logger.info(f"Saved {len(suppliers_dict)} suppliers for user {telegram_user_id}")
+
+                except Exception as fetch_error:
+                    logger.error(f"Failed to fetch Poster data: {fetch_error}")
+                    await update.message.reply_text(
+                        "⚠️ Не удалось загрузить данные из Poster.\n"
+                        "Но регистрация завершена - вы можете начать работу!"
+                    )
+
+                # Notify admin about successful registration
+                user = update.effective_user
+                user_data = db.get_user(telegram_user_id)
+                await notify_admin(
+                    context,
+                    f"🎉 Регистрация завершена!\n\n"
+                    f"Пользователь: {user.first_name} {user.last_name or ''}\n"
+                    f"Username: @{user.username or 'нет'}\n"
+                    f"Telegram ID: {telegram_user_id}\n"
+                    f"Poster User ID: {poster_user_id} (по умолчанию)\n"
+                    f"Триал до: {user_data['subscription_expires_at'][:10] if user_data else 'N/A'}"
+                )
+
+                await update.message.reply_text(
+                    "🎉 Настройка завершена!\n\n"
+                    "✅ Ваш аккаунт подключен\n"
+                    "✅ User ID установлен автоматически\n"
+                    "✅ Триал на 14 дней активирован\n\n"
+                    "Теперь можете:\n"
+                    "   • 🎤 Отправлять голосовые для транзакций\n"
+                    "   • 📸 Отправлять фото накладных для поставок\n\n"
+                    "Попробуйте отправить голосовое сообщение:\n"
+                    "\"Оставил в кассе 5000 кассир Айгуль\"\n\n"
+                    "Команды:\n"
+                    "/settings - настройки\n"
+                    "/subscription - подписка\n"
+                    "/help - помощь"
+                )
+                return
+
+        except Exception as e:
+            logger.error(f"Token validation failed: {e}")
+            await update.message.reply_text(
+                "❌ Не удалось проверить токен.\n\n"
+                "Возможные причины:\n"
+                "• Нет интернета\n"
+                "• Сервер Poster недоступен\n\n"
+                "Попробуйте позже или /cancel для отмены"
+            )
+
+
+# === Text Handler ===
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text message"""
+    # Log chat info for debugging
+    chat_type = update.message.chat.type
+    user_id = update.effective_user.id
+    logger.info(f"Text message from user {user_id} in chat type: {chat_type}")
+
+    # Check if user is in onboarding flow (BEFORE authorization check)
+    onboarding_step = context.user_data.get('onboarding_step')
+    if onboarding_step:
+        await handle_onboarding(update, context, onboarding_step)
+        return
+
+    # Check authorization for registered users only
+    from database import get_database
+    db = get_database()
+    user_data = db.get_user(user_id)
+
+    if not user_data:
+        # User not registered
+        await update.message.reply_text(
+            f"👋 Привет!\n\n"
+            f"Вы еще не зарегистрированы.\n"
+            f"Отправьте команду /start для регистрации и получения 14-дневного триала!"
+        )
+        return
+
+    # Check if subscription is active
+    if not db.is_subscription_active(user_id):
+        await update.message.reply_text(
+            f"⛔ Ваша подписка истекла.\n\n"
+            f"Для продолжения работы необходимо продлить подписку.\n"
+            f"Используйте /subscription для подробностей."
+        )
+        return
+
+    # Check if in cash closing flow
+    if 'cash_closing_data' in context.user_data:
+        await handle_cash_input_step(update, context)
+        return
+
+    # Check if waiting for manual ingredient input
+    if context.user_data.get('waiting_for_manual_ingredient'):
+        await handle_manual_ingredient_input(update, context)
+        return
+
+    # Check if editing ingredient for item in draft
+    if 'editing_ingredient_for_item' in context.user_data:
+        await handle_item_ingredient_search_input(update, context)
+        return
+
+    # Check if waiting for quantity change
+    if 'waiting_for_quantity_change' in context.user_data:
+        await handle_quantity_change_input(update, context)
+        return
+
+    # Check if waiting for price change
+    if 'waiting_for_price_change' in context.user_data:
+        await handle_price_change_input(update, context)
+        return
+
+    text = update.message.text
+    await process_transaction_text(update, context, text)
+
+
+async def handle_quantity_change_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user input for quantity change"""
+    item_index = context.user_data.pop('waiting_for_quantity_change')
+    text = update.message.text.strip()
+
+    # Parse quantity
+    try:
+        # Replace comma with dot for decimal
+        text = text.replace(',', '.')
+        quantity = float(text)
+
+        if quantity <= 0:
+            await update.message.reply_text("❌ Количество должно быть больше нуля. Попробуйте снова:")
+            context.user_data['waiting_for_quantity_change'] = item_index
+            return
+
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат. Введите число (например: 5 или 2.5):")
+        context.user_data['waiting_for_quantity_change'] = item_index
+        return
+
+    # Update draft
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await update.message.reply_text("❌ Ошибка: товар не найден.")
+        return
+
+    item = draft['items'][item_index]
+    old_sum = item['sum']
+
+    # Update quantity and recalculate sum
+    item['num'] = quantity
+    item['sum'] = int(quantity * item['price'])
+
+    # Update total
+    draft['total_amount'] = draft['total_amount'] - old_sum + item['sum']
+
+    # Save draft
+    drafts[message_id] = draft
+    context.user_data['drafts'] = drafts
+
+    await update.message.reply_text(
+        f"✅ Количество изменено:\n"
+        f"{item['name']}: {quantity} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+    )
+
+    # Show updated draft
+    class FakeQuery:
+        def __init__(self, message):
+            self.message = message
+        async def edit_message_text(self, *args, **kwargs):
+            pass
+
+    fake_update = type('obj', (object,), {
+        'callback_query': FakeQuery(update.message),
+        'effective_user': update.effective_user
+    })()
+    await show_draft_again(fake_update, context)
+
+
+async def handle_price_change_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user input for price change"""
+    item_index = context.user_data.pop('waiting_for_price_change')
+    text = update.message.text.strip()
+
+    # Parse price
+    try:
+        # Remove spaces and commas, replace comma with dot
+        text = text.replace(' ', '').replace(',', '.')
+        price = int(float(text))
+
+        if price <= 0:
+            await update.message.reply_text("❌ Цена должна быть больше нуля. Попробуйте снова:")
+            context.user_data['waiting_for_price_change'] = item_index
+            return
+
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат. Введите число (например: 5000):")
+        context.user_data['waiting_for_price_change'] = item_index
+        return
+
+    # Update draft
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await update.message.reply_text("❌ Ошибка: товар не найден.")
+        return
+
+    item = draft['items'][item_index]
+    old_sum = item['sum']
+
+    # Update price and recalculate sum
+    item['price'] = price
+    item['sum'] = int(item['num'] * price)
+
+    # Update total
+    draft['total_amount'] = draft['total_amount'] - old_sum + item['sum']
+
+    # Save draft
+    drafts[message_id] = draft
+    context.user_data['drafts'] = drafts
+
+    await update.message.reply_text(
+        f"✅ Цена изменена:\n"
+        f"{item['name']}: {item['num']} x {price:,} = {item['sum']:,} {CURRENCY}"
+    )
+
+    # Show updated draft
+    class FakeQuery:
+        def __init__(self, message):
+            self.message = message
+        async def edit_message_text(self, *args, **kwargs):
+            pass
+
+    fake_update = type('obj', (object,), {
+        'callback_query': FakeQuery(update.message),
+        'effective_user': update.effective_user
+    })()
+    await show_draft_again(fake_update, context)
+
+
+async def process_transaction_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Process text as transaction"""
+    try:
+        telegram_user_id = update.effective_user.id
+        await update.message.reply_text("🔍 Анализирую данные...")
+
+        # Try Claude parser first, fallback to simple parser
+        parsed = None
+
+        try:
+            parser = get_parser_service()
+            parsed = await parser.parse_transaction(text)
+        except Exception as e:
+            logger.warning(f"Claude parser failed: {e}, trying simple parser")
+
+        # Fallback to simple parser
+        if not parsed:
+            simple_parser = get_simple_parser()
+            parsed = simple_parser.parse_transaction(text)
+
+        if not parsed:
+            await update.message.reply_text(
+                "❌ Не удалось распознать транзакцию.\n\n"
+                "Попробуйте формат:\n"
+                "Расход: \"Донерщик 7500 Максат\"\n"
+                "Перевод: \"Перевод 50000 с Касипай в Кассу комментарий Жандос\"\n"
+                "Поставка: \"Поставщик Метро. Айсберг 2.2 кг по 1600, Помидоры 10.4 по 850\""
+            )
+            return
+
+        # Check if it's a transfer
+        if parsed.get('type') == 'transfer':
+            await process_transfer(update, context, parsed)
+            return
+
+        # Check if it's a supply
+        if parsed.get('type') == 'supply':
+            await process_supply(update, context, parsed)
+            return
+
+        # Check if it's multiple expenses
+        if parsed.get('type') == 'multiple_expenses':
+            await process_multiple_expenses(update, context, parsed)
+            return
+
+        # Match category
+        category_matcher = get_category_matcher(telegram_user_id)
+        category_match = category_matcher.match(parsed['category'])
+
+        if not category_match:
+            await update.message.reply_text(
+                f"❌ Категория '{parsed['category']}' не найдена.\n\n"
+                f"Доступные: донерщик, повара, кассиры, курьер, кухрабочая, официанты"
+            )
+            return
+
+        category_id, category_name = category_match
+
+        # Match account (default to "закуп" if not specified)
+        account_matcher = get_account_matcher(telegram_user_id)
+        account_from_text = parsed.get('account_from', 'закуп')
+        account_from_id = account_matcher.match(account_from_text)
+
+        if not account_from_id:
+            account_from_id = DEFAULT_ACCOUNT_FROM_ID
+
+        account_from_name = account_matcher.get_account_name(account_from_id)
+
+        # Build draft
+        amount = int(parsed['amount'])
+        comment = parsed.get('comment', '').strip()
+
+        draft = {
+            'type': 0,  # expense
+            'category_id': category_id,
+            'category_name': category_name,
+            'account_from_id': account_from_id,
+            'account_from_name': account_from_name,
+            'amount': amount,
+            'comment': comment,
+            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        # Show draft with buttons
+        message = await show_draft(update, context, draft)
+
+        # Store draft with message_id as key
+        if message:
+            if 'drafts' not in context.user_data:
+                context.user_data['drafts'] = {}
+            context.user_data['drafts'][message.message_id] = draft
+            logger.info(f"✅ Draft saved: message_id={message.message_id}, available drafts={list(context.user_data['drafts'].keys())}")
+
+    except Exception as e:
+        logger.error(f"Transaction processing failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка обработки: {e}")
+
+
+async def process_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE, parsed: Dict):
+    """Process transfer between accounts"""
+    try:
+        telegram_user_id = update.effective_user.id
+
+        # Match accounts
+        account_matcher = get_account_matcher(telegram_user_id)
+
+        account_from_text = parsed.get('account_from', 'касипай')
+        account_from_id = account_matcher.match(account_from_text)
+        if not account_from_id:
+            account_from_id = 1  # Default: Kaspi Pay
+
+        account_to_text = parsed.get('account_to', 'касса')
+        account_to_id = account_matcher.match(account_to_text)
+        if not account_to_id:
+            account_to_id = 3  # Default: Денежный ящик
+
+        account_from_name = account_matcher.get_account_name(account_from_id)
+        account_to_name = account_matcher.get_account_name(account_to_id)
+
+        # Build transfer draft
+        amount = int(parsed['amount'])
+        comment = parsed.get('comment', '').strip()
+
+        draft = {
+            'type': 2,  # transfer
+            'account_from_id': account_from_id,
+            'account_from_name': account_from_name,
+            'account_to_id': account_to_id,
+            'account_to_name': account_to_name,
+            'amount': amount,
+            'comment': comment,
+            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'category_id': None,  # transfers don't need category
+            'category_name': None
+        }
+
+        # Show transfer draft
+        message = await show_transfer_draft(update, context, draft)
+
+        # Store draft with message_id as key
+        if message:
+            if 'drafts' not in context.user_data:
+                context.user_data['drafts'] = {}
+            context.user_data['drafts'][message.message_id] = draft
+            logger.info(f"✅ Draft saved: message_id={message.message_id}, available drafts={list(context.user_data['drafts'].keys())}")
+
+    except Exception as e:
+        logger.error(f"Transfer processing failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка обработки перевода: {e}")
+
+
+async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, parsed: Dict):
+    """Process supply (поставка) from parsed data"""
+    try:
+        telegram_user_id = update.effective_user.id
+
+        # Match supplier
+        supplier_matcher = get_supplier_matcher(telegram_user_id)
+        supplier_text = parsed.get('supplier', '')
+        supplier_id = None
+
+        if supplier_text:
+            supplier_id = supplier_matcher.match(supplier_text)
+
+        # If supplier not found or not specified, ask user to select
+        if not supplier_id:
+            # Store parsed data for later use
+            context.user_data['pending_supply'] = parsed
+            await show_supplier_selection(update, context, supplier_text=supplier_text)
+            return
+
+        supplier_name = supplier_matcher.get_supplier_name(supplier_id)
+
+        # Match account
+        account_matcher = get_account_matcher(telegram_user_id)
+        account_text = parsed.get('account') or 'оставил в кассе'
+        account_id = account_matcher.match(account_text)
+
+        if not account_id:
+            account_id = 4  # Default: Оставил в кассе
+
+        account_name = account_matcher.get_account_name(account_id)
+
+        # Match ingredients and products
+        ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+        product_matcher = get_product_matcher(telegram_user_id)
+        items = parsed.get('items', [])
+        matched_items = []
+        unmatched_items = []  # Items that need manual selection
+        total_amount = 0
+
+        for item in items:
+            # Try ingredient match first
+            ingredient_match = ingredient_matcher.match(item['name'])
+
+            # Try product match if ingredient not found or score too low
+            product_match = None
+            if not ingredient_match or ingredient_match[3] < 75:
+                product_match = product_matcher.match(item['name'])
+
+            # Use best match
+            best_match = None
+            if ingredient_match and product_match:
+                # Both found, use higher score
+                best_match = ingredient_match if ingredient_match[3] >= product_match[3] else product_match
+            elif ingredient_match:
+                best_match = ingredient_match
+            elif product_match:
+                best_match = product_match
+
+            # Check if match is good enough (score >= 75 or exact match)
+            if not best_match or best_match[3] < 75:
+                # Need manual selection
+                unmatched_items.append(item)
+                continue
+
+            item_id, item_name, unit, match_score = best_match
+            qty = item['qty']
+            price = item.get('price')
+
+            # Skip items without price
+            if price is None:
+                logger.warning(f"Skipping item '{item['name']}' - no price specified")
+                continue
+
+            # Adjust for packing if needed (e.g., 10 упак → 300 шт)
+            adjusted_qty, adjusted_price, packing_size = adjust_for_packing(
+                item_name, qty, price, item['name']
+            )
+
+            item_sum = int(adjusted_qty * adjusted_price)
+
+            matched_items.append({
+                'id': item_id,
+                'name': item_name,
+                'num': adjusted_qty,
+                'price': adjusted_price,
+                'sum': item_sum,
+                'match_score': match_score,
+                'original_name': item['name'],
+                'packing_size': packing_size
+            })
+
+            total_amount += item_sum
+
+        # If there are unmatched items, ask user to select manually
+        if unmatched_items:
+            # Store context for later
+            context.user_data['supply_context'] = {
+                'supplier_id': supplier_id,
+                'supplier_name': supplier_name,
+                'account_id': account_id,
+                'account_name': account_name,
+                'matched_items': matched_items,
+                'unmatched_items': unmatched_items,
+                'total_amount': total_amount,
+                'current_unmatched_index': 0
+            }
+
+            # Show selection UI for first unmatched item
+            await show_ingredient_selection(update, context)
+            return
+
+        # Build supply draft
+        draft = {
+            'type': 'supply',
+            'supplier_id': supplier_id,
+            'supplier_name': supplier_name,
+            'account_id': account_id,
+            'account_name': account_name,
+            'storage_id': 1,  # Default: Продукты
+            'storage_name': 'Продукты',
+            'items': matched_items,
+            'total_amount': total_amount,
+            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        # Notify about skipped items without prices
+        skipped_count = len(items) - len(matched_items) - len(unmatched_items)
+        if skipped_count > 0:
+            await update.message.reply_text(
+                f"⚠️ Пропущено {skipped_count} позиций без указания цены.\n"
+                f"Добавьте цены в накладную или введите их вручную."
+            )
+
+        # Show supply draft
+        message = await show_supply_draft(update, context, draft)
+
+        # Store draft with message_id as key
+        if message:
+            if 'drafts' not in context.user_data:
+                context.user_data['drafts'] = {}
+            context.user_data['drafts'][message.message_id] = draft
+            context.user_data['current_message_id'] = message.message_id
+            logger.info(f"✅ Draft saved: message_id={message.message_id}, available drafts={list(context.user_data['drafts'].keys())}")
+
+    except Exception as e:
+        logger.error(f"Supply processing failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка обработки поставки: {e}")
+
+
+async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
+    """Show supply draft with confirmation buttons"""
+    items_text = "\n".join([
+        f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        for idx, item in enumerate(draft['items'])
+    ])
+
+    message_text = (
+        "📦 Черновик поставки:\n\n"
+        f"Поставщик: {draft['supplier_name']}\n"
+        f"Счёт: {draft['account_name']}\n"
+        f"Склад: {draft['storage_name']}\n\n"
+        f"Товары:\n{items_text}\n\n"
+        f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+        f"Дата: {draft['date']}\n\n"
+        f"💡 Нажмите на товар чтобы изменить"
+    )
+
+    # Create keyboard with item edit buttons
+    keyboard = []
+
+    # Add buttons for each item (2 per row)
+    item_buttons = []
+    for idx, item in enumerate(draft['items']):
+        button_text = f"{idx+1}. {item['name'][:20]}"  # Truncate long names
+        item_buttons.append(InlineKeyboardButton(button_text, callback_data=f"edit_item:{idx}"))
+
+        if len(item_buttons) == 2 or idx == len(draft['items']) - 1:
+            keyboard.append(item_buttons)
+            item_buttons = []
+
+    # Add main action buttons
+    keyboard.extend([
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+        ],
+        [
+            InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
+            InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+        ],
+        [
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+        ]
+    ])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Get chat for sending messages (works for both message and callback_query)
+    if update.callback_query:
+        chat = update.callback_query.message.chat
+        return await context.bot.send_message(chat.id, message_text, reply_markup=reply_markup)
+    else:
+        return await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+
+async def show_transfer_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
+    """Show transfer draft with confirmation buttons"""
+    message_text = (
+        "🔄 Черновик перевода:\n\n"
+        f"Откуда: {draft['account_from_name']}\n"
+        f"Куда: {draft['account_to_name']}\n"
+        f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+        f"Комментарий: {draft['comment'] or '—'}\n"
+        f"Дата: {draft['date']}\n"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+        ],
+        [
+            InlineKeyboardButton("📤 Изменить откуда", callback_data="change_account_from"),
+            InlineKeyboardButton("📥 Изменить куда", callback_data="change_account_to")
+        ],
+        [
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    return await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+
+async def process_multiple_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE, parsed: Dict):
+    """Process multiple expense transactions from a single voice message"""
+    try:
+        telegram_user_id = update.effective_user.id
+
+        # Match account
+        account_matcher = get_account_matcher(telegram_user_id)
+        account_text = parsed.get('account', 'оставил в кассе')
+        account_id = account_matcher.match(account_text)
+
+        if not account_id:
+            account_id = 4  # Default: Оставил в кассе
+
+        account_name = account_matcher.get_account_name(account_id)
+
+        # Match categories for each transaction
+        category_matcher = get_category_matcher(telegram_user_id)
+        transactions = parsed.get('transactions', [])
+        matched_transactions = []
+        total_amount = 0
+
+        for txn in transactions:
+            category_text = txn.get('category', '')
+            category_match = category_matcher.match(category_text)
+
+            if not category_match:
+                await update.message.reply_text(
+                    f"❌ Не удалось найти категорию '{category_text}'.\n"
+                    f"Доступные категории можно посмотреть командой /categories"
+                )
+                return
+
+            category_id, category_name = category_match
+            amount = txn.get('amount', 0)
+            comment = txn.get('comment', '')
+
+            matched_transactions.append({
+                'category_id': category_id,
+                'category_name': category_name,
+                'amount': amount,
+                'comment': comment
+            })
+
+            total_amount += amount
+
+        # Create draft
+        draft = {
+            'type': 'multiple_expenses',
+            'account_from_id': account_id,
+            'account_from_name': account_name,
+            'transactions': matched_transactions,
+            'total_amount': total_amount,
+            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        # Show draft with confirmation
+        message = await show_multiple_expenses_draft(update, context, draft)
+
+        # Save draft with message_id as key
+        if message:
+            if 'drafts' not in context.user_data:
+                context.user_data['drafts'] = {}
+            context.user_data['drafts'][message.message_id] = draft
+            logger.info(f"✅ Multiple expenses draft saved: message_id={message.message_id}")
+
+    except Exception as e:
+        logger.exception(f"Error processing multiple expenses: {e}")
+        await update.message.reply_text(f"❌ Ошибка обработки транзакций: {e}")
+
+
+async def show_multiple_expenses_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
+    """Show multiple expenses draft with confirmation buttons"""
+    transactions_text = "\n".join([
+        f"  • {txn['category_name']}: {txn['amount']:,} {CURRENCY} ({txn['comment'] or '—'})"
+        for txn in draft['transactions']
+    ])
+
+    message_text = (
+        "💸 Черновик множественных транзакций:\n\n"
+        f"Счёт: {draft['account_from_name']}\n"
+        f"Количество транзакций: {len(draft['transactions'])}\n\n"
+        f"Транзакции:\n{transactions_text}\n\n"
+        f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+        f"Дата: {draft['date']}\n"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить всё", callback_data="confirm"),
+        ],
+        [
+            InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+        ],
+        [
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    return await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+
+async def show_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
+    """Show transaction draft with confirmation buttons"""
+    message_text = (
+        "💸 Черновик транзакции:\n\n"
+        f"Категория: {draft['category_name']}\n"
+        f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+        f"Счёт: {draft['account_from_name']}\n"
+        f"Комментарий: {draft['comment'] or '—'}\n"
+        f"Дата: {draft['date']}\n"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+            InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+        ],
+        [
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    return await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+
+# === Supplier Selection ===
+
+async def show_supplier_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, supplier_text: str = ""):
+    """Show supplier selection UI when supplier not found or not specified"""
+    telegram_user_id = update.effective_user.id
+    supplier_matcher = get_supplier_matcher(telegram_user_id)
+
+    message = "🏪 Выберите поставщика:\n\n"
+    if supplier_text:
+        message = f"❌ Поставщик '{supplier_text}' не найден.\n\n🏪 Выберите поставщика:\n\n"
+
+    # Get all suppliers sorted by name
+    suppliers = [(sid, sinfo['name']) for sid, sinfo in supplier_matcher.suppliers.items()]
+    suppliers.sort(key=lambda x: x[1])
+
+    # Create keyboard with supplier buttons (2 per row)
+    keyboard = []
+    row = []
+    for supplier_id, supplier_name in suppliers:
+        row.append(InlineKeyboardButton(supplier_name, callback_data=f"select_supplier:{supplier_id}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    # Add last row if not empty
+    if row:
+        keyboard.append(row)
+
+    # Add cancel button
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_supplier_selection")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(message, reply_markup=reply_markup)
+
+
+async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, supplier_id: int):
+    """Handle supplier selection and continue with supply processing"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Get pending supply data
+    parsed = context.user_data.get('pending_supply')
+    if not parsed:
+        await query.edit_message_text("❌ Данные поставки потеряны.")
+        return
+
+    # Update supplier in parsed data
+    supplier_matcher = get_supplier_matcher(telegram_user_id)
+    supplier_name = supplier_matcher.get_supplier_name(supplier_id)
+
+    await query.edit_message_text(f"✅ Выбран поставщик: {supplier_name}\n\n⏳ Обрабатываю поставку...")
+
+    # Set supplier in parsed data
+    parsed['supplier'] = supplier_name
+    parsed['supplier_id'] = supplier_id
+
+    # Clear pending supply
+    del context.user_data['pending_supply']
+
+    # Create a fake update with the original message for process_supply
+    # We need to call process_supply with the selected supplier
+    # Instead, let's directly continue the logic from process_supply
+
+    # Match account
+    account_matcher = get_account_matcher(telegram_user_id)
+    account_text = parsed.get('account') or 'оставил в кассе'
+    account_id = account_matcher.match(account_text)
+
+    if not account_id:
+        account_id = 4  # Default: Оставил в кассе
+
+    account_name = account_matcher.get_account_name(account_id)
+
+    # Match ingredients and products
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    product_matcher = get_product_matcher(telegram_user_id)
+    items = parsed.get('items', [])
+    matched_items = []
+    unmatched_items = []
+    total_amount = 0
+
+    for item in items:
+        # Try ingredient match first
+        ingredient_match = ingredient_matcher.match(item['name'])
+
+        # Try product match if ingredient not found or score too low
+        product_match = None
+        if not ingredient_match or ingredient_match[3] < 75:
+            product_match = product_matcher.match(item['name'])
+
+        # Use best match
+        best_match = None
+        if ingredient_match and product_match:
+            best_match = ingredient_match if ingredient_match[3] >= product_match[3] else product_match
+        elif ingredient_match:
+            best_match = ingredient_match
+        elif product_match:
+            best_match = product_match
+
+        if not best_match or best_match[3] < 75:
+            unmatched_items.append(item)
+            continue
+
+        item_id, item_name, unit, match_score = best_match
+        qty = item['qty']
+        price = item.get('price')
+
+        # Skip items without price
+        if price is None:
+            logger.warning(f"Skipping item '{item['name']}' - no price specified")
+            continue
+
+        # Adjust for packing if needed (e.g., 10 упак → 300 шт)
+        adjusted_qty, adjusted_price, packing_size = adjust_for_packing(
+            item_name, qty, price, item['name']
+        )
+
+        item_sum = int(adjusted_qty * adjusted_price)
+
+        matched_items.append({
+            'id': item_id,
+            'name': item_name,
+            'num': adjusted_qty,
+            'price': adjusted_price,
+            'sum': item_sum,
+            'match_score': match_score,
+            'original_name': item['name'],
+            'packing_size': packing_size
+        })
+
+        total_amount += item_sum
+
+    # If there are unmatched items, ask user to select manually
+    if unmatched_items:
+        context.user_data['supply_context'] = {
+            'supplier_id': supplier_id,
+            'supplier_name': supplier_name,
+            'account_id': account_id,
+            'account_name': account_name,
+            'matched_items': matched_items,
+            'unmatched_items': unmatched_items,
+            'total_amount': total_amount,
+            'current_unmatched_index': 0
+        }
+
+        # Need to create a fake update for show_ingredient_selection
+        # Use query.message as the message
+        fake_update = Update(
+            update_id=update.update_id,
+            message=query.message
+        )
+        await show_ingredient_selection(fake_update, context)
+        return
+
+    # Build supply draft
+    draft = {
+        'type': 'supply',
+        'supplier_id': supplier_id,
+        'supplier_name': supplier_name,
+        'account_id': account_id,
+        'account_name': account_name,
+        'storage_id': 1,
+        'storage_name': 'Продукты',
+        'items': matched_items,
+        'total_amount': total_amount,
+        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    # Show supply draft - need fake update
+    fake_update = Update(
+        update_id=update.update_id,
+        message=query.message
+    )
+    message = await show_supply_draft(fake_update, context, draft)
+
+    if message:
+        if 'drafts' not in context.user_data:
+            context.user_data['drafts'] = {}
+        context.user_data['drafts'][message.message_id] = draft
+        context.user_data['current_message_id'] = message.message_id
+
+
+# === Ingredient Selection ===
+
+async def show_ingredient_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show ingredient selection UI for unmatched items"""
+    telegram_user_id = update.effective_user.id
+    supply_ctx = context.user_data.get('supply_context')
+
+    # Get chat for sending messages (works for both message and callback_query)
+    if update.callback_query:
+        chat = update.callback_query.message.chat
+    else:
+        chat = update.message.chat
+
+    if not supply_ctx:
+        await context.bot.send_message(chat.id, "❌ Контекст поставки потерян.")
+        return
+
+    unmatched_items = supply_ctx['unmatched_items']
+    current_index = supply_ctx['current_unmatched_index']
+
+    if current_index >= len(unmatched_items):
+        # All items processed, show draft
+        await finalize_supply_draft(update, context)
+        return
+
+    current_item = unmatched_items[current_index]
+    item_name = current_item['name']
+
+    # Get top matches
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    top_matches = ingredient_matcher.get_top_matches(item_name, limit=4, score_cutoff=40)
+
+    if not top_matches:
+        # No matches at all, skip this item
+        message = (
+            f"❌ Не найдено похожих ингредиентов для: \"{item_name}\"\n"
+            f"Количество: {current_item['qty']}, Цена: {current_item['price']}\n\n"
+            f"Эта позиция будет пропущена."
+        )
+        await context.bot.send_message(chat.id, message)
+
+        # Move to next item
+        supply_ctx['current_unmatched_index'] += 1
+        context.user_data['supply_context'] = supply_ctx
+        await show_ingredient_selection(update, context)
+        return
+
+    # Build keyboard with top matches
+    keyboard = []
+    row = []
+
+    for ing_id, ing_name, unit, score in top_matches:
+        button_text = f"{ing_name} ({int(score)}%)"
+        button = InlineKeyboardButton(
+            button_text,
+            callback_data=f"select_ingredient_{ing_id}"
+        )
+        row.append(button)
+
+        # 2 buttons per row
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    # Add remaining buttons
+    if row:
+        keyboard.append(row)
+
+    # Add "Manual search" and "Skip" buttons
+    keyboard.append([
+        InlineKeyboardButton("✏️ Ввести название вручную", callback_data="manual_ingredient_search")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("❌ Пропустить этот товар", callback_data="skip_ingredient")
+    ])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    progress = f"({current_index + 1}/{len(unmatched_items)})"
+    message = (
+        f"❓ Не удалось точно определить ингредиент {progress}:\n"
+        f"**\"{item_name}\"**\n"
+        f"Количество: {current_item['qty']}, Цена: {current_item['price']}\n\n"
+        f"Выберите правильный вариант:"
+    )
+
+    await context.bot.send_message(chat.id, message, reply_markup=reply_markup)
+
+
+async def finalize_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create supply draft after all ingredient selections"""
+    supply_ctx = context.user_data.get('supply_context')
+
+    # Get chat for sending messages (works for both message and callback_query)
+    if update.callback_query:
+        chat = update.callback_query.message.chat
+    else:
+        chat = update.message.chat
+
+    if not supply_ctx:
+        await context.bot.send_message(chat.id, "❌ Контекст поставки потерян.")
+        return
+
+    matched_items = supply_ctx['matched_items']
+    total_amount = supply_ctx['total_amount']
+
+    if not matched_items:
+        await context.bot.send_message(
+            chat.id,
+            "❌ Все позиции были пропущены. Поставка отменена."
+        )
+        context.user_data.pop('supply_context', None)
+        return
+
+    # Build supply draft
+    draft = {
+        'type': 'supply',
+        'supplier_id': supply_ctx['supplier_id'],
+        'supplier_name': supply_ctx['supplier_name'],
+        'account_id': supply_ctx['account_id'],
+        'account_name': supply_ctx['account_name'],
+        'storage_id': 1,
+        'storage_name': 'Продукты',
+        'items': matched_items,
+        'total_amount': total_amount,
+        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    # Show supply draft
+    message = await show_supply_draft(update, context, draft)
+
+    # Store draft
+    if message:
+        drafts = context.user_data.get('drafts', {})
+        drafts[message.message_id] = draft
+        context.user_data['drafts'] = drafts
+        context.user_data['current_message_id'] = message.message_id
+
+    # Clear supply context
+    context.user_data.pop('supply_context', None)
+
+
+async def handle_ingredient_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, ingredient_id: int):
+    """Handle when user selects an ingredient from suggestions"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+    supply_ctx = context.user_data.get('supply_context')
+
+    if not supply_ctx:
+        await query.edit_message_text("❌ Контекст поставки потерян.")
+        return
+
+    unmatched_items = supply_ctx['unmatched_items']
+    current_index = supply_ctx['current_unmatched_index']
+    current_item = unmatched_items[current_index]
+
+    # Get ingredient info
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    ingredient_info = ingredient_matcher.get_ingredient_info(ingredient_id)
+
+    if not ingredient_info:
+        await query.edit_message_text("❌ Ошибка: ингредиент не найден.")
+        return
+
+    # Add to matched items
+    qty = current_item['qty']
+    price = current_item['price']
+    item_sum = int(qty * price)
+
+    matched_item = {
+        'id': ingredient_id,
+        'name': ingredient_info['name'],
+        'num': qty,
+        'price': price,
+        'sum': item_sum,
+        'match_score': 100,  # User confirmed
+        'original_name': current_item['name']
+    }
+
+    supply_ctx['matched_items'].append(matched_item)
+    supply_ctx['total_amount'] += item_sum
+
+    # Save alias (auto-learning)
+    ingredient_matcher.add_alias(
+        current_item['name'],
+        ingredient_id,
+        notes="Auto-learned from user selection"
+    )
+
+    await query.edit_message_text(
+        f"✅ Выбрано: {ingredient_info['name']}\n"
+        f"Алиас сохранён: \"{current_item['name']}\" → \"{ingredient_info['name']}\""
+    )
+
+    # Move to next unmatched item
+    supply_ctx['current_unmatched_index'] += 1
+    context.user_data['supply_context'] = supply_ctx
+
+    logger.info(f"Moving to next item: {current_index + 1}/{len(unmatched_items)}")
+
+    # Show next item or finalize
+    await show_ingredient_selection(update, context)
+
+
+async def handle_ingredient_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle when user skips an ingredient"""
+    query = update.callback_query
+    supply_ctx = context.user_data.get('supply_context')
+
+    if not supply_ctx:
+        await query.edit_message_text("❌ Контекст поставки потерян.")
+        return
+
+    unmatched_items = supply_ctx['unmatched_items']
+    current_index = supply_ctx['current_unmatched_index']
+    current_item = unmatched_items[current_index]
+
+    await query.edit_message_text(
+        f"⏭️ Пропущено: \"{current_item['name']}\" "
+        f"({current_item['qty']} × {current_item['price']})"
+    )
+
+    # Move to next unmatched item
+    supply_ctx['current_unmatched_index'] += 1
+    context.user_data['supply_context'] = supply_ctx
+
+    # Show next item or finalize
+    await show_ingredient_selection(update, context)
+
+
+async def start_manual_ingredient_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start manual ingredient search - ask user to type ingredient name"""
+    query = update.callback_query
+    supply_ctx = context.user_data.get('supply_context')
+
+    if not supply_ctx:
+        await query.edit_message_text("❌ Контекст поставки потерян.")
+        return
+
+    # Set flag to wait for manual input
+    context.user_data['waiting_for_manual_ingredient'] = True
+
+    await query.edit_message_text(
+        "✏️ Введите название ингредиента для поиска:\n\n"
+        "Например: Полпа, Соус барбекю, Огурцы и т.д.\n\n"
+        "Бот найдёт похожие ингредиенты в базе Poster."
+    )
+
+
+async def handle_manual_ingredient_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle manual ingredient name input from user"""
+    if not context.user_data.get('waiting_for_manual_ingredient'):
+        return
+
+    telegram_user_id = update.effective_user.id
+    user_input = update.message.text.strip()
+    supply_ctx = context.user_data.get('supply_context')
+
+    if not supply_ctx:
+        await update.message.reply_text("❌ Контекст поставки потерян.")
+        return
+
+    # Clear waiting flag
+    context.user_data['waiting_for_manual_ingredient'] = False
+
+    # Search for ingredient
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    top_matches = ingredient_matcher.get_top_matches(user_input, limit=10, score_cutoff=50)
+
+    if not top_matches:
+        await update.message.reply_text(
+            f"❌ Не найдено ингредиентов для: \"{user_input}\"\n\n"
+            f"Попробуйте другое название или пропустите этот товар."
+        )
+        # Show ingredient selection again
+        await show_ingredient_selection(update, context)
+        return
+
+    # Get current item info
+    unmatched_items = supply_ctx['unmatched_items']
+    current_index = supply_ctx['current_unmatched_index']
+    current_item = unmatched_items[current_index]
+
+    # Build keyboard with matches
+    keyboard = []
+    row = []
+
+    for ing_id, ing_name, unit, score in top_matches:
+        button_text = f"{ing_name} ({int(score)}%)"
+        button = InlineKeyboardButton(
+            button_text,
+            callback_data=f"select_ingredient_{ing_id}"
+        )
+        row.append(button)
+
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    # Add back button
+    keyboard.append([
+        InlineKeyboardButton("« Назад к предложенным", callback_data="back_to_suggestions")
+    ])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    message = (
+        f"🔍 Найдено {len(top_matches)} совпадений для \"{user_input}\":\n\n"
+        f"Оригинальное название: \"{current_item['name']}\"\n"
+        f"Количество: {current_item['qty']}, Цена: {current_item['price']}\n\n"
+        f"Выберите подходящий:"
+    )
+
+    await update.message.reply_text(message, reply_markup=reply_markup)
+
+
+# === Menu Callback Handlers ===
+
+async def handle_calculate_salaries_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки 'Рассчитать зарплаты'"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Спросить количество кассиров
+    keyboard = [
+        [
+            InlineKeyboardButton("👥 2 кассира", callback_data="cashiers_2"),
+            InlineKeyboardButton("👥👥 3 кассира", callback_data="cashiers_3")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        "💰 **Расчёт зарплат**\n\n"
+        "Сколько кассиров на смене сегодня?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def handle_cashiers_count_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, cashier_count: int):
+    """Обработка выбора количества кассиров - спрашиваем время выхода помощника"""
+    query = update.callback_query
+
+    # Сохраняем количество кассиров в контекст
+    context.user_data['cashier_count'] = cashier_count
+
+    # Спрашиваем время выхода помощника донерщика
+    keyboard = [
+        [
+            InlineKeyboardButton("⏰ С 10:00", callback_data="assistant_time_10"),
+            InlineKeyboardButton("⏰ С 12:00", callback_data="assistant_time_12"),
+            InlineKeyboardButton("⏰ С 14:00", callback_data="assistant_time_14")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        f"💰 **Расчёт зарплат**\n\n"
+        f"Кассиров: {cashier_count} чел\n\n"
+        f"Когда вышел помощник донерщика?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def handle_assistant_time_and_calculate(update: Update, context: ContextTypes.DEFAULT_TYPE, assistant_start_time: str):
+    """Обработка выбора времени помощника и расчёт зарплат"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Получаем количество кассиров из контекста
+    cashier_count = context.user_data.get('cashier_count', 2)
+
+    await query.edit_message_text(
+        f"⏳ Рассчитываю зарплаты для {cashier_count} кассиров и донерщика...",
+        parse_mode='Markdown'
+    )
+
+    try:
+        from cashier_salary import calculate_and_create_cashier_salary
+        from doner_salary import calculate_and_create_doner_salary
+
+        # Рассчитать зарплату кассиров
+        cashier_result = await calculate_and_create_cashier_salary(telegram_user_id, cashier_count)
+
+        # Рассчитать зарплату донерщика с учётом времени выхода помощника
+        doner_result = await calculate_and_create_doner_salary(telegram_user_id, None, assistant_start_time)
+
+        # Сформировать отчёт
+        message_lines = ["✅ **Зарплаты рассчитаны!**\n"]
+
+        if cashier_result['success']:
+            message_lines.append(f"👥 **Кассиры ({cashier_count} чел):**")
+            message_lines.append(f"   Продажи: {cashier_result['total_sales']/100:,.0f}₸".replace(',', ' '))
+            message_lines.append(f"   Зарплата каждого: {cashier_result['salary_per_cashier']:,}₸".replace(',', ' '))
+            message_lines.append(f"   ID транзакций: {', '.join(str(id) for id in cashier_result['transaction_ids'])}")
+        else:
+            message_lines.append(f"❌ Ошибка расчёта кассиров: {cashier_result.get('error')}")
+
+        message_lines.append("")
+
+        if doner_result['success']:
+            message_lines.append(f"🌮 **Донерщик:**")
+            message_lines.append(f"   Донеров продано: {doner_result['doner_count']} шт")
+            message_lines.append(f"   Базовая зарплата: {doner_result['base_salary']:,}₸".replace(',', ' '))
+            if doner_result['bonus'] > 0:
+                message_lines.append(f"   Бонус за помощника: +{doner_result['bonus']:,}₸".replace(',', ' '))
+            message_lines.append(f"   Итого зарплата: {doner_result['salary']:,}₸".replace(',', ' '))
+            message_lines.append(f"   ID транзакции: {doner_result['transaction_id']}")
+            message_lines.append("")
+            message_lines.append(f"👷 **Помощник донерщика:**")
+            message_lines.append(f"   Вышел: {assistant_start_time}")
+            message_lines.append(f"   Зарплата: {doner_result['assistant_salary']:,}₸".replace(',', ' '))
+            message_lines.append(f"   ID транзакции: {doner_result['assistant_transaction_id']}")
+        else:
+            message_lines.append(f"❌ Ошибка расчёта донерщика: {doner_result.get('error')}")
+
+        await query.edit_message_text(
+            "\n".join(message_lines),
+            parse_mode='Markdown'
+        )
+
+        # Очищаем контекст
+        context.user_data.pop('cashier_count', None)
+
+    except Exception as e:
+        logger.error(f"Salary calculation failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка расчёта зарплат:\n{str(e)[:300]}"
+        )
+        context.user_data.pop('cashier_count', None)
+
+
+async def handle_create_daily_transactions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки 'Создать дневные транзакции'"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    from daily_transactions import is_daily_transactions_enabled
+
+    if not is_daily_transactions_enabled(telegram_user_id):
+        await query.edit_message_text(
+            "❌ Автоматические транзакции не включены для вашего аккаунта."
+        )
+        return
+
+    await query.edit_message_text("⏳ Создаю ежедневные транзакции...")
+
+    try:
+        await run_daily_transactions_for_user(telegram_user_id)
+
+        await query.edit_message_text(
+            "✅ Ежедневные транзакции созданы!\n\n"
+            "Проверьте Poster для подтверждения."
+        )
+
+    except Exception as e:
+        logger.error(f"Daily transactions failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка создания транзакций:\n{str(e)[:300]}"
+        )
+
+
+async def handle_generate_weekly_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки 'Еженедельный отчёт'"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text("⏳ Генерирую еженедельный отчёт...")
+
+    try:
+        from weekly_report import WeeklyReportGenerator
+
+        generator = WeeklyReportGenerator(telegram_user_id)
+        result = await generator.generate_weekly_report()
+
+        if result['success']:
+            await query.edit_message_text(
+                result['report_text'],
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ Ошибка генерации отчёта:\n{result.get('error', 'Неизвестная ошибка')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Weekly report failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка генерации отчёта:\n{str(e)[:300]}"
+        )
+
+
+async def handle_generate_monthly_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки 'Месячный отчёт'"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text("⏳ Генерирую ежемесячный отчёт...")
+
+    try:
+        from monthly_report import MonthlyReportGenerator
+
+        generator = MonthlyReportGenerator(telegram_user_id)
+        result = await generator.generate_monthly_report()
+
+        if result['success']:
+            await query.edit_message_text(
+                result['report_text'],
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ Ошибка генерации месячного отчёта:\n{result.get('error', 'Неизвестная ошибка')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Monthly report failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка генерации месячного отчёта:\n{str(e)[:300]}"
+        )
+
+
+async def handle_close_cash_register_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать выбор заведения для закрытия кассы"""
+    query = update.callback_query
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🍕 PizzBurg", callback_data="close_cash_dept:pittsburgh"),
+            InlineKeyboardButton("☕ PizzBurg Cafe", callback_data="close_cash_dept:pittsburgh_cafe")
+        ],
+        [
+            InlineKeyboardButton("« Назад в меню", callback_data="back_to_menu")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        "🏪 **ЗАКРЫТЬ КАССОВУЮ СМЕНУ**\n\n"
+        "Выберите заведение:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def handle_cash_closing_start(update: Update, context: ContextTypes.DEFAULT_TYPE, dept: str):
+    """Начать процесс закрытия кассы для выбранного заведения"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Определяем telegram_user_id для выбранного заведения
+    from database import get_database
+    db = get_database()
+
+    if dept == "pittsburgh":
+        dept_name = "🍕 PizzBurg"
+        dept_user_id = 167084307  # Pittsburgh
+    elif dept == "pittsburgh_cafe":
+        dept_name = "☕ PizzBurg Cafe"
+        dept_user_id = 1486244636  # Pittsburgh Cafe
+    else:
+        await query.edit_message_text("❌ Неизвестное заведение")
+        return
+
+    await query.edit_message_text(f"🔄 Загружаю данные из Poster для {dept_name}...")
+
+    try:
+        from cash_shift_closing import CashShiftClosing
+
+        # Получить данные из Poster
+        closing = CashShiftClosing(dept_user_id)
+        poster_data = await closing.get_poster_data()
+        await closing.close()
+
+        if not poster_data.get('success'):
+            await query.edit_message_text(
+                f"❌ Ошибка получения данных из Poster:\n{poster_data.get('error', 'Неизвестная ошибка')}"
+            )
+            return
+
+        # Сохраняем данные в context для последующих шагов
+        context.user_data['cash_closing_data'] = {
+            'dept': dept,
+            'dept_name': dept_name,
+            'dept_user_id': dept_user_id,
+            'poster_data': poster_data,
+            'step': 'shift_start',  # ПЕРВЫЙ шаг - остаток на начало смены
+            'inputs': {}  # Собираем введённые данные
+        }
+
+        # Показать данные из Poster и запросить остаток на начало смены
+        message = (
+            f"📊 **Данные из Poster** ({dept_name}):\n\n"
+            f"💰 Торговля за день: {poster_data['trade_total']/100:,.0f}₸\n"
+            f"🎁 Бонусы/онлайн: {poster_data['bonus']/100:,.0f}₸\n"
+            f"💳 Безнал в Poster: {poster_data['poster_cashless']/100:,.0f}₸\n"
+            f"💵 Наличка в Poster: {poster_data['poster_cash']/100:,.0f}₸\n"
+            f"📦 Заказов обработано: {poster_data['transactions_count']}\n\n"
+            f"➡️ **Введите остаток на начало смены** (из чека Poster, в тенге):\n"
+            f"Например: `40477` или `0`"
+        )
+
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cash_closing_cancel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Ошибка начала закрытия кассы: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка:\n{str(e)[:300]}"
+        )
+
+
+async def handle_cash_input_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода данных на текущем шаге закрытия кассы"""
+    message = update.message
+    text = message.text.strip()
+
+    # Проверяем, что есть активная сессия закрытия кассы
+    if 'cash_closing_data' not in context.user_data:
+        await message.reply_text("❌ Нет активной сессии закрытия кассы. Используйте /menu")
+        return
+
+    data = context.user_data['cash_closing_data']
+    current_step = data['step']
+    dept_name = data['dept_name']
+    dept = data['dept']
+
+    # Парсим введённое число
+    try:
+        amount = float(text.replace(',', '.').replace(' ', ''))
+        if amount < 0:
+            await message.reply_text("❌ Сумма не может быть отрицательной. Попробуйте ещё раз:")
+            return
+    except ValueError:
+        await message.reply_text("❌ Неверный формат. Введите число (например: 5000 или 0):")
+        return
+
+    # Сохраняем введённое значение
+    data['inputs'][current_step] = amount
+
+    # ВАЖНО: Если это shift_start, сохраняем в poster_data (в тийинах)
+    if current_step == 'shift_start':
+        data['poster_data']['shift_start'] = int(amount * 100)
+
+    # Определяем следующий шаг
+    steps_order = ['shift_start', 'wolt', 'halyk', 'kaspi', 'cash_bills', 'cash_coins', 'deposits', 'expenses', 'cash_to_leave']
+
+    # Для PizzBurg Cafe пропускаем Halyk
+    if dept == 'pittsburgh_cafe' and current_step == 'wolt':
+        data['inputs']['halyk'] = 0
+        next_step_idx = steps_order.index('kaspi')
+    else:
+        current_idx = steps_order.index(current_step)
+        next_step_idx = current_idx + 1
+
+    # Если все шаги пройдены - показать сводку
+    if next_step_idx >= len(steps_order):
+        await show_cash_closing_summary(update, context)
+        return
+
+    # Переход к следующему шагу
+    next_step = steps_order[next_step_idx]
+    data['step'] = next_step
+
+    # Формируем текст запроса для следующего шага
+    step_prompts = {
+        'wolt': "➡️ **Введите сумму Wolt** (в тенге):",
+        'halyk': "➡️ **Введите сумму Halyk** (в тенге):",
+        'kaspi': "➡️ **Введите сумму Kaspi** (в тенге):",
+        'cash_bills': "➡️ **Введите наличные (бумажные)** (в тенге):",
+        'cash_coins': "➡️ **Введите наличные (монеты)** (в тенге):",
+        'deposits': "➡️ **Введите внесения** (в тенге, 0 если не было):",
+        'expenses': "➡️ **Введите расходы с кассы** (в тенге, 0 если не было):",
+        'cash_to_leave': "➡️ **Сколько оставить бумажных денег на смену?** (в тенге):"
+    }
+
+    prompt = step_prompts.get(next_step, "Введите значение:")
+
+    # Показываем текущий прогресс
+    progress = f"✅ {current_step.replace('_', ' ').title()}: {amount:,.0f}₸\n\n"
+
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cash_closing_cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await message.reply_text(
+        f"{progress}{prompt}\nНапример: `5000` или `0`",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def show_cash_closing_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать сводку и запросить подтверждение закрытия кассы"""
+    message = update.message
+    data = context.user_data['cash_closing_data']
+
+    poster_data = data['poster_data']
+    inputs = data['inputs']
+    dept_name = data['dept_name']
+
+    try:
+        from cash_shift_closing import CashShiftClosing
+
+        closing = CashShiftClosing(data['dept_user_id'])
+
+        # Расчёт итогов
+        calculations = closing.calculate_totals(
+            poster_data=poster_data,
+            wolt=int(inputs['wolt']),
+            halyk=int(inputs['halyk']),
+            kaspi=int(inputs['kaspi']),
+            cash_bills=int(inputs['cash_bills']),
+            cash_coins=int(inputs['cash_coins']),
+            deposits=int(inputs.get('deposits', 0)),
+            expenses=int(inputs.get('expenses', 0))
+        )
+
+        # Сохраняем расчёты
+        data['calculations'] = calculations
+
+        day_diff = calculations['day_diff']
+        diff_emoji = "✅" if abs(day_diff) < 1 else ("📈" if day_diff > 0 else "📉")
+
+        summary = f"""
+📊 **СВОДКА ДЛЯ {dept_name}**
+
+**Данные Poster:**
+• Торговля (наличные + безнал): {calculations['trade_total']:,.0f}₸
+• Бонусы: {calculations['bonus']:,.0f}₸
+• **Итого Poster (без бонусов):** {calculations['poster_total']:,.0f}₸
+
+**Фактические данные:**
+• Остаток на начало смены: {calculations['shift_start']:,.0f}₸
+• Wolt: {calculations['wolt']:,.0f}₸
+• Halyk: {calculations['halyk']:,.0f}₸
+• Kaspi: {calculations['kaspi']:,.0f}₸
+• Наличные (бумажные): {calculations['cash_bills']:,.0f}₸
+• Наличные (монеты): {calculations['cash_coins']:,.0f}₸
+• Внесения: {calculations['deposits']:,.0f}₸
+• Расходы: {calculations['expenses']:,.0f}₸
+• **Итого фактически (с вычетом остатка на начало):** {calculations['fact_adjusted']:,.0f}₸
+
+{diff_emoji} **ИТОГО ДЕНЬ:** {day_diff:+,.0f}₸ {"(Излишек)" if day_diff > 0 else "(Недостача)" if day_diff < 0 else "(Идеально!)"}
+
+💵 **На смену оставлено:** {inputs['cash_to_leave']:,.0f}₸
+💰 **К инкассации:** {calculations['cash_bills'] + calculations['cash_coins'] - inputs['cash_to_leave']:,.0f}₸
+
+**Будут созданы транзакции:**
+"""
+
+        if abs(day_diff) >= 1:
+            summary += f"• {'Излишек' if day_diff > 0 else 'Недостача'}: {abs(day_diff):,.0f}₸\n"
+        else:
+            summary += f"• Излишек/недостача: нет (0₸)\n"
+
+        cashless_diff = calculations['cashless_diff']
+        if abs(cashless_diff) >= 1:
+            summary += f"• Корректировка безнал: {cashless_diff:+,.0f}₸\n"
+        else:
+            summary += f"• Корректировка безнал: не требуется\n"
+
+        summary += f"• Закрытие смены: {inputs['cash_to_leave']:,.0f}₸\n"
+        summary += "\n✅ Всё верно?"
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="cash_closing_confirm"),
+                InlineKeyboardButton("❌ Отменить", callback_data="cash_closing_cancel")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await message.reply_text(summary, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Ошибка расчёта сводки: {e}", exc_info=True)
+        await message.reply_text(f"❌ Ошибка расчёта:\n{str(e)[:300]}")
+
+
+async def handle_cash_closing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выполнить закрытие кассы и создать транзакции"""
+    query = update.callback_query
+
+    if 'cash_closing_data' not in context.user_data:
+        await query.edit_message_text("❌ Нет активной сессии закрытия кассы")
+        return
+
+    data = context.user_data['cash_closing_data']
+    dept_name = data['dept_name']
+
+    await query.edit_message_text(f"⏳ Создаю транзакции для {dept_name}...")
+
+    try:
+        from cash_shift_closing import CashShiftClosing
+        from datetime import datetime
+
+        closing = CashShiftClosing(data['dept_user_id'])
+
+        # Создаём транзакции
+        result = await closing.create_transactions(
+            calculations=data['calculations'],
+            cash_to_leave=int(data['inputs']['cash_to_leave']),
+            date=datetime.now().strftime("%Y%m%d")
+        )
+
+        await closing.close()
+
+        if not result.get('success'):
+            await query.edit_message_text(
+                f"❌ Ошибка создания транзакций:\n{result.get('error', 'Неизвестная ошибка')}"
+            )
+            return
+
+        # Формируем итоговый отчёт
+        report = closing.format_report(
+            poster_data=data['poster_data'],
+            calculations=data['calculations'],
+            transactions=result
+        )
+
+        # Очищаем данные сессии
+        context.user_data.pop('cash_closing_data', None)
+
+        keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="back_to_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(report, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Ошибка закрытия кассы: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ Ошибка:\n{str(e)[:300]}")
+
+
+async def handle_delete_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, transaction_id: int):
+    """Обработка удаления заказа по ID"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text(f"🗑️ Удаляю заказ #{transaction_id}...")
+
+    try:
+        from receipt_handler import delete_order_by_id
+
+        success = await delete_order_by_id(telegram_user_id, transaction_id)
+
+        if success:
+            await query.edit_message_text(
+                f"✅ Заказ #{transaction_id} успешно удалён!\n\n"
+                f"Чек был удалён из системы Poster.\n"
+                f"Обновлены:\n"
+                f"- Отчёты\n"
+                f"- Кассовая смена\n"
+                f"- Товары вернулись на склад"
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ Не удалось удалить заказ #{transaction_id}\n\n"
+                f"Возможно:\n"
+                f"- Заказ уже был удалён\n"
+                f"- Проблема с доступом к API\n"
+                f"- Неверный ID заказа"
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка удаления заказа {transaction_id}: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при удалении заказа:\n{str(e)[:200]}"
+        )
+
+
+async def handle_close_shift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки 'Закрыть смену'"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text("⏳ Получаю отчёт о смене...")
+
+    try:
+        from shift_closing import ShiftClosing
+
+        shift = ShiftClosing(telegram_user_id)
+        report = await shift.get_shift_report()
+
+        if report['success']:
+            # Показать отчёт и спросить количество кассиров
+            formatted_report = shift.format_shift_report(report)
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("👥 2 кассира", callback_data="close_shift_2"),
+                    InlineKeyboardButton("👥👥 3 кассира", callback_data="close_shift_3")
+                ],
+                [
+                    InlineKeyboardButton("❌ Отмена", callback_data="cancel_shift_closing")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(
+                formatted_report + "\n\n**Сколько кассиров на смене?**",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ Ошибка получения отчёта:\n{report.get('error', 'Неизвестная ошибка')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Shift report failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка получения отчёта:\n{str(e)[:300]}"
+        )
+
+
+async def handle_close_shift_with_count_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, cashier_count: int):
+    """Обработка закрытия смены с указанным количеством кассиров"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text(
+        f"⏳ Закрываю смену с {cashier_count} кассирами...",
+        parse_mode='Markdown'
+    )
+
+    try:
+        from shift_closing import ShiftClosing
+
+        shift = ShiftClosing(telegram_user_id)
+        result = await shift.close_shift(cashier_count)
+
+        if result['success']:
+            # Форматируем числа с пробелами
+            def format_money(amount):
+                return f"{amount:,}".replace(',', ' ')
+
+            message = (
+                f"✅ **СМЕНА ЗАКРЫТА УСПЕШНО**\n\n"
+                f"💵 **Зарплаты:**\n"
+                f"├ Кассиры ({cashier_count} чел): {format_money(result['cashier_salary'])}₸ каждому\n"
+                f"│  ID транзакций: {', '.join(str(id) for id in result['cashier_transactions'])}\n"
+                f"└ Донерщик: {format_money(result['doner_salary'])}₸\n"
+                f"   ID транзакции: {result['doner_transaction']}\n"
+            )
+
+            await query.edit_message_text(message, parse_mode='Markdown')
+        else:
+            await query.edit_message_text(
+                f"❌ Ошибка закрытия смены:\n{result.get('error', 'Неизвестная ошибка')}"
+            )
+
+    except Exception as e:
+        logger.error(f"Shift closing failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка закрытия смены:\n{str(e)[:300]}"
+        )
+
+
+# === Callback Handler ===
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline button callbacks"""
+    query = update.callback_query
+    await query.answer()
+
+    # Обработка меню кнопок
+    if query.data == "close_cash_register":
+        await handle_close_cash_register_callback(update, context)
+        return
+    elif query.data == "delete_receipt_mode":
+        # Активировать режим удаления чека
+        context.user_data['waiting_for_receipt_photo'] = True
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel_receipt_delete")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "📸 **Режим удаления чека активирован**\n\n"
+            "Отправьте фото чека, который нужно удалить.\n\n"
+            "Бот распознает дату, время и сумму, найдёт заказ в Poster и предложит его удалить.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+    elif query.data == "cancel_receipt_delete":
+        context.user_data.pop('waiting_for_receipt_photo', None)
+        await query.edit_message_text("❌ Режим удаления чека отменён.")
+        return
+    elif query.data.startswith("close_cash_dept:"):
+        # Выбран отдел для закрытия
+        dept = query.data.split(":")[1]
+        await handle_cash_closing_start(update, context, dept)
+        return
+    elif query.data.startswith("cash_input:"):
+        # Ввод данных для закрытия кассы
+        await handle_cash_input_callback(update, context)
+        return
+    elif query.data == "cash_closing_confirm":
+        # Подтверждение закрытия кассы
+        await handle_cash_closing_confirm(update, context)
+        return
+    elif query.data == "cash_closing_cancel":
+        context.user_data.pop('cash_closing_data', None)
+        await query.edit_message_text("❌ Закрытие кассы отменено.")
+        return
+    elif query.data == "close_shift":
+        await handle_close_shift_callback(update, context)
+        return
+    elif query.data == "close_shift_2":
+        await handle_close_shift_with_count_callback(update, context, 2)
+        return
+    elif query.data == "close_shift_3":
+        await handle_close_shift_with_count_callback(update, context, 3)
+        return
+    elif query.data == "cancel_shift_closing":
+        await query.edit_message_text("✖️ Закрытие смены отменено.")
+        return
+    elif query.data == "calculate_salaries":
+        await handle_calculate_salaries_callback(update, context)
+        return
+    elif query.data == "create_daily_transactions":
+        await handle_create_daily_transactions_callback(update, context)
+        return
+    elif query.data == "generate_weekly_report":
+        await handle_generate_weekly_report_callback(update, context)
+        return
+    elif query.data == "generate_monthly_report":
+        await handle_generate_monthly_report_callback(update, context)
+        return
+    elif query.data == "cashiers_2":
+        await handle_cashiers_count_callback(update, context, 2)
+        return
+    elif query.data == "cashiers_3":
+        await handle_cashiers_count_callback(update, context, 3)
+        return
+    elif query.data == "assistant_time_10":
+        await handle_assistant_time_and_calculate(update, context, "10:00")
+        return
+    elif query.data == "assistant_time_12":
+        await handle_assistant_time_and_calculate(update, context, "12:00")
+        return
+    elif query.data == "assistant_time_14":
+        await handle_assistant_time_and_calculate(update, context, "14:00")
+        return
+
+    if query.data == "confirm":
+        await confirm_transaction(update, context)
+    elif query.data == "cancel":
+        context.user_data.clear()
+        await query.edit_message_text("✖️ Транзакция отменена.")
+    elif query.data == "change_account":
+        await show_account_selection(update, context, 'from')
+    elif query.data == "change_account_from":
+        await show_account_selection(update, context, 'from')
+    elif query.data == "change_account_to":
+        await show_account_selection(update, context, 'to')
+    elif query.data == "change_supplier":
+        await show_supplier_selection_for_draft(update, context)
+    elif query.data.startswith("select_account_"):
+        account_id = int(query.data.replace("select_account_", ""))
+        await update_account_in_draft(update, context, account_id)
+    elif query.data.startswith("select_supplier:"):
+        # Supplier selection for new supply (before draft)
+        supplier_id = int(query.data.split(":")[1])
+        await handle_supplier_selection(update, context, supplier_id)
+    elif query.data == "cancel_supplier_selection":
+        context.user_data.clear()
+        await query.edit_message_text("✖️ Выбор поставщика отменён.")
+    elif query.data.startswith("select_supplier_"):
+        supplier_id = int(query.data.replace("select_supplier_", ""))
+        await update_supplier_in_draft(update, context, supplier_id)
+    elif query.data == "back_to_draft":
+        await show_draft_again(update, context)
+    elif query.data.startswith("select_ingredient_"):
+        ingredient_id = int(query.data.replace("select_ingredient_", ""))
+        await handle_ingredient_selection(update, context, ingredient_id)
+    elif query.data == "skip_ingredient":
+        await handle_ingredient_skip(update, context)
+    elif query.data == "manual_ingredient_search":
+        await start_manual_ingredient_search(update, context)
+    elif query.data == "back_to_suggestions":
+        # Clear manual search flag and show original suggestions
+        context.user_data['waiting_for_manual_ingredient'] = False
+        await show_ingredient_selection(update, context)
+    elif query.data.startswith("edit_item:"):
+        # Edit item in draft
+        item_index = int(query.data.split(":")[1])
+        await show_item_edit_menu(update, context, item_index)
+    elif query.data.startswith("change_item_ingredient:"):
+        item_index = int(query.data.split(":")[1])
+        await start_ingredient_change(update, context, item_index)
+    elif query.data.startswith("change_item_qty:"):
+        item_index = int(query.data.split(":")[1])
+        await start_quantity_change(update, context, item_index)
+    elif query.data.startswith("change_item_price:"):
+        item_index = int(query.data.split(":")[1])
+        await start_price_change(update, context, item_index)
+    elif query.data.startswith("delete_item:"):
+        item_index = int(query.data.split(":")[1])
+        await delete_item_from_draft(update, context, item_index)
+    elif query.data.startswith("select_new_ingredient:"):
+        # User selected new ingredient for item
+        parts = query.data.split(":")
+        item_index = int(parts[1])
+        ingredient_id = int(parts[2])
+        await update_item_ingredient(update, context, item_index, ingredient_id)
+    elif query.data.startswith("search_ingredient_for_item:"):
+        # User wants to search for ingredient manually
+        item_index = int(query.data.split(":")[1])
+        context.user_data['editing_ingredient_for_item'] = item_index
+        await query.edit_message_text(
+            "🔍 Введите название ингредиента:\n\n"
+            "Например: чеддер весовой, пломбир, молоко и т.д."
+        )
+    elif query.data.startswith("delete_order:"):
+        # Delete order by ID
+        transaction_id = int(query.data.split(":")[1])
+        await handle_delete_order_callback(update, context, transaction_id)
+    elif query.data == "cancel_order_delete":
+        await query.edit_message_text("❌ Удаление отменено.")
+        return
+
+
+async def show_item_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
+    """Show edit menu for a specific item in draft"""
+    query = update.callback_query
+
+    # Get draft
+    message_id = context.user_data.get('current_message_id')
+    if not message_id:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or draft.get('type') != 'supply':
+        await query.edit_message_text("❌ Черновик поставки не найден.")
+        return
+
+    if item_index >= len(draft['items']):
+        await query.edit_message_text("❌ Товар не найден.")
+        return
+
+    item = draft['items'][item_index]
+
+    # Store current item index for editing
+    context.user_data['editing_item_index'] = item_index
+
+    message_text = (
+        f"✏️ Редактирование товара:\n\n"
+        f"📦 {item['name']}\n"
+        f"Количество: {item['num']}\n"
+        f"Цена: {item['price']:,} {CURRENCY}\n"
+        f"Сумма: {item['sum']:,} {CURRENCY}\n\n"
+        f"Выберите что изменить:"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Изменить ингредиент", callback_data=f"change_item_ingredient:{item_index}")
+        ],
+        [
+            InlineKeyboardButton("📊 Изменить количество", callback_data=f"change_item_qty:{item_index}"),
+            InlineKeyboardButton("💰 Изменить цену", callback_data=f"change_item_price:{item_index}")
+        ],
+        [
+            InlineKeyboardButton("🗑️ Удалить товар", callback_data=f"delete_item:{item_index}")
+        ],
+        [
+            InlineKeyboardButton("« Назад к черновику", callback_data="back_to_draft")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
+
+
+async def delete_item_from_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
+    """Delete item from draft"""
+    query = update.callback_query
+
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await query.edit_message_text("❌ Ошибка: товар не найден.")
+        return
+
+    # Remove item
+    removed_item = draft['items'].pop(item_index)
+    draft['total_amount'] -= removed_item['sum']
+
+    # Update draft
+    drafts[message_id] = draft
+    context.user_data['drafts'] = drafts
+
+    await query.answer(f"Удалено: {removed_item['name']}")
+    await show_draft_again(update, context)
+
+
+async def start_ingredient_change(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
+    """Show ingredient selection for changing item"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await query.edit_message_text("❌ Ошибка: товар не найден.")
+        return
+
+    item = draft['items'][item_index]
+
+    # Get ingredient suggestions based on ORIGINAL name (from voice input)
+    # This ensures we search based on what user said, not what was incorrectly matched
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    search_name = item.get('original_name', item['name'])  # Fallback to current name if no original
+    suggestions = ingredient_matcher.get_top_matches(search_name, limit=6, score_cutoff=60)
+
+    message_text = (
+        f"🔄 Изменение ингредиента:\n\n"
+        f"Текущий: {item['name']}\n"
+    )
+
+    # Show original name if different from current
+    if item.get('original_name') and item['original_name'] != item['name']:
+        message_text += f"Распознано как: \"{item['original_name']}\"\n"
+
+    message_text += "\nВыберите новый ингредиент:"
+
+    keyboard = []
+    for ing_id, ing_name, ing_unit, score in suggestions:
+        keyboard.append([InlineKeyboardButton(
+            f"{ing_name} ({score}%)",
+            callback_data=f"select_new_ingredient:{item_index}:{ing_id}"
+        )])
+
+    # Add search button
+    keyboard.append([InlineKeyboardButton("🔍 Поиск по названию", callback_data=f"search_ingredient_for_item:{item_index}")])
+    keyboard.append([InlineKeyboardButton("« Назад", callback_data=f"edit_item:{item_index}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
+
+
+async def handle_item_ingredient_search_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user input for manual ingredient search when editing item"""
+    item_index = context.user_data.pop('editing_ingredient_for_item')
+    telegram_user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    # Search for ingredients
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    suggestions = ingredient_matcher.get_top_matches(text, limit=6, score_cutoff=60)
+
+    if not suggestions:
+        await update.message.reply_text(
+            f"❌ Ингредиенты не найдены по запросу: \"{text}\"\n\n"
+            "Попробуйте другое название или добавьте ингредиент в Poster."
+        )
+        return
+
+    # Show suggestions
+    message_text = f"🔍 Найдено по запросу \"{text}\":\n\nВыберите ингредиент:"
+
+    keyboard = []
+    for ing_id, ing_name, ing_unit, score in suggestions:
+        keyboard.append([InlineKeyboardButton(
+            f"{ing_name} ({score}%)",
+            callback_data=f"select_new_ingredient:{item_index}:{ing_id}"
+        )])
+
+    # Add back button
+    keyboard.append([InlineKeyboardButton("« Назад", callback_data=f"edit_item:{item_index}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+
+async def update_item_ingredient(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int, ingredient_id: int):
+    """Update ingredient for an item in draft"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await query.edit_message_text("❌ Ошибка: товар не найден.")
+        return
+
+    # Get ingredient info
+    ingredient_matcher = get_ingredient_matcher(telegram_user_id)
+    ingredient_info = ingredient_matcher.get_ingredient_info(ingredient_id)
+
+    if not ingredient_info:
+        await query.edit_message_text("❌ Ошибка: ингредиент не найден.")
+        return
+
+    # Update item
+    draft['items'][item_index]['id'] = ingredient_id
+    draft['items'][item_index]['name'] = ingredient_info['name']
+
+    # Save draft
+    drafts[message_id] = draft
+    context.user_data['drafts'] = drafts
+
+    await query.answer(f"Изменено на: {ingredient_info['name']}")
+    await show_draft_again(update, context)
+
+
+async def start_quantity_change(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
+    """Start quantity change flow"""
+    query = update.callback_query
+
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await query.edit_message_text("❌ Ошибка: товар не найден.")
+        return
+
+    item = draft['items'][item_index]
+
+    # Set flag for text input
+    context.user_data['waiting_for_quantity_change'] = item_index
+
+    await query.edit_message_text(
+        f"📊 Изменение количества:\n\n"
+        f"Товар: {item['name']}\n"
+        f"Текущее количество: {item['num']}\n\n"
+        f"Отправьте новое количество (например: 5 или 2.5):"
+    )
+
+
+async def start_price_change(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
+    """Start price change flow"""
+    query = update.callback_query
+
+    message_id = context.user_data.get('current_message_id')
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft or item_index >= len(draft['items']):
+        await query.edit_message_text("❌ Ошибка: товар не найден.")
+        return
+
+    item = draft['items'][item_index]
+
+    # Set flag for text input
+    context.user_data['waiting_for_price_change'] = item_index
+
+    await query.edit_message_text(
+        f"💰 Изменение цены:\n\n"
+        f"Товар: {item['name']}\n"
+        f"Текущая цена: {item['price']:,} {CURRENCY}\n\n"
+        f"Отправьте новую цену (например: 5000):"
+    )
+
+
+async def show_account_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, direction: str = 'from'):
+    """Show account selection buttons"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Get draft by message_id
+    message_id = query.message.message_id
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    # Store direction and message_id in context
+    context.user_data['account_direction'] = direction
+    context.user_data['current_message_id'] = message_id
+
+    # Get available accounts
+    account_matcher = get_account_matcher(telegram_user_id)
+    accounts = account_matcher.accounts
+
+    # Create keyboard with account buttons (2 per row)
+    keyboard = []
+    row = []
+    for account_id, account_info in accounts.items():
+        button = InlineKeyboardButton(
+            f"{account_info['name']}",
+            callback_data=f"select_account_{account_id}"
+        )
+        row.append(button)
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:  # Add remaining buttons
+        keyboard.append(row)
+
+    # Add back button
+    keyboard.append([InlineKeyboardButton("« Назад", callback_data="back_to_draft")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    prompt = "💰 Выберите счёт для списания:" if direction == 'from' else "💰 Выберите счёт для зачисления:"
+    await query.edit_message_text(prompt, reply_markup=reply_markup)
+
+
+async def update_account_in_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, account_id: int):
+    """Update account in draft and show draft again"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Get draft by stored message_id
+    message_id = context.user_data.get('current_message_id')
+    if not message_id:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+    direction = context.user_data.get('account_direction', 'from')
+
+    if not draft:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    # Update account
+    account_matcher = get_account_matcher(telegram_user_id)
+    account_name = account_matcher.get_account_name(account_id)
+
+    # Check draft type
+    draft_type = draft.get('type')
+
+    if draft_type == 'supply':
+        # For supply, update account_id and account_name
+        draft['account_id'] = account_id
+        draft['account_name'] = account_name
+    elif direction == 'from':
+        draft['account_from_id'] = account_id
+        draft['account_from_name'] = account_name
+    elif direction == 'to':
+        draft['account_to_id'] = account_id
+        draft['account_to_name'] = account_name
+
+    # Update draft in storage
+    drafts[message_id] = draft
+    context.user_data['drafts'] = drafts
+
+    # Determine draft type and show appropriate view
+    draft_type = draft.get('type')
+
+    if draft_type == 'supply':
+        # Show supply draft
+        items_text = "\n".join([
+            f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+            for item in draft['items']
+        ])
+
+        message = (
+            f"📦 Черновик поставки:\n\n"
+            f"Поставщик: {draft['supplier_name']}\n"
+            f"Счёт: {draft['account_name']}\n"
+            f"Склад: {draft['storage_name']}\n\n"
+            f"Товары:\n{items_text}\n\n"
+            f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+            ],
+            [
+                InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
+                InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    elif draft_type == 2:  # Transfer
+        # Show transfer draft
+        message = (
+            "🔄 Черновик перевода:\n\n"
+            f"Откуда: {draft['account_from_name']}\n"
+            f"Куда: {draft['account_to_name']}\n"
+            f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+            f"Комментарий: {draft['comment'] or '—'}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+            ],
+            [
+                InlineKeyboardButton("📤 Изменить откуда", callback_data="change_account_from"),
+                InlineKeyboardButton("📥 Изменить куда", callback_data="change_account_to")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    elif draft_type == 'multiple_expenses':
+        # Show multiple expenses draft
+        transactions_text = "\n".join([
+            f"  • {txn['category_name']}: {txn['amount']:,} {CURRENCY} ({txn['comment'] or '—'})"
+            for txn in draft['transactions']
+        ])
+
+        message = (
+            "💸 Черновик множественных транзакций:\n\n"
+            f"Счёт: {draft['account_from_name']}\n"
+            f"Количество транзакций: {len(draft['transactions'])}\n\n"
+            f"Транзакции:\n{transactions_text}\n\n"
+            f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить всё", callback_data="confirm"),
+            ],
+            [
+                InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    else:  # Expense (type == 0)
+        # Show expense draft
+        message = (
+            "💸 Черновик транзакции:\n\n"
+            f"Категория: {draft['category_name']}\n"
+            f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+            f"Счёт: {draft['account_from_name']}\n"
+            f"Комментарий: {draft['comment'] or '—'}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+                InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(message, reply_markup=reply_markup)
+
+
+async def show_supplier_selection_for_draft(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show supplier selection buttons for draft editing"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Get draft by message_id
+    message_id = query.message.message_id
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    # Store message_id in context
+    context.user_data['current_message_id'] = message_id
+
+    # Get available suppliers
+    supplier_matcher = get_supplier_matcher(telegram_user_id)
+    suppliers = supplier_matcher.suppliers
+
+    # Create keyboard with supplier buttons (2 per row)
+    keyboard = []
+    row = []
+    for supplier_id, supplier_info in suppliers.items():
+        button = InlineKeyboardButton(
+            f"{supplier_info['name']}",
+            callback_data=f"select_supplier_{supplier_id}"
+        )
+        row.append(button)
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+
+    if row:  # Add remaining buttons
+        keyboard.append(row)
+
+    # Add back button
+    keyboard.append([InlineKeyboardButton("« Назад", callback_data="back_to_draft")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("🏪 Выберите поставщика:", reply_markup=reply_markup)
+
+
+async def update_supplier_in_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, supplier_id: int):
+    """Update supplier in draft and show draft again"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    # Get draft by stored message_id
+    message_id = context.user_data.get('current_message_id')
+    if not message_id:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    # Update supplier
+    supplier_matcher = get_supplier_matcher(telegram_user_id)
+    supplier_name = supplier_matcher.get_supplier_name(supplier_id)
+
+    draft['supplier_id'] = supplier_id
+    draft['supplier_name'] = supplier_name
+
+    # Update draft in storage
+    drafts[message_id] = draft
+    context.user_data['drafts'] = drafts
+
+    # Show supply draft again
+    items_text = "\n".join([
+        f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+        for item in draft['items']
+    ])
+
+    message_text = (
+        f"📦 Черновик поставки:\n\n"
+        f"Поставщик: {draft['supplier_name']}\n"
+        f"Счёт: {draft['account_name']}\n"
+        f"Склад: {draft['storage_name']}\n\n"
+        f"Товары:\n{items_text}\n\n"
+        f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+        f"Дата: {draft['date']}\n"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+        ],
+        [
+            InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
+            InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+        ],
+        [
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
+
+
+async def show_draft_again(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show draft again after going back from selection"""
+    query = update.callback_query
+
+    # Get draft by stored message_id
+    message_id = context.user_data.get('current_message_id')
+    if not message_id:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft:
+        await query.edit_message_text("❌ Черновик не найден.")
+        return
+
+    # Determine draft type and show appropriate view
+    draft_type = draft.get('type')
+
+    if draft_type == 'supply':
+        # Show supply draft
+        items_text = "\n".join([
+            f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+            for item in draft['items']
+        ])
+
+        message_text = (
+            f"📦 Черновик поставки:\n\n"
+            f"Поставщик: {draft['supplier_name']}\n"
+            f"Счёт: {draft['account_name']}\n"
+            f"Склад: {draft['storage_name']}\n\n"
+            f"Товары:\n{items_text}\n\n"
+            f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+            ],
+            [
+                InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
+                InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    elif draft_type == 2:  # Transfer
+        message_text = (
+            "🔄 Черновик перевода:\n\n"
+            f"Откуда: {draft['account_from_name']}\n"
+            f"Куда: {draft['account_to_name']}\n"
+            f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+            f"Комментарий: {draft['comment'] or '—'}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+            ],
+            [
+                InlineKeyboardButton("📤 Изменить откуда", callback_data="change_account_from"),
+                InlineKeyboardButton("📥 Изменить куда", callback_data="change_account_to")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    else:  # Expense
+        message_text = (
+            "💸 Черновик транзакции:\n\n"
+            f"Категория: {draft['category_name']}\n"
+            f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+            f"Счёт: {draft['account_from_name']}\n"
+            f"Комментарий: {draft['comment'] or '—'}\n"
+            f"Дата: {draft['date']}\n"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+                InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+            ],
+            [
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+            ]
+        ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
+
+
+async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm and create transaction/supply in Poster"""
+    query = update.callback_query
+
+    # Get draft by message_id
+    message_id = query.message.message_id
+    drafts = context.user_data.get('drafts', {})
+    draft = drafts.get(message_id)
+
+    if not draft:
+        await query.edit_message_text("❌ Черновик не найден.")
+        logger.warning(f"Draft not found for message_id={message_id}, available: {list(drafts.keys())}")
+        return
+
+    try:
+        telegram_user_id = update.effective_user.id
+        poster = get_poster_client(telegram_user_id)
+
+        # Check if it's a supply
+        if draft.get('type') == 'supply':
+            await query.edit_message_text("⏳ Создаю поставку в Poster...")
+
+            supply_id = await poster.create_supply(
+                supplier_id=draft['supplier_id'],
+                storage_id=draft['storage_id'],
+                date=draft['date'],
+                ingredients=draft['items'],
+                account_id=draft['account_id'],
+                comment=""
+            )
+
+            # Success message
+            items_text = "\n".join([
+                f"  • {item['name']}: {item['num']} x {item['price']:,}"
+                for item in draft['items']
+            ])
+
+            await query.edit_message_text(
+                f"✅ Поставка создана успешно!\n\n"
+                f"ID в Poster: {supply_id}\n"
+                f"Поставщик: {draft['supplier_name']}\n"
+                f"Счёт: {draft['account_name']}\n\n"
+                f"Товары:\n{items_text}\n\n"
+                f"Итого: {draft['total_amount']:,} {CURRENCY}"
+            )
+
+            # Clear only this draft
+            if message_id in drafts:
+                del drafts[message_id]
+                context.user_data['drafts'] = drafts
+            return
+
+        # Check if it's multiple expenses
+        if draft.get('type') == 'multiple_expenses':
+            await query.edit_message_text(f"⏳ Создаю {len(draft['transactions'])} транзакций в Poster...")
+
+            created_ids = []
+            failed_transactions = []
+
+            for txn in draft['transactions']:
+                try:
+                    transaction_id = await poster.create_transaction(
+                        transaction_type=0,  # Expense
+                        category_id=txn['category_id'],
+                        account_from_id=draft['account_from_id'],
+                        amount=txn['amount'],
+                        date=draft['date'],
+                        comment=txn['comment']
+                    )
+                    created_ids.append((transaction_id, txn))
+                except Exception as e:
+                    logger.error(f"Failed to create transaction for {txn['category_name']}: {e}")
+                    failed_transactions.append((txn, str(e)))
+
+            # Build success message
+            success_text = "\n".join([
+                f"  • {txn['category_name']}: {txn['amount']:,} {CURRENCY} (ID: {tid})"
+                for tid, txn in created_ids
+            ])
+
+            message = f"✅ Создано транзакций: {len(created_ids)}/{len(draft['transactions'])}\n\n"
+            message += f"Счёт: {draft['account_from_name']}\n\n"
+            message += f"Транзакции:\n{success_text}\n\n"
+            message += f"Итого: {sum(txn['amount'] for _, txn in created_ids):,} {CURRENCY}"
+
+            if failed_transactions:
+                failed_text = "\n".join([
+                    f"  • {txn['category_name']}: {error}"
+                    for txn, error in failed_transactions
+                ])
+                message += f"\n\n❌ Ошибки:\n{failed_text}"
+
+            await query.edit_message_text(message)
+
+            # Clear only this draft
+            if message_id in drafts:
+                del drafts[message_id]
+                context.user_data['drafts'] = drafts
+            return
+
+        # Otherwise it's a transaction
+        await query.edit_message_text("⏳ Создаю транзакцию в Poster...")
+
+        # Create transaction
+        # Note: Amount is already in KZT, no conversion needed
+        amount = draft['amount']
+
+        # Check if it's a transfer
+        if draft['type'] == 2:
+            transaction_id = await poster.create_transaction(
+                transaction_type=draft['type'],
+                category_id=draft.get('category_id'),  # Can be None for transfers
+                account_from_id=draft['account_from_id'],
+                account_to_id=draft.get('account_to_id'),
+                amount=amount,
+                date=draft['date'],
+                comment=draft['comment']
+            )
+        else:
+            transaction_id = await poster.create_transaction(
+                transaction_type=draft['type'],
+                category_id=draft['category_id'],
+                account_from_id=draft['account_from_id'],
+                amount=amount,
+                date=draft['date'],
+                comment=draft['comment']
+            )
+
+        # Success message
+        if draft['type'] == 2:
+            await query.edit_message_text(
+                f"✅ Перевод создан успешно!\n\n"
+                f"ID в Poster: {transaction_id}\n"
+                f"Откуда: {draft['account_from_name']}\n"
+                f"Куда: {draft['account_to_name']}\n"
+                f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+                f"Комментарий: {draft['comment']}"
+            )
+        else:
+            await query.edit_message_text(
+                f"✅ Транзакция создана успешно!\n\n"
+                f"ID в Poster: {transaction_id}\n"
+                f"Категория: {draft['category_name']}\n"
+                f"Сумма: {draft['amount']:,} {CURRENCY}\n"
+                f"Комментарий: {draft['comment']}"
+            )
+
+        # Clear only this draft
+        if message_id in drafts:
+            del drafts[message_id]
+            context.user_data['drafts'] = drafts
+
+    except Exception as e:
+        logger.error(f"Transaction/supply creation failed: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка создания:\n{str(e)}\n\n"
+            f"Проверьте настройки Poster API."
+        )
+
+
+# === Main ===
+
+async def post_init(application: Application) -> None:
+    """Set up bot commands after initialization"""
+    from telegram import BotCommand
+
+    commands = [
+        BotCommand("menu", "🏠 Главное меню"),
+        BotCommand("help", "❓ Помощь"),
+        BotCommand("cancel", "❌ Отменить"),
+    ]
+
+    await application.bot.set_my_commands(commands)
+    logger.info("✅ Bot commands menu set")
+
+
+async def run_daily_transactions_for_user(telegram_user_id: int):
+    """
+    Выполнить ежедневные транзакции для пользователя
+    Вызывается scheduler'ом в 12:00
+    """
+    try:
+        logger.info(f"⏰ Запуск ежедневных транзакций для пользователя {telegram_user_id}")
+
+        scheduler = DailyTransactionScheduler(telegram_user_id)
+        result = await scheduler.create_daily_transactions()
+
+        if result['success']:
+            logger.info(f"✅ Создано {result['count']} транзакций для пользователя {telegram_user_id}")
+        else:
+            logger.error(f"❌ Ошибка создания транзакций: {result.get('error')}")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка в run_daily_transactions_for_user: {e}", exc_info=True)
+
+
+async def run_weekly_report_for_user(telegram_user_id: int, bot_application):
+    """
+    Отправить еженедельный отчёт пользователю
+    Вызывается scheduler'ом по понедельникам в 12:00
+    """
+    try:
+        from weekly_report import send_weekly_report_to_user
+        await send_weekly_report_to_user(telegram_user_id, bot_application)
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки еженедельного отчёта пользователю {telegram_user_id}: {e}", exc_info=True)
+
+
+async def run_monthly_report_for_user(telegram_user_id: int, bot_application):
+    """
+    Отправить ежемесячный отчёт пользователю
+    Вызывается scheduler'ом 1 числа каждого месяца в 12:00
+    """
+    try:
+        from monthly_report import send_monthly_report_to_user
+        await send_monthly_report_to_user(telegram_user_id, bot_application)
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки ежемесячного отчёта пользователю {telegram_user_id}: {e}", exc_info=True)
+
+
+def setup_scheduler(app: Application):
+    """
+    Настроить планировщик для автоматических задач
+    Запускает ежедневные транзакции в 12:00 по времени Астаны
+    """
+    scheduler = AsyncIOScheduler()
+
+    # Часовой пояс Астаны
+    astana_tz = pytz.timezone('Asia/Almaty')
+
+    # Для каждого пользователя с включенными авто-транзакциями
+    for telegram_user_id in ALLOWED_USER_IDS:
+        if is_daily_transactions_enabled(telegram_user_id):
+            # Триггер: каждый день в 12:00 по времени Астаны
+            trigger = CronTrigger(
+                hour=12,
+                minute=0,
+                timezone=astana_tz
+            )
+
+            scheduler.add_job(
+                run_daily_transactions_for_user,
+                trigger=trigger,
+                args=[telegram_user_id],
+                id=f'daily_transactions_{telegram_user_id}',
+                name=f'Ежедневные транзакции для пользователя {telegram_user_id}',
+                replace_existing=True
+            )
+
+            logger.info(f"✅ Запланированы ежедневные транзакции для пользователя {telegram_user_id} в 12:00 (Asia/Almaty)")
+
+    # Еженедельные отчёты для всех активных пользователей по понедельникам в 12:00
+    for telegram_user_id in ALLOWED_USER_IDS:
+        # Триггер: каждый понедельник в 12:00
+        weekly_trigger = CronTrigger(
+            day_of_week='mon',  # Понедельник
+            hour=12,
+            minute=0,
+            timezone=astana_tz
+        )
+
+        scheduler.add_job(
+            run_weekly_report_for_user,
+            trigger=weekly_trigger,
+            args=[telegram_user_id, app],
+            id=f'weekly_report_{telegram_user_id}',
+            name=f'Еженедельный отчёт для пользователя {telegram_user_id}',
+            replace_existing=True
+        )
+
+        logger.info(f"✅ Запланированы еженедельные отчёты для пользователя {telegram_user_id} в Пн 12:00 (Asia/Almaty)")
+
+    # Ежемесячные отчёты для всех активных пользователей 1 числа в 12:00
+    for telegram_user_id in ALLOWED_USER_IDS:
+        # Триггер: 1 число каждого месяца в 12:00
+        monthly_trigger = CronTrigger(
+            day=1,  # 1 число месяца
+            hour=12,
+            minute=0,
+            timezone=astana_tz
+        )
+
+        scheduler.add_job(
+            run_monthly_report_for_user,
+            trigger=monthly_trigger,
+            args=[telegram_user_id, app],
+            id=f'monthly_report_{telegram_user_id}',
+            name=f'Ежемесячный отчёт для пользователя {telegram_user_id}',
+            replace_existing=True
+        )
+
+        logger.info(f"✅ Запланированы ежемесячные отчёты для пользователя {telegram_user_id} 1 числа в 12:00 (Asia/Almaty)")
+
+    # Запустить scheduler
+    scheduler.start()
+    logger.info("✅ Планировщик запущен")
+
+    return scheduler
+
+
+def main():
+    """Run the bot"""
+    try:
+        # Validate configuration
+        validate_config()
+        logger.info("✅ Configuration validated")
+
+        # Create application
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+
+        # Register handlers
+        app.add_handler(CommandHandler("start", start_command))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(CommandHandler("menu", menu_command))
+        app.add_handler(CommandHandler("myid", myid_command))
+        app.add_handler(CommandHandler("settings", settings_command))
+        app.add_handler(CommandHandler("subscription", subscription_command))
+        app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
+        app.add_handler(CommandHandler("sync", sync_command))
+        app.add_handler(CommandHandler("cancel", cancel_command))
+        app.add_handler(CommandHandler("test_daily", test_daily_command))
+        app.add_handler(CommandHandler("test_report", test_report_command))
+        app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
+
+        app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        # Handle documents (PDF or images sent as files without compression)
+        app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+        app.add_handler(CallbackQueryHandler(handle_callback))
+
+        # Setup scheduler для автоматических задач
+        scheduler = setup_scheduler(app)
+
+        # Start bot
+        logger.info("🤖 Poster Helper Bot starting...")
+        logger.info(f"   Allowed users: {ALLOWED_USER_IDS}")
+
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    except Exception as e:
+        logger.error(f"Bot startup failed: {e}", exc_info=True)
+        raise
+
+
+if __name__ == "__main__":
+    main()
