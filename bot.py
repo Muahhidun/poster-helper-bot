@@ -4238,7 +4238,15 @@ async def check_and_notify_missed_transactions(app: Application):
     Если нет - отправить сообщение пользователю с подтверждением
     """
     try:
+        db = get_database()
+
         for telegram_user_id in ALLOWED_USER_IDS:
+            # Проверить, зарегистрирован ли пользователь в базе данных
+            user = db.get_user(telegram_user_id)
+            if not user:
+                logger.info(f"⚠️ Пользователь {telegram_user_id} не найден в базе данных, пропускаю проверку транзакций")
+                continue
+
             if is_daily_transactions_enabled(telegram_user_id):
                 scheduler = DailyTransactionScheduler(telegram_user_id)
                 transactions_exist = await scheduler.check_transactions_created_today()
