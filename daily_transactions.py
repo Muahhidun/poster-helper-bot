@@ -13,6 +13,53 @@ class DailyTransactionScheduler:
     def __init__(self, telegram_user_id: int):
         self.telegram_user_id = telegram_user_id
 
+    async def check_transactions_created_today(self) -> bool:
+        """
+        Проверить, были ли уже созданы ежедневные транзакции сегодня
+        Возвращает True если транзакции найдены, False если нет
+        """
+        try:
+            poster_client = PosterClient(self.telegram_user_id)
+
+            # Получить сегодняшнюю дату
+            today = datetime.now().strftime("%Y-%m-%d")
+
+            # Получить транзакции за сегодня
+            result = await poster_client._request('GET', 'finance.getTransactions', params={
+                'dateFrom': today,
+                'dateTo': today
+            })
+
+            transactions = result.get('response', [])
+
+            # Закрыть клиент
+            await poster_client.close()
+
+            # Проверить наличие характерных транзакций
+            # Для первого аккаунта ищем "Мадира" или "Нургуль"
+            # Для второго аккаунта ищем "Сушист"
+            if self.telegram_user_id == 167084307:
+                # Ищем транзакции с комментариями "Мадира" или "Нургуль"
+                for tx in transactions:
+                    comment = tx.get('comment', '')
+                    if comment in ['Мадира', 'Нургуль', 'Заготовка']:
+                        logger.info(f"✅ Найдены ежедневные транзакции для пользователя {self.telegram_user_id}")
+                        return True
+            elif self.telegram_user_id == 8010984368:
+                # Ищем транзакцию "Сушист"
+                for tx in transactions:
+                    category_id = tx.get('finance_category_id')
+                    if category_id == '17':  # ID категории Сушист
+                        logger.info(f"✅ Найдены ежедневные транзакции для пользователя {self.telegram_user_id}")
+                        return True
+
+            logger.info(f"❌ Ежедневные транзакции не найдены для пользователя {self.telegram_user_id}")
+            return False
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки ежедневных транзакций: {e}")
+            return False
+
     async def create_daily_transactions(self):
         """
         Создать все ежедневные транзакции в 12:00

@@ -3179,6 +3179,41 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Обработка пропущенных ежедневных транзакций
+    if query.data.startswith("create_missed_daily_"):
+        telegram_user_id = int(query.data.split("_")[-1])
+        await query.edit_message_text("⏳ Создаю ежедневные транзакции...")
+
+        try:
+            scheduler = DailyTransactionScheduler(telegram_user_id)
+            result = await scheduler.create_daily_transactions()
+
+            if result['success']:
+                await query.edit_message_text(
+                    f"✅ *Транзакции успешно созданы*\n\n"
+                    f"Создано транзакций: {result['count']}\n\n"
+                    f"Вы можете проверить их в Poster.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ *Ошибка создания транзакций*\n\n"
+                    f"Ошибка: {result.get('error')}",
+                    parse_mode='Markdown'
+                )
+        except Exception as e:
+            logger.error(f"Ошибка создания пропущенных транзакций: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ *Произошла ошибка*\n\n"
+                f"Не удалось создать транзакции. Попробуйте позже.",
+                parse_mode='Markdown'
+            )
+        return
+
+    elif query.data.startswith("skip_missed_daily_"):
+        await query.edit_message_text("✅ Хорошо, транзакции не будут созданы.")
+        return
+
     # Обработка меню кнопок
     if query.data == "close_cash_register":
         await handle_close_cash_register_callback(update, context)
@@ -4197,6 +4232,42 @@ async def run_monthly_report_for_user(telegram_user_id: int, bot_application):
         logger.error(f"❌ Ошибка отправки ежемесячного отчёта пользователю {telegram_user_id}: {e}", exc_info=True)
 
 
+async def check_and_notify_missed_transactions(app: Application):
+    """
+    Проверить, были ли созданы ежедневные транзакции сегодня
+    Если нет - отправить сообщение пользователю с подтверждением
+    """
+    try:
+        for telegram_user_id in ALLOWED_USER_IDS:
+            if is_daily_transactions_enabled(telegram_user_id):
+                scheduler = DailyTransactionScheduler(telegram_user_id)
+                transactions_exist = await scheduler.check_transactions_created_today()
+
+                if not transactions_exist:
+                    logger.info(f"⚠️ Ежедневные транзакции не найдены для пользователя {telegram_user_id}. Отправляю уведомление...")
+
+                    # Отправить сообщение с кнопкой подтверждения
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("✅ Да, создать транзакции", callback_data=f"create_missed_daily_{telegram_user_id}"),
+                            InlineKeyboardButton("❌ Нет, не нужно", callback_data=f"skip_missed_daily_{telegram_user_id}")
+                        ]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    await app.bot.send_message(
+                        chat_id=telegram_user_id,
+                        text="⚠️ *Ежедневные транзакции не были созданы сегодня*\n\n"
+                             "Возможно, бот был перезапущен после 12:00.\n\n"
+                             "Хотите создать транзакции сейчас?",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки пропущенных транзакций: {e}", exc_info=True)
+
+
 def setup_scheduler(app: Application):
     """
     Настроить планировщик для автоматических задач
@@ -4273,6 +4344,12 @@ def setup_scheduler(app: Application):
     # Запустить scheduler
     scheduler.start()
     logger.info("✅ Планировщик запущен")
+
+    # Проверить пропущенные транзакции при старте бота
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.create_task(check_and_notify_missed_transactions(app))
+    logger.info("✅ Проверка пропущенных транзакций запущена")
 
     return scheduler
 
