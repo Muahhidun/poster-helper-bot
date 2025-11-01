@@ -65,7 +65,9 @@ class InvoiceProcessor:
 
             # 3. Распарсить отформатированный текст
             logger.info("📋 Парсинг распознанного текста...")
+            logger.info(f"📄 Текст от Pokee AI:\n{formatted_text[:500]}")  # Первые 500 символов для отладки
             parsed_data = self._parse_pokee_response(formatted_text)
+            logger.info(f"✅ Распарсовано: поставщик={parsed_data.get('supplier_name')}, товаров={len(parsed_data.get('items', []))}")
 
             # 4. Создать черновик поставки в Poster
             logger.info("📦 Создаю черновик поставки в Poster...")
@@ -162,6 +164,9 @@ class InvoiceProcessor:
             item = self._parse_item_line(line)
             if item:
                 items.append(item)
+                logger.debug(f"  ✓ Товар распознан: {item['name']}")
+            else:
+                logger.debug(f"  ✗ Не удалось распарсить: {line}")
 
         return {
             'supplier_name': supplier_name,
