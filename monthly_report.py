@@ -298,22 +298,44 @@ class MonthlyReportGenerator:
         # === БЛОК 2: РЕНТАБЕЛЬНОСТЬ ===
         report_lines.append("📈 **РЕНТАБЕЛЬНОСТЬ:**")
 
-        # Food Cost %
+        # Food Cost % (теоретический из Poster)
         total_supplies = data.get('total_supplies', 0)
+        prev_total_supplies = prev_data.get('total_supplies', 0)
+
         if revenue > 0:
             food_cost_pct = (total_supplies / revenue) * 100
-            food_cost_emoji = "✅" if food_cost_pct <= 32 else ("⚠️" if food_cost_pct <= 35 else "🚨")
-            report_lines.append(f"{food_cost_emoji} Food Cost: **{food_cost_pct:.1f}%** (норма 28-32%)")
+
+            # Сравнение с прошлым периодом
+            if prev_revenue > 0:
+                prev_food_cost_pct = (prev_total_supplies / prev_revenue) * 100
+                food_cost_change = calc_change(int(food_cost_pct * 100), int(prev_food_cost_pct * 100))
+                report_lines.append(f"📦 Food Cost (Poster): **{food_cost_pct:.1f}%** ({food_cost_change})")
+            else:
+                report_lines.append(f"📦 Food Cost (Poster): **{food_cost_pct:.1f}%**")
         else:
             report_lines.append("⚠️ Food Cost: N/A (нет данных о выручке)")
 
-        # Валовая маржа %
+        # Итоговая маржа % (прибыль / выручка)
+        profit = data['total_incomes'] - data['total_expenses']
+        prev_profit = prev_data['total_incomes'] - prev_data['total_expenses']
+
         if revenue > 0:
-            gross_margin_pct = ((revenue - total_supplies) / revenue) * 100
-            margin_emoji = "✅" if gross_margin_pct >= 60 else "⚠️"
-            report_lines.append(f"{margin_emoji} Валовая маржа: **{gross_margin_pct:.1f}%** (норма 60-70%)")
+            margin_pct = (profit / revenue) * 100
+
+            # Сравнение с прошлым периодом
+            if prev_revenue > 0:
+                prev_margin_pct = (prev_profit / prev_revenue) * 100
+                margin_change = calc_change(int(margin_pct * 100), int(prev_margin_pct * 100))
+
+                # Эмодзи в зависимости от знака маржи
+                margin_emoji = "✅" if margin_pct > 0 else "⚠️"
+                report_lines.append(f"{margin_emoji} Итоговая маржа: **{margin_pct:.1f}%** ({margin_change})")
+            else:
+                margin_emoji = "✅" if margin_pct > 0 else "⚠️"
+                report_lines.append(f"{margin_emoji} Итоговая маржа: **{margin_pct:.1f}%**")
         else:
-            report_lines.append("⚠️ Валовая маржа: N/A (нет данных о выручке)")
+            report_lines.append("⚠️ Итоговая маржа: N/A (нет данных о выручке)")
+
         report_lines.append("")
 
         # === БЛОК 3: РАСХОДЫ И БАЛАНС ===
