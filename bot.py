@@ -795,9 +795,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parsed_data = result['parsed_data']
 
                 # Build message with supply details
-                message_text = (
-                    f"✅ Накладная распознана!\n\n"
-                    f"📦 Поставщик: {supply_draft['supplier_name']}\n"
+                message_text = "✅ Накладная распознана!\n\n"
+
+                # Предупреждение если поставщик не найден
+                if supply_draft.get('supplier_not_found'):
+                    message_text += "⚠️ Поставщик не распознан, используется дефолтный\n\n"
+
+                message_text += (
+                    f"📦 Поставщик: {supply_draft['supplier_name'] or 'Не распознан'}\n"
                     f"📅 Дата: {supply_draft['date']}\n"
                     f"📊 Позиций добавлено: {supply_draft['items_count']}\n"
                     f"💰 Сумма: {supply_draft['total_sum']:,.0f}₸\n\n"
@@ -822,6 +827,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")
                     ]
                 ]
+
+                # Добавить кнопку изменения поставщика если не найден
+                if supply_draft.get('supplier_not_found'):
+                    keyboard.insert(0, [
+                        InlineKeyboardButton("🔄 Изменить поставщика", callback_data=f"change_supplier_for_supply:{supply_draft['supply_id']}")
+                    ])
+
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
                 # Delete processing message and send result
@@ -3102,6 +3114,108 @@ async def handle_confirm_supply_callback(update: Update, context: ContextTypes.D
         )
 
 
+async def handle_change_supplier_for_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int):
+    """Показать список поставщиков для выбора"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text(f"📋 Загружаю список поставщиков...")
+
+    try:
+        from poster_client import PosterClient
+
+        client = PosterClient(telegram_user_id)
+
+        # Получаем список поставщиков
+        result = await client._request('GET', 'storage.getSuppliers')
+        suppliers = result.get('response', [])
+
+        await client.close()
+
+        if not suppliers:
+            await query.edit_message_text("❌ Поставщики не найдены в Poster")
+            return
+
+        # Создаём кнопки с поставщиками (по 1 в ряд)
+        keyboard = []
+        for supplier in suppliers[:20]:  # Показываем первых 20
+            supplier_name = supplier.get('supplier_name', 'Без названия')
+            supplier_id_btn = supplier.get('supplier_id')
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📦 {supplier_name}",
+                    callback_data=f"select_supplier:{supply_id}:{supplier_id_btn}"
+                )
+            ])
+
+        # Кнопка отмены
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"🔄 Выберите поставщика для поставки #{supply_id}:",
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка загрузки поставщиков: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ Ошибка загрузки поставщиков:\n{str(e)[:200]}")
+
+
+async def handle_select_supplier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int, supplier_id: int):
+    """Обработка выбора поставщика"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text(f"🔄 Обновляю поставщика для поставки #{supply_id}...")
+
+    try:
+        from poster_client import PosterClient
+
+        client = PosterClient(telegram_user_id)
+
+        # Обновляем поставщика в поставке
+        result = await client._request('POST', 'supply.updateIncomingOrder', data={
+            'incoming_order_id': supply_id,
+            'supplier_id': supplier_id
+        })
+
+        # Получаем информацию о новом поставщике
+        suppliers_result = await client._request('GET', 'storage.getSuppliers')
+        suppliers = suppliers_result.get('response', [])
+        supplier_name = next((s['supplier_name'] for s in suppliers if int(s['supplier_id']) == supplier_id), 'Неизвестный')
+
+        await client.close()
+
+        if result:
+            # Показываем обновлённую информацию с кнопками подтверждения
+            message_text = (
+                f"✅ Поставщик обновлён!\n\n"
+                f"📦 Новый поставщик: {supplier_name}\n"
+                f"📝 Черновик поставки #{supply_id}\n\n"
+                f"Подтвердить поставку?"
+            )
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_supply:{supply_id}"),
+                    InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")
+                ],
+                [
+                    InlineKeyboardButton("🔄 Изменить поставщика", callback_data=f"change_supplier_for_supply:{supply_id}")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(message_text, reply_markup=reply_markup)
+        else:
+            await query.edit_message_text(f"❌ Не удалось обновить поставщика")
+
+    except Exception as e:
+        logger.error(f"Ошибка обновления поставщика: {e}", exc_info=True)
+        await query.edit_message_text(f"❌ Ошибка:\n{str(e)[:200]}")
+
+
 async def handle_close_shift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка нажатия кнопки 'Закрыть смену'"""
     query = update.callback_query
@@ -3393,6 +3507,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "cancel_supply":
         await query.edit_message_text("❌ Подтверждение поставки отменено.\n\nЧерновик остался в системе.")
         return
+    elif query.data.startswith("change_supplier_for_supply:"):
+        # Change supplier for supply
+        supply_id = int(query.data.split(":")[1])
+        await handle_change_supplier_for_supply_callback(update, context, supply_id)
+    elif query.data.startswith("select_supplier:"):
+        # Select supplier from list
+        parts = query.data.split(":")
+        supply_id = int(parts[1])
+        supplier_id = int(parts[2])
+        await handle_select_supplier_callback(update, context, supply_id, supplier_id)
 
 
 async def show_item_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):

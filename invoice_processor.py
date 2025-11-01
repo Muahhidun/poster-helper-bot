@@ -256,8 +256,22 @@ class InvoiceProcessor:
             Данные созданного черновика
         """
         supplier_id = parsed_data.get('supplier_id')
+        supplier_not_found = False
+
+        # Если поставщик не найден, используем первого доступного
         if not supplier_id:
-            raise Exception(f"Поставщик '{parsed_data.get('supplier_name')}' не найден в Poster")
+            supplier_not_found = True
+            logger.warning(f"⚠️ Поставщик '{parsed_data.get('supplier_name')}' не найден, используем дефолтного")
+
+            # Получаем список поставщиков и берём первого
+            suppliers_result = await self.poster_client._request('GET', 'storage.getSuppliers')
+            suppliers = suppliers_result.get('response', [])
+
+            if suppliers:
+                supplier_id = int(suppliers[0]['supplier_id'])
+                logger.info(f"📦 Использую дефолтного поставщика: {suppliers[0]['supplier_name']}")
+            else:
+                raise Exception("Не найдено ни одного поставщика в Poster")
 
         items = parsed_data.get('items', [])
         if not items:
@@ -306,6 +320,8 @@ class InvoiceProcessor:
         return {
             'supply_id': supply_id,
             'supplier_name': parsed_data.get('supplier_name'),
+            'supplier_id': supplier_id,
+            'supplier_not_found': supplier_not_found,
             'date': supply_date,
             'items_count': len(added_items),
             'items': added_items,
