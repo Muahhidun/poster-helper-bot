@@ -228,10 +228,12 @@ class SupplierMatcher:
         self.suppliers: Dict[int, Dict] = {}  # supplier_id -> supplier_info
         self.aliases: Dict[str, int] = {}  # alias -> supplier_id
 
-        # Determine CSV path based on user
+        # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
             user_dir = config.get_user_data_dir(telegram_user_id)
-            self.csv_path = user_dir / "poster_suppliers.csv"
+            user_csv = user_dir / "poster_suppliers.csv"
+            # Fallback to global CSV if user-specific doesn't exist
+            self.csv_path = user_csv if user_csv.exists() else (config.DATA_DIR / "poster_suppliers.csv")
         else:
             self.csv_path = config.DATA_DIR / "poster_suppliers.csv"
 
@@ -319,11 +321,14 @@ class IngredientMatcher:
         self.names: Dict[str, int] = {}  # name -> ingredient_id
         self.aliases: Dict[str, int] = {}  # alias -> ingredient_id
 
-        # Determine CSV paths based on user
+        # Determine CSV paths based on user (with fallback to global)
         if telegram_user_id:
             user_dir = config.get_user_data_dir(telegram_user_id)
-            self.ingredients_csv = user_dir / "poster_ingredients.csv"
-            self.aliases_csv = user_dir / "alias_item_mapping.csv"
+            user_ingredients = user_dir / "poster_ingredients.csv"
+            user_aliases = user_dir / "alias_item_mapping.csv"
+            # Fallback to global CSVs if user-specific don't exist
+            self.ingredients_csv = user_ingredients if user_ingredients.exists() else (config.DATA_DIR / "poster_ingredients.csv")
+            self.aliases_csv = user_aliases if user_aliases.exists() else (config.DATA_DIR / "alias_item_mapping.csv")
         else:
             self.ingredients_csv = config.DATA_DIR / "poster_ingredients.csv"
             self.aliases_csv = config.DATA_DIR / "alias_item_mapping.csv"
@@ -552,11 +557,14 @@ class ProductMatcher:
         self.names: Dict[str, int] = {}  # name -> product_id
         self.aliases: Dict[str, int] = {}  # alias -> product_id
 
-        # Determine CSV paths based on user
+        # Determine CSV paths based on user (with fallback to global)
         if telegram_user_id:
             user_dir = config.get_user_data_dir(telegram_user_id)
-            self.products_csv = user_dir / "poster_products.csv"
-            self.aliases_csv = user_dir / "alias_item_mapping.csv"
+            user_products = user_dir / "poster_products.csv"
+            user_aliases = user_dir / "alias_item_mapping.csv"
+            # Fallback to global CSVs if user-specific don't exist
+            self.products_csv = user_products if user_products.exists() else (config.DATA_DIR / "poster_products.csv")
+            self.aliases_csv = user_aliases if user_aliases.exists() else (config.DATA_DIR / "alias_item_mapping.csv")
         else:
             self.products_csv = config.DATA_DIR / "poster_products.csv"
             self.aliases_csv = config.DATA_DIR / "alias_item_mapping.csv"
