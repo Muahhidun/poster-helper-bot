@@ -53,6 +53,21 @@ class PokeeClient:
                 import uuid
                 chat_id = str(uuid.uuid4())
 
+            # Скачиваем изображение и конвертируем в base64
+            logger.info(f"Скачиваю изображение: {image_url}")
+            async with session.get(image_url) as img_response:
+                if img_response.status != 200:
+                    raise Exception(f"Failed to download image: {img_response.status}")
+
+                image_bytes = await img_response.read()
+
+            # Конвертируем в base64
+            import base64
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            image_data_url = f"data:image/jpeg;base64,{image_base64}"
+
+            logger.info(f"Изображение конвертировано в base64 ({len(image_base64)} символов)")
+
             # Подготовка запроса
             headers = {
                 'Content-Type': 'application/json',
@@ -64,12 +79,12 @@ class PokeeClient:
                 "seed_workflow_id": self.WORKFLOW_ID,
                 "chat_id": chat_id,
                 "input_data": {
-                    "invoice_image": image_url
+                    "invoice_image": image_data_url
                 },
                 "stream": True
             }
 
-            logger.info(f"Отправка изображения в Pokee AI: {image_url}")
+            logger.info(f"Отправка изображения в Pokee AI (base64)")
 
             # Отправка запроса с обработкой SSE (Server-Sent Events)
             async with session.post(self.API_URL, headers=headers, json=payload) as response:
