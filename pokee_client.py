@@ -97,20 +97,26 @@ class PokeeClient:
                             event_type = event_data.get('type')
                             logger.debug(f"Pokee AI event: {event_type}")
 
+                            # Логируем все события для отладки
+                            logger.info(f"📡 Pokee AI event: {event_type}, data: {str(event_data)[:200]}")
+
                             # Собираем результат
                             if event_type == 'content':
                                 content = event_data.get('content', '')
                                 if 'formatted_text' not in result_data:
                                     result_data['formatted_text'] = ''
                                 result_data['formatted_text'] += content
+                                logger.info(f"📝 Получен контент ({len(content)} символов)")
 
                             elif event_type == 'workflow_finished':
                                 result_data['status'] = 'completed'
                                 result_data['workflow_result'] = event_data.get('result', {})
+                                logger.info(f"✅ Workflow завершён")
 
                             elif event_type == 'error':
                                 result_data['status'] = 'error'
                                 result_data['error'] = event_data.get('error', 'Unknown error')
+                                logger.error(f"❌ Pokee AI error: {event_data.get('error')}")
 
                         except json.JSONDecodeError as e:
                             logger.warning(f"Не удалось распарсить SSE данные: {data_str[:100]}")
