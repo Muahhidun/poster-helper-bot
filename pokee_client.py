@@ -78,10 +78,18 @@ class PokeeClient:
                     logger.error(f"Ошибка Pokee AI API: {response.status} - {error_text}")
                     raise Exception(f"Pokee AI API error: {response.status}")
 
+                logger.info(f"📡 Начинаем читать SSE поток от Pokee AI (status: {response.status})")
+
                 # Обработка потока SSE событий
                 result_data = {}
+                line_count = 0
                 async for line in response.content:
                     line = line.decode('utf-8').strip()
+                    line_count += 1
+
+                    # Логируем первые 10 строк для отладки
+                    if line_count <= 10:
+                        logger.info(f"📄 Строка {line_count}: {line[:200]}")
 
                     if not line or line.startswith(':'):
                         continue
@@ -122,7 +130,8 @@ class PokeeClient:
                             logger.warning(f"Не удалось распарсить SSE данные: {data_str[:100]}")
                             continue
 
-                logger.info(f"✅ Pokee AI обработал накладную успешно")
+                logger.info(f"✅ Pokee AI обработал накладную успешно (получено строк: {line_count})")
+                logger.info(f"📊 Результат: {result_data.keys() if result_data else 'пусто'}")
                 return result_data
 
         except Exception as e:
