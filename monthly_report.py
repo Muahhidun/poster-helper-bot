@@ -186,6 +186,7 @@ class MonthlyReportGenerator:
         total_expenses = 0
         total_incomes = 0
         total_supplies = 0  # Себестоимость (поставки)
+        onetime_expenses = 0  # Единовременные расходы
 
         # Топ-10 расходов для месячного отчёта (исключаем поставки)
         top_expenses = []
@@ -201,25 +202,29 @@ class MonthlyReportGenerator:
 
             # РАСХОД: все транзакции с type=0, исключая ТОЛЬКО переводы
             elif tx_type == 0 and category_name != 'Переводы':
-                total_expenses += amount
+                # Единовременные расходы считаем отдельно (не включаем в операционные)
+                if category_name == 'Единовременный расход':
+                    onetime_expenses += amount
+                else:
+                    total_expenses += amount
 
-                # Отдельно считаем поставки (себестоимость)
-                is_supply = tx.get('supplier_name') or category_name == 'Поставки'
-                if is_supply:
-                    total_supplies += amount
+                    # Отдельно считаем поставки (себестоимость)
+                    is_supply = tx.get('supplier_name') or category_name == 'Поставки'
+                    if is_supply:
+                        total_supplies += amount
 
-                # Добавляем в категории, но исключаем поставки из категорий
-                if category_name != 'Поставки':
-                    expenses_by_category[category_name] += amount
+                    # Добавляем в категории, но исключаем поставки из категорий
+                    if category_name != 'Поставки':
+                        expenses_by_category[category_name] += amount
 
-                # Добавляем в топ расходов, но исключаем поставки
-                if not is_supply:
-                    top_expenses.append({
-                        'amount': amount,
-                        'category': category_name,
-                        'comment': tx.get('comment', ''),
-                        'date': tx.get('date', '')
-                    })
+                    # Добавляем в топ расходов, но исключаем поставки
+                    if not is_supply:
+                        top_expenses.append({
+                            'amount': amount,
+                            'category': category_name,
+                            'comment': tx.get('comment', ''),
+                            'date': tx.get('date', '')
+                        })
 
             # Переводы (type=2) полностью игнорируем - не учитываем нигде
 
@@ -237,6 +242,7 @@ class MonthlyReportGenerator:
             'total_expenses': total_expenses,
             'total_incomes': total_incomes,
             'total_supplies': total_supplies,
+            'onetime_expenses': onetime_expenses,
             'expenses_by_category': expenses_by_category,
             'top_expenses': top_expenses,
             'transactions_count': len(transactions)
@@ -298,7 +304,7 @@ class MonthlyReportGenerator:
         # === БЛОК 2: РЕНТАБЕЛЬНОСТЬ ===
         report_lines.append("📈 **РЕНТАБЕЛЬНОСТЬ:**")
 
-        # Food Cost % (теоретический из Poster)
+        # Food Cost % (фактический)
         total_supplies = data.get('total_supplies', 0)
         prev_total_supplies = prev_data.get('total_supplies', 0)
 
@@ -309,32 +315,60 @@ class MonthlyReportGenerator:
             if prev_revenue > 0:
                 prev_food_cost_pct = (prev_total_supplies / prev_revenue) * 100
                 food_cost_change = calc_change(int(food_cost_pct * 100), int(prev_food_cost_pct * 100))
-                report_lines.append(f"📦 Food Cost (Poster): **{food_cost_pct:.1f}%** ({food_cost_change})")
+                report_lines.append(f"📦 Food Cost: **{food_cost_pct:.1f}%** ({food_cost_change})")
             else:
-                report_lines.append(f"📦 Food Cost (Poster): **{food_cost_pct:.1f}%**")
+                report_lines.append(f"📦 Food Cost: **{food_cost_pct:.1f}%**")
         else:
             report_lines.append("⚠️ Food Cost: N/A (нет данных о выручке)")
 
-        # Итоговая маржа % (прибыль / выручка)
-        profit = data['total_incomes'] - data['total_expenses']
-        prev_profit = prev_data['total_incomes'] - prev_data['total_expenses']
+        # Операционная маржа % (без единовременных расходов)
+        operational_profit = data['total_incomes'] - data['total_expenses']
+        prev_operational_profit = prev_data['total_incomes'] - prev_data['total_expenses']
 
         if revenue > 0:
-            margin_pct = (profit / revenue) * 100
+            operational_margin_pct = (operational_profit / revenue) * 100
 
             # Сравнение с прошлым периодом
             if prev_revenue > 0:
-                prev_margin_pct = (prev_profit / prev_revenue) * 100
-                margin_change = calc_change(int(margin_pct * 100), int(prev_margin_pct * 100))
+                prev_operational_margin_pct = (prev_operational_profit / prev_revenue) * 100
+                operational_margin_change = calc_change(int(operational_margin_pct * 100), int(prev_operational_margin_pct * 100))
 
-                # Эмодзи в зависимости от знака маржи
-                margin_emoji = "✅" if margin_pct > 0 else "⚠️"
-                report_lines.append(f"{margin_emoji} Итоговая маржа: **{margin_pct:.1f}%** ({margin_change})")
+                operational_margin_emoji = "✅" if operational_margin_pct > 0 else "⚠️"
+                report_lines.append(f"{operational_margin_emoji} Операционная маржа: **{operational_margin_pct:.1f}%** ({operational_margin_change})")
             else:
-                margin_emoji = "✅" if margin_pct > 0 else "⚠️"
-                report_lines.append(f"{margin_emoji} Итоговая маржа: **{margin_pct:.1f}%**")
+                operational_margin_emoji = "✅" if operational_margin_pct > 0 else "⚠️"
+                report_lines.append(f"{operational_margin_emoji} Операционная маржа: **{operational_margin_pct:.1f}%**")
         else:
-            report_lines.append("⚠️ Итоговая маржа: N/A (нет данных о выручке)")
+            report_lines.append("⚠️ Операционная маржа: N/A (нет данных о выручке)")
+
+        # Единовременные расходы
+        onetime = data.get('onetime_expenses', 0)
+        prev_onetime = prev_data.get('onetime_expenses', 0)
+
+        if onetime > 0:
+            onetime_change = calc_change(onetime, prev_onetime)
+            onetime_pct = (onetime / revenue * 100) if revenue > 0 else 0
+            report_lines.append(f"💼 Единовременные расходы: **{format_amount(onetime)}** ({onetime_pct:.1f}% от выручки, {onetime_change})")
+
+        # Чистая маржа % (с учётом единовременных расходов)
+        net_profit = operational_profit - onetime
+        prev_net_profit = prev_operational_profit - prev_onetime
+
+        if revenue > 0:
+            net_margin_pct = (net_profit / revenue) * 100
+
+            # Сравнение с прошлым периодом
+            if prev_revenue > 0:
+                prev_net_margin_pct = (prev_net_profit / prev_revenue) * 100
+                net_margin_change = calc_change(int(net_margin_pct * 100), int(prev_net_margin_pct * 100))
+
+                net_margin_emoji = "✅" if net_margin_pct > 0 else "⚠️"
+                report_lines.append(f"{net_margin_emoji} Чистая маржа: **{net_margin_pct:.1f}%** ({net_margin_change})")
+            else:
+                net_margin_emoji = "✅" if net_margin_pct > 0 else "⚠️"
+                report_lines.append(f"{net_margin_emoji} Чистая маржа: **{net_margin_pct:.1f}%**")
+        else:
+            report_lines.append("⚠️ Чистая маржа: N/A (нет данных о выручке)")
 
         report_lines.append("")
 
@@ -370,12 +404,20 @@ class MonthlyReportGenerator:
         report_lines.append(f"  • Доходы: {format_amount(int(avg_daily_incomes))}")
         report_lines.append("")
 
-        # Расходы по категориям
+        # Расходы по категориям с сравнением
         if data['expenses_by_category']:
             report_lines.append("📂 **Расходы по категориям:**")
             for category, amount in list(data['expenses_by_category'].items())[:15]:
+                # Процент от всех расходов
                 percentage = (amount / data['total_expenses'] * 100) if data['total_expenses'] > 0 else 0
-                report_lines.append(f"  • {category}: {format_amount(amount)} ({percentage:.1f}%)")
+
+                # Сравнение с прошлым периодом
+                prev_amount = prev_data['expenses_by_category'].get(category, 0)
+                if prev_amount > 0:
+                    prev_percentage = (prev_amount / prev_data['total_expenses'] * 100) if prev_data['total_expenses'] > 0 else 0
+                    report_lines.append(f"  • {category}: {format_amount(amount)} ({percentage:.1f}%, прошлый период: {prev_percentage:.1f}%)")
+                else:
+                    report_lines.append(f"  • {category}: {format_amount(amount)} ({percentage:.1f}%)")
             report_lines.append("")
 
         # Топ-10 крупных расходов (без поставок)
