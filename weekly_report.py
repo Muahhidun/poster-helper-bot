@@ -128,18 +128,18 @@ class WeeklyReportGenerator:
             if category_name == 'Кассовые смены' and tx_type == 1:
                 total_incomes += amount
 
-            # РАСХОД: все транзакции с type=0, исключая переводы
-            elif tx_type == 0:
+            # РАСХОД: все транзакции с type=0, исключая ТОЛЬКО переводы
+            elif tx_type == 0 and category_name != 'Переводы':
                 total_expenses += amount
 
-                # Добавляем в категории, но исключаем "Переводы" и "Поставки"
-                if category_name not in ['Переводы', 'Поставки']:
+                # Добавляем в категории, но исключаем поставки из категорий
+                if category_name != 'Поставки':
                     expenses_by_category[category_name] += amount
 
                 # Добавляем в топ расходов, но исключаем поставки
-                # Поставки имеют supplier_name или определенные категории
-                is_supply = tx.get('supplier_name') or category_name in ['Закупка продуктов', 'Поставки']
-                if not is_supply and category_name != 'Переводы':
+                # Поставки имеют supplier_name или категорию "Поставки"
+                is_supply = tx.get('supplier_name') or category_name == 'Поставки'
+                if not is_supply:
                     top_expenses.append({
                         'amount': amount,
                         'category': category_name,
