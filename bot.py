@@ -771,100 +771,76 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
-        # Not in receipt mode - try to detect automatically
-        # Read photo bytes for invoice parser
-        with open(photo_path, 'rb') as f:
-            image_data = f.read()
+        # Not in receipt mode - process as invoice via Pokee AI (default behavior)
+        logger.info("📸 Processing photo as invoice via Pokee AI...")
 
-        # Try receipt OCR first (faster, more specific)
-        from receipt_handler import process_receipt_photo, format_order_details
-        receipt_result = await process_receipt_photo(telegram_user_id, str(photo_path))
+        from invoice_processor import InvoiceProcessor
 
-        if receipt_result.get('success'):
-            # This looks like a receipt - process as order deletion
-            receipt_data = receipt_result['receipt_data']
-            orders = receipt_result['orders']
+        # Send initial processing message
+        processing_msg = await update.message.reply_text("🤖 Обрабатываю накладную через Pokee AI...")
+
+        processor = InvoiceProcessor(telegram_user_id)
+        try:
+            result = await processor.process_invoice_photo(
+                photo_file_id=photo.file_id,
+                bot_token=context.bot.token
+            )
 
             # Clean up photo file
             photo_path.unlink()
 
-            if not orders:
-                await update.message.reply_text(
-                    f"⚠️ Заказы не найдены\n\n"
-                    f"📅 Дата: {receipt_data['date']}\n"
-                    f"🕐 Время: {receipt_data['time']}\n"
-                    f"💰 Сумма: {receipt_data['amount']/100:,.0f}₸\n\n"
-                    f"Возможно:\n"
-                    f"- Заказ уже был удалён\n"
-                    f"- Неверная дата/время/сумма на чеке\n"
-                    f"- Заказ был создан в другой день"
-                )
-                return
+            if result['success']:
+                # Successfully processed invoice
+                supply_draft = result['supply_draft']
+                parsed_data = result['parsed_data']
 
-            # Показать найденные заказы с кнопками удаления
-            if len(orders) == 1:
-                order = orders[0]
+                # Build message with supply details
                 message_text = (
-                    f"✅ Найден заказ по чеку:\n\n"
-                    f"{format_order_details(order)}\n\n"
-                    f"Удалить этот заказ?"
+                    f"✅ Накладная распознана!\n\n"
+                    f"📦 Поставщик: {supply_draft['supplier_name']}\n"
+                    f"📅 Дата: {supply_draft['date']}\n"
+                    f"📊 Позиций добавлено: {supply_draft['items_count']}\n"
+                    f"💰 Сумма: {supply_draft['total_sum']:,.0f}₸\n\n"
                 )
+
+                # Show added items
+                if supply_draft['items']:
+                    message_text += "Товары:\n"
+                    for item in supply_draft['items'][:5]:  # Show first 5 items
+                        message_text += f"  • {item['name']}: {item['quantity']} {item['unit']} × {item['price']:,.0f}₸\n"
+
+                    if supply_draft['items_count'] > 5:
+                        message_text += f"  ... и ещё {supply_draft['items_count'] - 5} позиций\n"
+
+                message_text += f"\n📝 Черновик поставки #{supply_draft['supply_id']} создан\n\n"
+                message_text += "Подтвердить поставку?"
+
+                # Add confirmation buttons
                 keyboard = [
                     [
-                        InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_order:{order['transaction_id']}"),
-                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")
+                        InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_supply:{supply_draft['supply_id']}"),
+                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")
                     ]
                 ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                # Delete processing message and send result
+                await processing_msg.delete()
+                await update.message.reply_text(message_text, reply_markup=reply_markup)
+
             else:
-                # Несколько заказов найдено
-                message_text = f"✅ Найдено {len(orders)} заказ(а/ов) по чеку:\n\n"
-                keyboard = []
+                # Error processing invoice
+                error_msg = result.get('error', 'Неизвестная ошибка')
+                await processing_msg.edit_text(
+                    f"❌ Ошибка обработки накладной:\n{error_msg}\n\n"
+                    f"Попробуйте:\n"
+                    f"- Сфотографировать накладную более чётко\n"
+                    f"- Убедиться, что видны поставщик, дата и таблица товаров\n"
+                    f"- Проверить освещение"
+                )
 
-                for i, order in enumerate(orders, 1):
-                    message_text += f"{i}. {format_order_details(order)}\n\n"
-                    keyboard.append([
-                        InlineKeyboardButton(
-                            f"🗑️ Удалить #{order['transaction_id']}",
-                            callback_data=f"delete_order:{order['transaction_id']}"
-                        )
-                    ])
-
-                keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")])
-                message_text += "\nВыберите заказ для удаления:"
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-            return
-
-        # Receipt OCR failed - try invoice parser
-        logger.info("Receipt OCR failed, trying invoice parser...")
-        parser = get_parser_service()
-        parsed = await parser.parse_invoice_image(image_data, media_type="image/jpeg")
-
-        # Clean up photo file
-        photo_path.unlink()
-
-        if not parsed:
-            await update.message.reply_text(
-                "❌ Не удалось распознать фото.\n\n"
-                "Попробуйте:\n"
-                "- Если это чек - сфотографируйте его более чётко, чтобы были видны дата, время и сумма\n"
-                "- Если это накладная - убедитесь, что таблица с позициями хорошо видна\n"
-                "- Проверьте освещение и чёткость фото"
-            )
-            return
-
-        await update.message.reply_text(
-            f"✅ Накладная распознана!\n\n"
-            f"Поставщик из накладной: {parsed.get('supplier')}\n"
-            f"Позиций найдено: {len(parsed.get('items', []))}"
-        )
-
-        # Process as supply (same logic as voice)
-        if parsed.get('type') == 'supply':
-            await process_supply(update, context, parsed)
-        else:
-            await update.message.reply_text("❌ Неизвестный тип данных из накладной")
+        finally:
+            await processor.close()
 
     except Exception as e:
         logger.error(f"Photo handling failed: {e}", exc_info=True)
@@ -3084,6 +3060,48 @@ async def handle_delete_order_callback(update: Update, context: ContextTypes.DEF
         )
 
 
+async def handle_confirm_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int):
+    """Обработка подтверждения поставки"""
+    query = update.callback_query
+    telegram_user_id = update.effective_user.id
+
+    await query.edit_message_text(f"✅ Подтверждаю поставку #{supply_id}...")
+
+    try:
+        from poster_client import PosterClient
+
+        client = PosterClient(telegram_user_id)
+
+        # Активируем поставку (меняем status с 0 на 1)
+        result = await client._request('POST', 'supply.updateIncomingOrder', data={
+            'incoming_order_id': supply_id,
+            'status': 1  # Активная поставка
+        })
+
+        await client.close()
+
+        if result:
+            await query.edit_message_text(
+                f"✅ Поставка #{supply_id} успешно подтверждена!\n\n"
+                f"Товары добавлены на склад.\n"
+                f"Можете проверить в Poster:\n"
+                f"Склад → Приходы → #{supply_id}"
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ Не удалось подтвердить поставку #{supply_id}\n\n"
+                f"Возможно:\n"
+                f"- Поставка уже была подтверждена\n"
+                f"- Проблема с доступом к API"
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка подтверждения поставки {supply_id}: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ Ошибка при подтверждении поставки:\n{str(e)[:200]}"
+        )
+
+
 async def handle_close_shift_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка нажатия кнопки 'Закрыть смену'"""
     query = update.callback_query
@@ -3367,6 +3385,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_delete_order_callback(update, context, transaction_id)
     elif query.data == "cancel_order_delete":
         await query.edit_message_text("❌ Удаление отменено.")
+        return
+    elif query.data.startswith("confirm_supply:"):
+        # Confirm supply by ID
+        supply_id = int(query.data.split(":")[1])
+        await handle_confirm_supply_callback(update, context, supply_id)
+    elif query.data == "cancel_supply":
+        await query.edit_message_text("❌ Подтверждение поставки отменено.\n\nЧерновик остался в системе.")
         return
 
 
