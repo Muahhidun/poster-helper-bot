@@ -46,6 +46,13 @@ class MonthlyReportGenerator:
                 date_to=month_end.strftime("%Y%m%d")
             )
 
+            # Получить заказы (dash.getTransactions) для расчёта выручки, чеков, AOV
+            orders = await poster_client._request('GET', 'dash.getTransactions', params={
+                'dateFrom': month_start.strftime("%Y%m%d"),
+                'dateTo': month_end.strftime("%Y%m%d")
+            })
+            orders = orders.get('response', [])
+
             # Также получить данные за предыдущий месяц для сравнения
             if month_start.month == 1:
                 prev_month_start = datetime(month_start.year - 1, 12, 1, 10, 0, 0)
@@ -60,11 +67,25 @@ class MonthlyReportGenerator:
                 date_to=prev_month_end.strftime("%Y%m%d")
             )
 
+            prev_orders = await poster_client._request('GET', 'dash.getTransactions', params={
+                'dateFrom': prev_month_start.strftime("%Y%m%d"),
+                'dateTo': prev_month_end.strftime("%Y%m%d")
+            })
+            prev_orders = prev_orders.get('response', [])
+
             await poster_client.close()
 
             # Анализ транзакций
             report_data = self._analyze_transactions(transactions, month_start, month_end)
             prev_report_data = self._analyze_transactions(prev_transactions, prev_month_start, prev_month_end)
+
+            # Анализ заказов
+            orders_data = self._analyze_orders(orders, month_start, month_end)
+            prev_orders_data = self._analyze_orders(prev_orders, prev_month_start, prev_month_end)
+
+            # Объединяем данные
+            report_data.update(orders_data)
+            prev_report_data.update(prev_orders_data)
 
             # Генерация текста отчёта
             report_text = self._format_report_text(report_data, prev_report_data, month_start, month_end)
@@ -86,6 +107,53 @@ class MonthlyReportGenerator:
                 'success': False,
                 'error': str(e)
             }
+
+    def _analyze_orders(self, orders: List[Dict], period_start: datetime, period_end: datetime) -> Dict:
+        """Анализировать заказы для расчёта выручки, чеков, AOV"""
+
+        # Фильтруем только закрытые заказы (status=2) в нужном временном диапазоне
+        closed_orders = []
+        revenue_by_day = defaultdict(int)  # Выручка по дням
+
+        for order in orders:
+            status = order.get('status', '')
+            if status != '2':  # Только закрытые заказы
+                continue
+
+            # Парсим дату закрытия заказа
+            date_close = order.get('date_close_date', '')
+            if date_close:
+                try:
+                    order_datetime = datetime.strptime(date_close, '%Y-%m-%d %H:%M:%S')
+                    # Проверяем, что заказ в нужном временном диапазоне (10:00 - 22:00)
+                    if 10 <= order_datetime.hour < 22 or (order_datetime.hour == 22 and order_datetime.minute == 0):
+                        closed_orders.append(order)
+
+                        # Собираем выручку по дням
+                        day_key = order_datetime.strftime('%Y-%m-%d')
+                        payed_sum = int(order.get('payed_sum', 0))  # В тийинах
+                        revenue_by_day[day_key] += payed_sum
+                except ValueError:
+                    # Если не удалось распарсить дату, включаем заказ
+                    closed_orders.append(order)
+            else:
+                closed_orders.append(order)
+
+        # Рассчитываем общую выручку
+        total_revenue = sum(int(order.get('payed_sum', 0)) for order in closed_orders)
+
+        # Количество чеков
+        num_checks = len(closed_orders)
+
+        # Средний чек (AOV)
+        average_check = total_revenue / num_checks if num_checks > 0 else 0
+
+        return {
+            'revenue': total_revenue,
+            'num_checks': num_checks,
+            'average_check': average_check,
+            'revenue_by_day': dict(sorted(revenue_by_day.items()))  # Сортируем по дате
+        }
 
     def _analyze_transactions(self, transactions: List[Dict], period_start: datetime, period_end: datetime) -> Dict:
         """Анализировать транзакции и собрать статистику"""
@@ -117,6 +185,7 @@ class MonthlyReportGenerator:
         # Общие суммы
         total_expenses = 0
         total_incomes = 0
+        total_supplies = 0  # Себестоимость (поставки)
 
         # Топ-10 расходов для месячного отчёта (исключаем поставки)
         top_expenses = []
@@ -134,13 +203,16 @@ class MonthlyReportGenerator:
             elif tx_type == 0 and category_name != 'Переводы':
                 total_expenses += amount
 
+                # Отдельно считаем поставки (себестоимость)
+                is_supply = tx.get('supplier_name') or category_name == 'Поставки'
+                if is_supply:
+                    total_supplies += amount
+
                 # Добавляем в категории, но исключаем поставки из категорий
                 if category_name != 'Поставки':
                     expenses_by_category[category_name] += amount
 
                 # Добавляем в топ расходов, но исключаем поставки
-                # Поставки имеют supplier_name или категорию "Поставки"
-                is_supply = tx.get('supplier_name') or category_name == 'Поставки'
                 if not is_supply:
                     top_expenses.append({
                         'amount': amount,
@@ -164,6 +236,7 @@ class MonthlyReportGenerator:
         return {
             'total_expenses': total_expenses,
             'total_incomes': total_incomes,
+            'total_supplies': total_supplies,
             'expenses_by_category': expenses_by_category,
             'top_expenses': top_expenses,
             'transactions_count': len(transactions)
@@ -200,8 +273,51 @@ class MonthlyReportGenerator:
         report_lines.append(f"📅 {month_start.strftime('%d.%m')} 10:00 - {month_end.strftime('%d.%m.%Y')} 22:00")
         report_lines.append("")
 
-        # Общая статистика с сравнением
-        report_lines.append("💰 **Итого за месяц:**")
+        # === БЛОК 1: ВЫРУЧКА И ПРОДАЖИ ===
+        report_lines.append("💰 **ВЫРУЧКА И ПРОДАЖИ:**")
+
+        # Выручка
+        revenue = data.get('revenue', 0)
+        prev_revenue = prev_data.get('revenue', 0)
+        revenue_change = calc_change(revenue, prev_revenue)
+        report_lines.append(f"💵 Выручка: **{format_amount(revenue)}** ({revenue_change})")
+
+        # Количество чеков
+        num_checks = data.get('num_checks', 0)
+        prev_num_checks = prev_data.get('num_checks', 0)
+        checks_change = calc_change(num_checks, prev_num_checks)
+        report_lines.append(f"🧾 Количество чеков: **{num_checks}** ({checks_change})")
+
+        # Средний чек (AOV)
+        avg_check = data.get('average_check', 0)
+        prev_avg_check = prev_data.get('average_check', 0)
+        avg_check_change = calc_change(avg_check, prev_avg_check)
+        report_lines.append(f"📊 Средний чек: **{format_amount(int(avg_check))}** ({avg_check_change})")
+        report_lines.append("")
+
+        # === БЛОК 2: РЕНТАБЕЛЬНОСТЬ ===
+        report_lines.append("📈 **РЕНТАБЕЛЬНОСТЬ:**")
+
+        # Food Cost %
+        total_supplies = data.get('total_supplies', 0)
+        if revenue > 0:
+            food_cost_pct = (total_supplies / revenue) * 100
+            food_cost_emoji = "✅" if food_cost_pct <= 32 else ("⚠️" if food_cost_pct <= 35 else "🚨")
+            report_lines.append(f"{food_cost_emoji} Food Cost: **{food_cost_pct:.1f}%** (норма 28-32%)")
+        else:
+            report_lines.append("⚠️ Food Cost: N/A (нет данных о выручке)")
+
+        # Валовая маржа %
+        if revenue > 0:
+            gross_margin_pct = ((revenue - total_supplies) / revenue) * 100
+            margin_emoji = "✅" if gross_margin_pct >= 60 else "⚠️"
+            report_lines.append(f"{margin_emoji} Валовая маржа: **{gross_margin_pct:.1f}%** (норма 60-70%)")
+        else:
+            report_lines.append("⚠️ Валовая маржа: N/A (нет данных о выручке)")
+        report_lines.append("")
+
+        # === БЛОК 3: РАСХОДЫ И БАЛАНС ===
+        report_lines.append("💸 **РАСХОДЫ И БАЛАНС:**")
 
         # Расходы
         expenses_change = calc_change(data['total_expenses'], prev_data['total_expenses'])
@@ -223,9 +339,11 @@ class MonthlyReportGenerator:
 
         # Средние показатели в день
         days_in_month = (month_end - month_start).days + 1
+        avg_daily_revenue = revenue / days_in_month
         avg_daily_expenses = data['total_expenses'] / days_in_month
         avg_daily_incomes = data['total_incomes'] / days_in_month
         report_lines.append("📊 **Средние показатели в день:**")
+        report_lines.append(f"  • Выручка: {format_amount(int(avg_daily_revenue))}")
         report_lines.append(f"  • Расходы: {format_amount(int(avg_daily_expenses))}")
         report_lines.append(f"  • Доходы: {format_amount(int(avg_daily_incomes))}")
         report_lines.append("")
