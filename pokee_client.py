@@ -94,41 +94,48 @@ class PokeeClient:
                     if not line or line.startswith(':'):
                         continue
 
-                    # Парсинг SSE формата: "data: {...}"
-                    if line.startswith('data: '):
-                        data_str = line[6:]  # Убираем "data: "
+                    # Pokee AI отправляет события как JSON объекты построчно
+                    try:
+                        event_data = json.loads(line)
 
-                        try:
-                            event_data = json.loads(data_str)
+                        # Получаем тип события (поле "event", а не "type")
+                        event_type = event_data.get('event')
+                        event_payload = event_data.get('data', {})
 
-                            # Логируем события
-                            event_type = event_data.get('type')
-                            logger.debug(f"Pokee AI event: {event_type}")
+                        # Логируем все события для отладки
+                        logger.info(f"📡 Pokee AI event: {event_type}")
 
-                            # Логируем все события для отладки
-                            logger.info(f"📡 Pokee AI event: {event_type}, data: {str(event_data)[:200]}")
+                        # Обрабатываем события с прогрессом (содержат текст)
+                        if event_type == 'task_progress_update':
+                            message = event_payload.get('message', {})
+                            if message.get('type') == 'chunk':
+                                content = message.get('content', '')
+                                if content:
+                                    if 'formatted_text' not in result_data:
+                                        result_data['formatted_text'] = ''
+                                    result_data['formatted_text'] += content
+                                    logger.info(f"📝 Получен текст: {content[:100]}")
 
-                            # Собираем результат
-                            if event_type == 'content':
-                                content = event_data.get('content', '')
-                                if 'formatted_text' not in result_data:
-                                    result_data['formatted_text'] = ''
-                                result_data['formatted_text'] += content
-                                logger.info(f"📝 Получен контент ({len(content)} символов)")
-
-                            elif event_type == 'workflow_finished':
+                        # Обрабатываем завершение workflow
+                        elif event_type == 'workflow_update':
+                            status = event_payload.get('status')
+                            if status == 'completed':
                                 result_data['status'] = 'completed'
-                                result_data['workflow_result'] = event_data.get('result', {})
+                                result_data['workflow_output'] = event_payload.get('workflow_output')
                                 logger.info(f"✅ Workflow завершён")
 
-                            elif event_type == 'error':
+                        # Обрабатываем ошибки задачи
+                        elif event_type == 'task_status_update':
+                            task_status = event_payload.get('status')
+                            error_data = event_payload.get('error_data')
+                            if error_data:
                                 result_data['status'] = 'error'
-                                result_data['error'] = event_data.get('error', 'Unknown error')
-                                logger.error(f"❌ Pokee AI error: {event_data.get('error')}")
+                                result_data['error'] = error_data
+                                logger.error(f"❌ Pokee AI error: {error_data}")
 
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"Не удалось распарсить SSE данные: {data_str[:100]}")
-                            continue
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Пропуск не-JSON строки: {line[:100]}")
+                        continue
 
                 logger.info(f"✅ Pokee AI обработал накладную успешно (получено строк: {line_count})")
                 logger.info(f"📊 Результат: {result_data.keys() if result_data else 'пусто'}")
