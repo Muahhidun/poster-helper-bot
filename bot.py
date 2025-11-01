@@ -794,6 +794,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 supply_draft = result['supply_draft']
                 parsed_data = result['parsed_data']
 
+                # DEBUG: Отправить пользователю что распознал Pokee AI
+                pokee_text = result.get('formatted_text', '')
+                if pokee_text:
+                    debug_msg = f"🔍 DEBUG - Текст от Pokee AI:\n\n{pokee_text[:1000]}"
+                    await update.message.reply_text(debug_msg)
+
                 # Build message with supply details
                 message_text = "✅ Накладная распознана!\n\n"
 
