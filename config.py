@@ -45,8 +45,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Anthropic (Claude)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-# Pokee AI
-POKEE_API_TOKEN = os.getenv("POKEE_API_TOKEN", "56ecc5ba51ae2a1a99c4ddaf463364d0f1fabd7f89c3e7af")
+# Pokee AI (DEPRECATED - теперь используется GPT-4 Vision в invoice_ocr.py)
+# POKEE_API_TOKEN = os.getenv("POKEE_API_TOKEN", "56ecc5ba51ae2a1a99c4ddaf463364d0f1fabd7f89c3e7af")
 
 # Poster defaults
 DEFAULT_WAREHOUSE_ID = int(os.getenv("DEFAULT_WAREHOUSE_ID", "1"))

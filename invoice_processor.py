@@ -1,8 +1,8 @@
-"""Обработчик накладных с использованием Pokee AI"""
+"""Обработчик накладных с использованием GPT-4 Vision OCR"""
 import logging
 import re
 from typing import Dict, List, Optional, Tuple
-from pokee_client import PokeeClient
+import invoice_ocr
 from poster_client import PosterClient
 from matchers import SupplierMatcher, IngredientMatcher
 
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class InvoiceProcessor:
-    """Обработчик накладных с автоматическим распознаванием через Pokee AI"""
+    """Обработчик накладных с автоматическим распознаванием через GPT-4 Vision"""
 
     def __init__(self, telegram_user_id: int):
         """
@@ -20,14 +20,12 @@ class InvoiceProcessor:
             telegram_user_id: ID пользователя Telegram
         """
         self.telegram_user_id = telegram_user_id
-        self.pokee_client = PokeeClient()
         self.poster_client = PosterClient(telegram_user_id)
         self.supplier_matcher = SupplierMatcher(telegram_user_id)
         self.ingredient_matcher = IngredientMatcher(telegram_user_id)
 
     async def close(self):
         """Закрыть все клиенты"""
-        await self.pokee_client.close()
         await self.poster_client.close()
 
     async def process_invoice_photo(
@@ -48,26 +46,21 @@ class InvoiceProcessor:
         try:
             # 1. Получить URL изображения из Telegram
             logger.info("📸 Получаю изображение из Telegram...")
-            image_url = await self.pokee_client.upload_image_to_telegram(
-                photo_file_id,
-                bot_token
-            )
+            image_url = await self._get_telegram_file_url(photo_file_id, bot_token)
 
-            # 2. Обработать через Pokee AI
-            logger.info("🤖 Отправляю изображение в Pokee AI...")
-            pokee_result = await self.pokee_client.process_invoice_image(image_url)
+            # 2. Обработать через GPT-4 Vision OCR
+            logger.info("🤖 Отправляю изображение в GPT-4 Vision...")
+            ocr_result = await invoice_ocr.recognize_invoice_from_url(image_url)
 
-            if pokee_result.get('status') == 'error':
-                raise Exception(f"Pokee AI error: {pokee_result.get('error')}")
+            if not ocr_result.get('success'):
+                raise Exception(f"GPT-4 Vision error: {ocr_result.get('error')}")
 
-            formatted_text = pokee_result.get('formatted_text', '')
-            logger.info(f"✅ Pokee AI вернул текст ({len(formatted_text)} символов)")
+            logger.info(f"✅ GPT-4 Vision распознал накладную: товаров={len(ocr_result.get('items', []))}")
 
-            # 3. Распарсить отформатированный текст
-            logger.info("📋 Парсинг распознанного текста...")
-            logger.info(f"📄 Текст от Pokee AI:\n{formatted_text[:500]}")  # Первые 500 символов для отладки
-            parsed_data = self._parse_pokee_response(formatted_text)
-            logger.info(f"✅ Распарсовано: поставщик={parsed_data.get('supplier_name')}, товаров={len(parsed_data.get('items', []))}")
+            # 3. Обработать распознанные данные
+            logger.info("📋 Обрабатываю распознанные данные...")
+            parsed_data = self._process_ocr_result(ocr_result)
+            logger.info(f"✅ Обработано: поставщик={parsed_data.get('supplier_name')}, товаров={len(parsed_data.get('items', []))}")
 
             # 4. Создать черновик поставки в Poster
             logger.info("📦 Создаю черновик поставки в Poster...")
@@ -75,7 +68,7 @@ class InvoiceProcessor:
 
             return {
                 'success': True,
-                'formatted_text': formatted_text,
+                'ocr_result': ocr_result,
                 'parsed_data': parsed_data,
                 'supply_draft': supply_draft
             }
@@ -87,86 +80,75 @@ class InvoiceProcessor:
                 'error': str(e)
             }
 
-    def _parse_pokee_response(self, formatted_text: str) -> Dict:
+    async def _get_telegram_file_url(self, file_id: str, bot_token: str) -> str:
         """
-        Распарсить ответ от Pokee AI
-
-        Формат ожидается примерно такой:
-        ```
-        Поставщик: Япоша
-        Дата: 01.11.2025
-        Сумма: 15000
-
-        Товары:
-        1. Лук репчатый - 10 кг - 500₸
-        2. Картофель - 20 кг - 1000₸
-        3. Морковь - 5 кг - 300₸
-        ```
+        Получить URL файла из Telegram
 
         Args:
-            formatted_text: Отформатированный текст от Pokee AI
+            file_id: ID файла в Telegram
+            bot_token: Токен бота
 
         Returns:
-            Распарсованные данные накладной
+            URL файла
         """
-        lines = formatted_text.strip().split('\n')
+        import aiohttp
 
-        # Извлекаем поставщика
-        supplier_name = None
+        async with aiohttp.ClientSession() as session:
+            # Получаем информацию о файле
+            url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
+            async with session.get(url) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to get file info: {response.status}")
+
+                data = await response.json()
+                file_path = data['result']['file_path']
+
+            # Формируем URL для скачивания
+            file_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+            return file_url
+
+    def _process_ocr_result(self, ocr_result: Dict) -> Dict:
+        """
+        Обработать результат распознавания от GPT-4 Vision
+
+        Args:
+            ocr_result: Результат от invoice_ocr.recognize_invoice_from_url()
+
+        Returns:
+            Распарсованные данные накладной в формате для создания поставки
+        """
+        # Получаем поставщика и ищем его ID
+        supplier_name = ocr_result.get('supplier_name')
         supplier_id = None
-        for line in lines:
-            if line.lower().startswith('поставщик:'):
-                supplier_name = line.split(':', 1)[1].strip()
-                supplier_id = self.supplier_matcher.match(supplier_name)
-                break
+        if supplier_name:
+            supplier_id = self.supplier_matcher.match(supplier_name)
 
-        # Извлекаем дату
-        invoice_date = None
-        for line in lines:
-            if line.lower().startswith('дата:'):
-                date_str = line.split(':', 1)[1].strip()
-                # Парсим дату (формат: DD.MM.YYYY или YYYY-MM-DD)
-                invoice_date = self._parse_date(date_str)
-                break
+        # Дата накладной
+        invoice_date = ocr_result.get('invoice_date')
 
-        # Извлекаем общую сумму
-        total_sum = None
-        for line in lines:
-            if line.lower().startswith('сумма:'):
-                sum_str = line.split(':', 1)[1].strip()
-                # Убираем валюту и пробелы
-                sum_str = re.sub(r'[^\d.]', '', sum_str)
-                if sum_str:
-                    total_sum = float(sum_str)
-                break
+        # Общая сумма
+        total_sum = ocr_result.get('total_sum')
 
-        # Извлекаем товары
+        # Обрабатываем товары
         items = []
-        in_items_section = False
+        for item in ocr_result.get('items', []):
+            # Ищем ингредиент в Poster по названию
+            ingredient_id = self.ingredient_matcher.match(item['name'])
 
-        for line in lines:
-            line = line.strip()
+            processed_item = {
+                'name': item['name'],
+                'ingredient_id': ingredient_id,
+                'quantity': item['quantity'],
+                'unit': item['unit'],
+                'price': item['price'],
+                'total': item.get('total', item['quantity'] * item['price'])
+            }
+            items.append(processed_item)
 
-            # Начало секции товаров
-            if line.lower() in ['товары:', 'продукты:', 'items:']:
-                in_items_section = True
-                continue
-
-            if not in_items_section or not line:
-                continue
-
-            # Парсинг строки товара
-            # Форматы:
-            # "1. Лук репчатый - 10 кг - 500₸"
-            # "Картофель 20кг 1000"
-            # "Морковь | 5 кг | 300₸"
-
-            item = self._parse_item_line(line)
-            if item:
-                items.append(item)
-                logger.debug(f"  ✓ Товар распознан: {item['name']}")
+            if ingredient_id:
+                logger.debug(f"  ✓ Товар сопоставлен: {item['name']} -> ingredient_id={ingredient_id}")
             else:
-                logger.debug(f"  ✗ Не удалось распарсить: {line}")
+                logger.debug(f"  ✗ Товар не найден в Poster: {item['name']}")
 
         return {
             'supplier_name': supplier_name,
@@ -175,91 +157,6 @@ class InvoiceProcessor:
             'total_sum': total_sum,
             'items': items
         }
-
-    def _parse_item_line(self, line: str) -> Optional[Dict]:
-        """
-        Распарсить строку товара
-
-        Args:
-            line: Строка с данными товара
-
-        Returns:
-            Данные товара или None
-        """
-        # Убираем номер строки и маркер списка в начале
-        line = re.sub(r'^[\d\-\*]+[\.\)]\s*', '', line)
-
-        # Пробуем различные паттерны
-        patterns = [
-            # Формат Pokee AI: "Молоко "Домик в деревне" 2,5% 950мл, Количество: 10, Цена: 90.00"
-            r'(.+?),\s*Количество:\s*([\d.]+),\s*Цена:\s*([\d.]+)',
-            # "Лук репчатый - 10 кг - 500₸"
-            r'(.+?)\s*-\s*([\d.]+)\s*(кг|г|л|мл|шт)\s*-\s*([\d.]+)',
-            # "Картофель 20кг 1000"
-            r'(.+?)\s+([\d.]+)\s*(кг|г|л|мл|шт)\s+([\d.]+)',
-            # "Морковь | 5 кг | 300"
-            r'(.+?)\s*\|\s*([\d.]+)\s*(кг|г|л|мл|шт)\s*\|\s*([\d.]+)',
-        ]
-
-        for i, pattern in enumerate(patterns):
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                # Первый паттерн (Pokee AI) имеет другую структуру
-                if i == 0:
-                    # Формат Pokee AI: name, Количество: quantity, Цена: price
-                    name = match.group(1).strip()
-                    quantity = float(match.group(2))
-                    price = float(match.group(3))
-                    unit = 'шт'  # По умолчанию штуки
-                else:
-                    # Остальные паттерны: name - quantity unit - price
-                    name = match.group(1).strip()
-                    quantity = float(match.group(2))
-                    unit = match.group(3).lower()
-                    price = float(match.group(4))
-
-                # Поиск ингредиента в Poster
-                ingredient_id = self.ingredient_matcher.match(name)
-
-                return {
-                    'name': name,
-                    'ingredient_id': ingredient_id,
-                    'quantity': quantity,
-                    'unit': unit,
-                    'price': price,
-                    'total': quantity * price
-                }
-
-        logger.warning(f"Не удалось распарсить строку товара: {line}")
-        return None
-
-    def _parse_date(self, date_str: str) -> Optional[str]:
-        """
-        Распарсить дату из строки
-
-        Args:
-            date_str: Строка с датой
-
-        Returns:
-            Дата в формате YYYY-MM-DD или None
-        """
-        from datetime import datetime
-
-        formats = [
-            '%d.%m.%Y',  # 01.11.2025
-            '%Y-%m-%d',  # 2025-11-01
-            '%d/%m/%Y',  # 01/11/2025
-        ]
-
-        for fmt in formats:
-            try:
-                dt = datetime.strptime(date_str.strip(), fmt)
-                return dt.strftime('%Y-%m-%d')
-            except ValueError:
-                continue
-
-        logger.warning(f"Не удалось распарсить дату: {date_str}")
-        return None
 
     async def _create_supply_draft(self, parsed_data: Dict) -> Dict:
         """
