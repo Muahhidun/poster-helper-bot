@@ -186,11 +186,13 @@ class InvoiceProcessor:
         Returns:
             Данные товара или None
         """
-        # Убираем номер строки в начале
-        line = re.sub(r'^\d+[\.\)]\s*', '', line)
+        # Убираем номер строки и маркер списка в начале
+        line = re.sub(r'^[\d\-\*]+[\.\)]\s*', '', line)
 
         # Пробуем различные паттерны
         patterns = [
+            # Формат Pokee AI: "Молоко "Домик в деревне" 2,5% 950мл, Количество: 10, Цена: 90.00"
+            r'(.+?),\s*Количество:\s*([\d.]+),\s*Цена:\s*([\d.]+)',
             # "Лук репчатый - 10 кг - 500₸"
             r'(.+?)\s*-\s*([\d.]+)\s*(кг|г|л|мл|шт)\s*-\s*([\d.]+)',
             # "Картофель 20кг 1000"
@@ -199,13 +201,22 @@ class InvoiceProcessor:
             r'(.+?)\s*\|\s*([\d.]+)\s*(кг|г|л|мл|шт)\s*\|\s*([\d.]+)',
         ]
 
-        for pattern in patterns:
+        for i, pattern in enumerate(patterns):
             match = re.search(pattern, line, re.IGNORECASE)
             if match:
-                name = match.group(1).strip()
-                quantity = float(match.group(2))
-                unit = match.group(3).lower()
-                price = float(match.group(4))
+                # Первый паттерн (Pokee AI) имеет другую структуру
+                if i == 0:
+                    # Формат Pokee AI: name, Количество: quantity, Цена: price
+                    name = match.group(1).strip()
+                    quantity = float(match.group(2))
+                    price = float(match.group(3))
+                    unit = 'шт'  # По умолчанию штуки
+                else:
+                    # Остальные паттерны: name - quantity unit - price
+                    name = match.group(1).strip()
+                    quantity = float(match.group(2))
+                    unit = match.group(3).lower()
+                    price = float(match.group(4))
 
                 # Поиск ингредиента в Poster
                 ingredient_id = self.ingredient_matcher.match(name)
