@@ -36,3 +36,6 @@ htmlcov/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+
+# User-specific data (generated at runtime)
+data/users/

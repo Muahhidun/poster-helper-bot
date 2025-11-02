@@ -944,28 +944,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if len(skipped) > 3:
                         message_text += f"  ... и ещё {len(skipped) - 3}\n"
 
-                message_text += f"\n📝 Черновик поставки #{supply_draft['supply_id']} создан\n\n"
-                message_text += "Подтвердить поставку?"
-
-                # Add confirmation buttons
-                keyboard = [
-                    [
-                        InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_supply:{supply_draft['supply_id']}"),
-                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")
-                    ]
-                ]
+                message_text += f"\n✅ Поставка #{supply_draft['supply_id']} создана и активирована!\n\n"
+                message_text += f"Товары добавлены на склад.\n"
+                message_text += f"Проверьте в Poster: Склад → Приходы → #{supply_draft['supply_id']}"
 
                 # Добавить кнопку изменения поставщика если не найден
                 if supply_draft.get('supplier_not_found'):
-                    keyboard.insert(0, [
+                    keyboard = [[
                         InlineKeyboardButton("🔄 Изменить поставщика", callback_data=f"change_supplier_for_supply:{supply_draft['supply_id']}")
-                    ])
-
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                # Delete processing message and send result
-                await step_msg.delete()
-                await update.message.reply_text(message_text, reply_markup=reply_markup)
+                    ]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    await step_msg.delete()
+                    await update.message.reply_text(message_text, reply_markup=reply_markup)
+                else:
+                    # No buttons needed if supplier was found
+                    await step_msg.delete()
+                    await update.message.reply_text(message_text)
 
             else:
                 # Error processing invoice
@@ -3240,46 +3234,11 @@ async def handle_delete_order_callback(update: Update, context: ContextTypes.DEF
         )
 
 
-async def handle_confirm_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int):
-    """Обработка подтверждения поставки"""
-    query = update.callback_query
-    telegram_user_id = update.effective_user.id
-
-    await query.edit_message_text(f"✅ Подтверждаю поставку #{supply_id}...")
-
-    try:
-        from poster_client import PosterClient
-
-        client = PosterClient(telegram_user_id)
-
-        # Активируем поставку (меняем status с 0 на 1)
-        result = await client._request('POST', 'supply.updateIncomingOrder', data={
-            'incoming_order_id': supply_id,
-            'status': 1  # Активная поставка
-        })
-
-        await client.close()
-
-        if result:
-            await query.edit_message_text(
-                f"✅ Поставка #{supply_id} успешно подтверждена!\n\n"
-                f"Товары добавлены на склад.\n"
-                f"Можете проверить в Poster:\n"
-                f"Склад → Приходы → #{supply_id}"
-            )
-        else:
-            await query.edit_message_text(
-                f"❌ Не удалось подтвердить поставку #{supply_id}\n\n"
-                f"Возможно:\n"
-                f"- Поставка уже была подтверждена\n"
-                f"- Проблема с доступом к API"
-            )
-
-    except Exception as e:
-        logger.error(f"Ошибка подтверждения поставки {supply_id}: {e}", exc_info=True)
-        await query.edit_message_text(
-            f"❌ Ошибка при подтверждении поставки:\n{str(e)[:200]}"
-        )
+# OBSOLETE: Supplies are now created as active (status=1) directly in storage.createSupply
+# No separate confirmation step is needed
+# async def handle_confirm_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int):
+#     """Обработка подтверждения поставки"""
+#     pass
 
 
 async def handle_change_supplier_for_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int):
@@ -3358,24 +3317,14 @@ async def handle_select_supplier_callback(update: Update, context: ContextTypes.
         if result:
             # Показываем обновлённую информацию с кнопками подтверждения
             message_text = (
-                f"✅ Поставщик обновлён!\n\n"
+                f"✅ Поставщик обновлён и поставка активирована!\n\n"
                 f"📦 Новый поставщик: {supplier_name}\n"
-                f"📝 Черновик поставки #{supply_id}\n\n"
-                f"Подтвердить поставку?"
+                f"📝 Поставка #{supply_id}\n\n"
+                f"Товары добавлены на склад.\n"
+                f"Проверьте в Poster: Склад → Приходы → #{supply_id}"
             )
 
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_supply:{supply_id}"),
-                    InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")
-                ],
-                [
-                    InlineKeyboardButton("🔄 Изменить поставщика", callback_data=f"change_supplier_for_supply:{supply_id}")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await query.edit_message_text(message_text, reply_markup=reply_markup)
+            await query.edit_message_text(message_text)
         else:
             await query.edit_message_text(f"❌ Не удалось обновить поставщика")
 
@@ -3668,13 +3617,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "cancel_order_delete":
         await query.edit_message_text("❌ Удаление отменено.")
         return
-    elif query.data.startswith("confirm_supply:"):
-        # Confirm supply by ID
-        supply_id = int(query.data.split(":")[1])
-        await handle_confirm_supply_callback(update, context, supply_id)
-    elif query.data == "cancel_supply":
-        await query.edit_message_text("❌ Подтверждение поставки отменено.\n\nЧерновик остался в системе.")
-        return
+    # OBSOLETE: Supplies are now created as active directly
+    # elif query.data.startswith("confirm_supply:"):
+    #     # Confirm supply by ID
+    #     supply_id = int(query.data.split(":")[1])
+    #     await handle_confirm_supply_callback(update, context, supply_id)
+    # OBSOLETE: No longer used since supplies are created as active
+    # elif query.data == "cancel_supply":
+    #     await query.edit_message_text("❌ Подтверждение поставки отменено.\n\nЧерновик остался в системе.")
+    #     return
     elif query.data.startswith("change_supplier_for_supply:"):
         # Change supplier for supply
         supply_id = int(query.data.split(":")[1])

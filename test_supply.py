@@ -1,55 +1,70 @@
-#!/usr/bin/env python3
-"""Test supply creation for Lavash Astana"""
-
+"""Тестовый скрипт для создания поставки через Poster API"""
 import asyncio
-import aiohttp
+import logging
+from poster_client import get_poster_client
 from datetime import datetime
-from config import POSTER_BASE_URL, POSTER_TOKEN
 
-async def test_supply():
-    """Test creating supply for supplier 27"""
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
-    # Minimal supply data
-    data = {
-        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'supplier_id': 27,  # Лаваш Астана
-        'storage_id': 1,    # Продукты
-        'source': 'manage',
-        'type': 1,
-        'supply_comment': 'Test from bot',
-        'ingredients[0][id]': 81,  # Лаваш
-        'ingredients[0][num]': 500.0,  # Как в боте - с float
-        'ingredients[0][price]': 40,
-        'ingredients[0][ingredient_sum]': 20000,
-        'ingredients[0][tax_id]': 0,
-        'ingredients[0][packing]': 1,
-        'transactions[0][transaction_id]': '',
-        'transactions[0][account_id]': 1,  # Kaspi Pay
-        'transactions[0][date]': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'transactions[0][amount]': 20000,
-        'transactions[0][delete]': 0
-    }
 
-    print("📤 Отправка запроса к Poster API...")
-    print(f"   URL: {POSTER_BASE_URL}/storage.createSupply")
-    print(f"   Данные: {data}\n")
+async def test_create_supply():
+    """Создать тестовую поставку"""
+    # Используем ваш аккаунт (167084307)
+    telegram_user_id = 167084307
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{POSTER_BASE_URL}/storage.createSupply",
-            params={'token': POSTER_TOKEN},
-            data=data
-        ) as response:
-            result = await response.json()
+    poster = get_poster_client(telegram_user_id)
 
-            print(f"📥 Ответ от API:")
-            print(f"   Status: {response.status}")
-            print(f"   Response: {result}\n")
+    try:
+        # Данные поставки - как в вашем примере
+        supplier_id = 1  # Метро (первый поставщик)
+        storage_id = 1  # Продукты
+        account_id = 4  # Kaspi Pay
+        date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-            if 'error' in result:
-                print(f"❌ Ошибка: {result['error']}")
-            else:
-                print(f"✅ Успех! Supply ID: {result.get('response')}")
+        # ТЕСТ 1: Простая поставка с одним ингредиентом
+        # Используем ID=83 (Картофель фри, который есть в вашей базе)
+        ingredients = [
+            {
+                'id': 83,  # Картофель фри
+                'num': 5,
+                'price': 1050
+            }
+        ]
+
+        logger.info("=" * 60)
+        logger.info("ТЕСТ: Создание поставки с одним ингредиентом")
+        logger.info(f"Supplier: {supplier_id}, Storage: {storage_id}, Account: {account_id}")
+        logger.info(f"Ingredients: {ingredients}")
+        logger.info("=" * 60)
+
+        supply_id = await poster.create_supply(
+            supplier_id=supplier_id,
+            storage_id=storage_id,
+            date=date,
+            ingredients=ingredients,
+            account_id=account_id,
+            comment="Тест от Claude Code"
+        )
+
+        logger.info("=" * 60)
+        logger.info(f"✅ SUCCESS! Supply ID: {supply_id}")
+        logger.info("=" * 60)
+
+        print(f"\n✅ Поставка создана успешно!")
+        print(f"ID поставки: {supply_id}")
+        print(f"Проверьте в Poster: Склад → Приходы → #{supply_id}")
+        print(f"\nМожете удалить эту тестовую поставку.")
+
+    except Exception as e:
+        logger.error("=" * 60)
+        logger.error(f"❌ ERROR: {e}")
+        logger.error("=" * 60)
+        print(f"\n❌ Ошибка: {e}")
+
+    finally:
+        await poster.close()
+
 
 if __name__ == "__main__":
-    asyncio.run(test_supply())
+    asyncio.run(test_create_supply())

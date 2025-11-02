@@ -315,6 +315,7 @@ class PosterClient:
             'storage_id': storage_id,
             'source': 'manage',
             'type': 1,  # Normal supply
+            'status': 1,  # Active supply (not draft) - 0=draft, 1=active
             'supply_comment': comment
         }
 
