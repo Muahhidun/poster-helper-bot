@@ -194,20 +194,19 @@ class InvoiceProcessor:
         supplier_id = parsed_data.get('supplier_id')
         supplier_not_found = False
 
-        # Если поставщик не найден, используем первого доступного
+        # Если поставщик не найден, используем первого доступного из CSV
         if not supplier_id:
             supplier_not_found = True
             logger.warning(f"⚠️ Поставщик '{parsed_data.get('supplier_name')}' не найден, используем дефолтного")
 
-            # Получаем список поставщиков и берём первого
-            suppliers_result = await self.poster_client._request('GET', 'storage.getSuppliers')
-            suppliers = suppliers_result.get('response', [])
-
-            if suppliers:
-                supplier_id = int(suppliers[0]['supplier_id'])
-                logger.info(f"📦 Использую дефолтного поставщика: {suppliers[0]['supplier_name']}")
+            # Получаем поставщиков из локального CSV файла
+            if self.supplier_matcher.suppliers:
+                # Берём первого поставщика из списка
+                first_supplier = list(self.supplier_matcher.suppliers.values())[0]
+                supplier_id = first_supplier['id']
+                logger.info(f"📦 Использую дефолтного поставщика: {first_supplier['name']} (ID={supplier_id})")
             else:
-                raise Exception("Не найдено ни одного поставщика в Poster")
+                raise Exception("Не найдено ни одного поставщика в базе данных (poster_suppliers.csv пуст)")
 
         items = parsed_data.get('items', [])
         if not items:
