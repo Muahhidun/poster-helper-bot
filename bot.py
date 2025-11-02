@@ -902,7 +902,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             # 4. Передать в обработчик текстовых поставок
-            from parser_service import get_parser_service, get_simple_parser
+            from parser_service import get_parser_service
+            from simple_parser import get_simple_parser
 
             # Попробовать распарсить через парсер
             parsed = None
