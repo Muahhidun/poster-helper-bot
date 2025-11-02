@@ -133,7 +133,10 @@ class InvoiceProcessor:
         items = []
         for item in ocr_result.get('items', []):
             # Ищем ингредиент в Poster по названию
-            ingredient_id = self.ingredient_matcher.match(item['name'])
+            match_result = self.ingredient_matcher.match(item['name'])
+
+            # Извлекаем только ID из кортежа (ingredient_id, name, unit, score)
+            ingredient_id = match_result[0] if match_result else None
 
             processed_item = {
                 'name': item['name'],
