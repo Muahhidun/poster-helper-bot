@@ -315,7 +315,6 @@ class PosterClient:
             'storage_id': storage_id,
             'source': 'manage',
             'type': 1,  # Normal supply
-            'status': 1,  # Active supply (not draft) - 0=draft, 1=active
             'supply_comment': comment
         }
 
@@ -360,6 +359,88 @@ class PosterClient:
             return supply_id
         else:
             raise Exception("Supply creation failed: no ID returned")
+
+    async def update_supply(
+        self,
+        supply_id: int,
+        supplier_id: int,
+        storage_id: int,
+        date: str,
+        ingredients: List[Dict],
+        account_id: int = 1,
+        comment: str = "",
+        status: int = 1  # 0=draft, 1=active
+    ) -> bool:
+        """
+        Update supply and activate it (change status from draft to active)
+
+        Args:
+            supply_id: Supply ID to update
+            supplier_id: Supplier ID
+            storage_id: Warehouse ID
+            date: Date in format "YYYY-MM-DD HH:MM:SS"
+            ingredients: List of ingredients with id, num (quantity), price
+            account_id: Payment account ID
+            comment: Supply comment
+            status: 0=draft, 1=active (default: 1 to activate)
+
+        Returns:
+            True if successful
+
+        Note: Requires ALL supply parameters, not just status
+        """
+        # Calculate total amount
+        total_amount = sum(
+            int(item['num'] * item['price'])
+            for item in ingredients
+        )
+
+        # Build form data (same as create_supply but with supply_id and status)
+        data = {
+            'supply_id': supply_id,
+            'date': date,
+            'supplier_id': supplier_id,
+            'storage_id': storage_id,
+            'source': 'manage',
+            'type': 1,
+            'status': status,
+            'supply_comment': comment
+        }
+
+        # Add ingredients
+        for idx, item in enumerate(ingredients):
+            num = item['num']
+            num_for_api = num
+            if isinstance(num, float):
+                if num.is_integer():
+                    num_for_api = int(num)
+                else:
+                    num_for_api = str(num)
+
+            ingredient_sum = int(num * item['price'])
+            data[f'ingredients[{idx}][id]'] = item['id']
+            data[f'ingredients[{idx}][num]'] = num_for_api
+            data[f'ingredients[{idx}][price]'] = int(item['price'])
+            data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
+            data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
+            data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
+
+        # Add transaction (payment)
+        data['transactions[0][transaction_id]'] = ''
+        data['transactions[0][account_id]'] = account_id
+        data['transactions[0][date]'] = date
+        data['transactions[0][amount]'] = total_amount
+        data['transactions[0][delete]'] = 0
+
+        logger.info(f"Updating supply #{supply_id}: status={status}, items={len(ingredients)}")
+
+        result = await self._request('POST', 'storage.updateSupply', data=data, use_json=False)
+
+        if result.get('success'):
+            logger.info(f"✅ Supply #{supply_id} updated successfully (status={status})")
+            return True
+        else:
+            raise Exception(f"Supply update failed: {result}")
 
 
 # Cache for user-specific clients

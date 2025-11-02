@@ -288,5 +288,10 @@ class InvoiceProcessor:
             'items_count': len(added_items),
             'items': added_items,
             'skipped_items': skipped_items,
-            'total_sum': sum(item.get('total', 0) for item in added_items)
+            'total_sum': sum(item.get('total', 0) for item in added_items),
+            # Данные для активации через update_supply
+            'storage_id': DEFAULT_WAREHOUSE_ID,
+            'account_id': DEFAULT_ACCOUNT_FROM_ID,
+            'ingredients_for_api': ingredients_for_poster,
+            'comment': f"Накладная от {parsed_data.get('supplier_name', 'Неизвестно')}"
         }
