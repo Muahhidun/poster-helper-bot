@@ -79,6 +79,28 @@ class UserDatabase:
                     FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
                 )
             """)
+
+            # Table for ingredient aliases (multi-tenant)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingredient_aliases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    alias_text TEXT NOT NULL,
+                    poster_item_id INTEGER NOT NULL,
+                    poster_item_name TEXT NOT NULL,
+                    source TEXT DEFAULT 'user',
+                    notes TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(telegram_user_id, alias_text),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            # Index for fast alias lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_aliases_user_alias
+                ON ingredient_aliases(telegram_user_id, alias_text)
+            """)
         else:
             # PostgreSQL syntax
             cursor.execute("""
@@ -102,6 +124,28 @@ class UserDatabase:
                     notifications_enabled INTEGER DEFAULT 1,
                     FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
                 )
+            """)
+
+            # Table for ingredient aliases (multi-tenant)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingredient_aliases (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    alias_text TEXT NOT NULL,
+                    poster_item_id INTEGER NOT NULL,
+                    poster_item_name TEXT NOT NULL,
+                    source TEXT DEFAULT 'user',
+                    notes TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(telegram_user_id, alias_text),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            # Index for fast alias lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_aliases_user_alias
+                ON ingredient_aliases(telegram_user_id, alias_text)
             """)
 
         conn.commit()
@@ -311,6 +355,149 @@ class UserDatabase:
                 return False
 
         return True
+
+    # === Ingredient Aliases Methods ===
+
+    def get_ingredient_aliases(self, telegram_user_id: int) -> list:
+        """Get all ingredient aliases for a user"""
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT alias_text, poster_item_id, poster_item_name, source, notes
+                FROM ingredient_aliases
+                WHERE telegram_user_id = ?
+                ORDER BY alias_text
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT alias_text, poster_item_id, poster_item_name, source, notes
+                FROM ingredient_aliases
+                WHERE telegram_user_id = %s
+                ORDER BY alias_text
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    def add_ingredient_alias(
+        self,
+        telegram_user_id: int,
+        alias_text: str,
+        poster_item_id: int,
+        poster_item_name: str,
+        source: str = "user",
+        notes: str = ""
+    ) -> bool:
+        """Add or update an ingredient alias"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                # SQLite: INSERT OR REPLACE
+                cursor.execute("""
+                    INSERT OR REPLACE INTO ingredient_aliases (
+                        telegram_user_id, alias_text, poster_item_id,
+                        poster_item_name, source, notes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                """, (
+                    telegram_user_id,
+                    alias_text.strip().lower(),
+                    poster_item_id,
+                    poster_item_name,
+                    source,
+                    notes
+                ))
+            else:
+                # PostgreSQL: ON CONFLICT UPDATE
+                cursor.execute("""
+                    INSERT INTO ingredient_aliases (
+                        telegram_user_id, alias_text, poster_item_id,
+                        poster_item_name, source, notes
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, alias_text)
+                    DO UPDATE SET
+                        poster_item_id = EXCLUDED.poster_item_id,
+                        poster_item_name = EXCLUDED.poster_item_name,
+                        source = EXCLUDED.source,
+                        notes = EXCLUDED.notes
+                """, (
+                    telegram_user_id,
+                    alias_text.strip().lower(),
+                    poster_item_id,
+                    poster_item_name,
+                    source,
+                    notes
+                ))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Alias added: '{alias_text}' -> {poster_item_name} (ID={poster_item_id})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add alias: {e}")
+            return False
+
+    def delete_ingredient_alias(self, telegram_user_id: int, alias_text: str) -> bool:
+        """Delete an ingredient alias"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    DELETE FROM ingredient_aliases
+                    WHERE telegram_user_id = ? AND alias_text = ?
+                """, (telegram_user_id, alias_text.strip().lower()))
+            else:
+                cursor.execute("""
+                    DELETE FROM ingredient_aliases
+                    WHERE telegram_user_id = %s AND alias_text = %s
+                """, (telegram_user_id, alias_text.strip().lower()))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Alias deleted: '{alias_text}'")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete alias: {e}")
+            return False
+
+    def bulk_add_aliases(self, telegram_user_id: int, aliases: list) -> int:
+        """
+        Bulk add multiple aliases
+
+        Args:
+            telegram_user_id: User ID
+            aliases: List of dicts with keys: alias_text, poster_item_id, poster_item_name, source, notes
+
+        Returns:
+            Number of aliases added
+        """
+        count = 0
+        for alias in aliases:
+            if self.add_ingredient_alias(
+                telegram_user_id=telegram_user_id,
+                alias_text=alias['alias_text'],
+                poster_item_id=alias['poster_item_id'],
+                poster_item_name=alias['poster_item_name'],
+                source=alias.get('source', 'user'),
+                notes=alias.get('notes', '')
+            ):
+                count += 1
+
+        logger.info(f"✅ Bulk import: {count}/{len(aliases)} aliases added")
+        return count
 
 
 # Singleton instance

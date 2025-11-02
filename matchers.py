@@ -361,7 +361,31 @@ class IngredientMatcher:
         logger.info(f"Loaded {len(self.ingredients)} ingredients for user {self.telegram_user_id}")
 
     def load_aliases(self):
-        """Load ingredient aliases from CSV"""
+        """Load ingredient aliases from database (with CSV fallback)"""
+        # Try loading from database first (for Railway)
+        if self.telegram_user_id:
+            try:
+                from database import get_database
+                db = get_database()
+                db_aliases = db.get_ingredient_aliases(self.telegram_user_id)
+
+                for row in db_aliases:
+                    alias = row['alias_text'].strip().lower()
+                    item_id = int(row['poster_item_id'])
+
+                    # Verify that this ingredient exists
+                    if item_id in self.ingredients:
+                        self.aliases[alias] = item_id
+                    else:
+                        logger.warning(f"Alias '{alias}' references non-existent ingredient {item_id}")
+
+                logger.info(f"Loaded {len(self.aliases)} ingredient aliases from database for user {self.telegram_user_id}")
+                return  # Successfully loaded from DB
+
+            except Exception as e:
+                logger.warning(f"Could not load aliases from database: {e}. Falling back to CSV...")
+
+        # Fallback: load from CSV (for local development)
         if not self.aliases_csv.exists():
             logger.warning(f"Item aliases file not found: {self.aliases_csv}")
             return
@@ -382,7 +406,7 @@ class IngredientMatcher:
                 else:
                     logger.warning(f"Alias '{alias}' references non-existent ingredient {item_id}")
 
-        logger.info(f"Loaded {len(self.aliases)} ingredient aliases for user {self.telegram_user_id}")
+        logger.info(f"Loaded {len(self.aliases)} ingredient aliases from CSV for user {self.telegram_user_id}")
 
     def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int]]:
         """
