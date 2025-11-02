@@ -839,9 +839,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("📸 Processing photo as invoice via GPT-4 Vision...")
 
         from invoice_processor import InvoiceProcessor
+        import json
 
         # Send initial processing message
-        processing_msg = await update.message.reply_text("🤖 Распознаю накладную через GPT-4 Vision...")
+        step_msg = await update.message.reply_text("🤖 Шаг 1/3: Распознаю накладную через GPT-4 Vision...")
 
         processor = InvoiceProcessor(telegram_user_id)
         try:
@@ -854,18 +855,65 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_path.unlink()
 
             if result['success']:
-                # Successfully processed invoice
-                supply_draft = result['supply_draft']
-                parsed_data = result['parsed_data']
-
-                # DEBUG: Отправить пользователю что распознал GPT-4 Vision
                 ocr_result = result.get('ocr_result', {})
+                parsed_data = result['parsed_data']
+                supply_draft = result['supply_draft']
+
+                # ===== ШАГ 1: Показать сырой JSON от GPT-4 Vision =====
                 if ocr_result.get('raw_response'):
-                    debug_msg = f"🔍 DEBUG - Ответ от GPT-4 Vision:\n\n{ocr_result['raw_response'][:1000]}"
-                    await update.message.reply_text(debug_msg)
+                    try:
+                        # Форматируем JSON для читабельности
+                        ocr_data = json.loads(ocr_result['raw_response'])
+                        formatted_json = json.dumps(ocr_data, ensure_ascii=False, indent=2)
+
+                        step1_text = (
+                            "✅ Шаг 1/3: Распознавание завершено\n\n"
+                            f"🔍 GPT-4 Vision распознал:\n"
+                            f"📦 Поставщик: {ocr_result.get('supplier_name', 'Не указан')}\n"
+                            f"📅 Дата: {ocr_result.get('invoice_date', 'Не указана')}\n"
+                            f"📊 Товаров: {len(ocr_result.get('items', []))}\n\n"
+                            f"Сырые данные от GPT-4:\n```json\n{formatted_json[:3000]}\n```"
+                        )
+
+                        await update.message.reply_text(step1_text, parse_mode='Markdown')
+                    except:
+                        await update.message.reply_text(
+                            f"✅ Шаг 1/3: Распознавание завершено\n\n{ocr_result['raw_response'][:1000]}"
+                        )
+
+                # ===== ШАГ 2: Показать результат парсинга =====
+                await step_msg.edit_text("🔄 Шаг 2/3: Сопоставляю товары с базой Poster...")
+
+                step2_text = "✅ Шаг 2/3: Обработка данных завершена\n\n"
+
+                # Показать какие товары найдены
+                found_items = [item for item in parsed_data['items'] if item.get('ingredient_id')]
+                not_found_items = [item for item in parsed_data['items'] if not item.get('ingredient_id')]
+
+                step2_text += f"✅ Найдено в базе: {len(found_items)}\n"
+                step2_text += f"❌ Не найдено: {len(not_found_items)}\n\n"
+
+                if found_items:
+                    step2_text += "Найденные товары:\n"
+                    for item in found_items[:8]:
+                        step2_text += f"  ✓ {item['name'][:40]}\n"
+                    if len(found_items) > 8:
+                        step2_text += f"  ... и ещё {len(found_items) - 8}\n"
+
+                if not_found_items:
+                    step2_text += "\n⚠️ Не найдены в базе:\n"
+                    for item in not_found_items[:5]:
+                        step2_text += f"  ✗ {item['name'][:40]}\n"
+                    if len(not_found_items) > 5:
+                        step2_text += f"  ... и ещё {len(not_found_items) - 5}\n"
+
+                await update.message.reply_text(step2_text)
+
+                # ===== ШАГ 3: Создание черновика =====
+                await step_msg.edit_text("🔄 Шаг 3/3: Создаю черновик поставки в Poster...")
 
                 # Build message with supply details
-                message_text = "✅ Накладная распознана!\n\n"
+                message_text = "✅ Шаг 3/3: Черновик создан!\n\n"
 
                 # Предупреждение если поставщик не найден
                 if supply_draft.get('supplier_not_found'):
@@ -880,7 +928,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 # Show added items
                 if supply_draft['items']:
-                    message_text += "Товары:\n"
+                    message_text += "Добавленные товары:\n"
                     for item in supply_draft['items'][:5]:  # Show first 5 items
                         message_text += f"  • {item['name']}: {item['quantity']} {item['unit']} × {item['price']:,.0f}₸\n"
 
@@ -907,13 +955,54 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
                 # Delete processing message and send result
-                await processing_msg.delete()
+                await step_msg.delete()
                 await update.message.reply_text(message_text, reply_markup=reply_markup)
 
             else:
                 # Error processing invoice
                 error_msg = result.get('error', 'Неизвестная ошибка')
-                await processing_msg.edit_text(
+                ocr_result = result.get('ocr_result')
+                parsed_data = result.get('parsed_data')
+
+                # Показать промежуточные данные если они есть
+                if ocr_result and ocr_result.get('raw_response'):
+                    try:
+                        # Шаг 1 прошёл успешно - показываем что было распознано
+                        ocr_data = json.loads(ocr_result['raw_response'])
+                        formatted_json = json.dumps(ocr_data, ensure_ascii=False, indent=2)
+
+                        step1_text = (
+                            "✅ Шаг 1/3: Распознавание завершено\n\n"
+                            f"🔍 GPT-4 Vision распознал:\n"
+                            f"📦 Поставщик: {ocr_result.get('supplier_name', 'Не указан')}\n"
+                            f"📅 Дата: {ocr_result.get('invoice_date', 'Не указана')}\n"
+                            f"📊 Товаров: {len(ocr_result.get('items', []))}\n\n"
+                            f"Сырые данные:\n```json\n{formatted_json[:3000]}\n```"
+                        )
+                        await update.message.reply_text(step1_text, parse_mode='Markdown')
+                    except:
+                        await update.message.reply_text(
+                            f"✅ Шаг 1/3: Распознавание завершено\n\n{ocr_result['raw_response'][:1000]}"
+                        )
+
+                if parsed_data:
+                    # Шаг 2 прошёл успешно - показываем обработку
+                    found_items = [item for item in parsed_data.get('items', []) if item.get('ingredient_id')]
+                    not_found_items = [item for item in parsed_data.get('items', []) if not item.get('ingredient_id')]
+
+                    step2_text = "✅ Шаг 2/3: Обработка данных завершена\n\n"
+                    step2_text += f"✅ Найдено в базе: {len(found_items)}\n"
+                    step2_text += f"❌ Не найдено: {len(not_found_items)}\n"
+
+                    if found_items:
+                        step2_text += "\nНайденные товары:\n"
+                        for item in found_items[:5]:
+                            step2_text += f"  ✓ {item['name'][:40]}\n"
+
+                    await update.message.reply_text(step2_text)
+
+                # Показать ошибку
+                await step_msg.edit_text(
                     f"❌ Ошибка обработки накладной:\n{error_msg}\n\n"
                     f"Попробуйте:\n"
                     f"- Сфотографировать накладную более чётко\n"

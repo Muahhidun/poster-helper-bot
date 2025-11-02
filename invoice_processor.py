@@ -43,28 +43,43 @@ class InvoiceProcessor:
         Returns:
             Результат обработки с черновиком поставки
         """
+        ocr_result = None
+        parsed_data = None
+
         try:
             # 1. Получить URL изображения из Telegram
             logger.info("📸 Получаю изображение из Telegram...")
-            image_url = await self._get_telegram_file_url(photo_file_id, bot_token)
+            try:
+                image_url = await self._get_telegram_file_url(photo_file_id, bot_token)
+            except Exception as e:
+                raise Exception(f"[ШАГ 1] Ошибка получения изображения: {e}")
 
             # 2. Обработать через GPT-4 Vision OCR
             logger.info("🤖 Отправляю изображение в GPT-4 Vision...")
-            ocr_result = await invoice_ocr.recognize_invoice_from_url(image_url)
+            try:
+                ocr_result = await invoice_ocr.recognize_invoice_from_url(image_url)
 
-            if not ocr_result.get('success'):
-                raise Exception(f"GPT-4 Vision error: {ocr_result.get('error')}")
+                if not ocr_result.get('success'):
+                    raise Exception(f"GPT-4 Vision не смог распознать: {ocr_result.get('error')}")
 
-            logger.info(f"✅ GPT-4 Vision распознал накладную: товаров={len(ocr_result.get('items', []))}")
+                logger.info(f"✅ GPT-4 Vision распознал накладную: товаров={len(ocr_result.get('items', []))}")
+            except Exception as e:
+                raise Exception(f"[ШАГ 1 - Распознавание] {e}")
 
             # 3. Обработать распознанные данные
             logger.info("📋 Обрабатываю распознанные данные...")
-            parsed_data = self._process_ocr_result(ocr_result)
-            logger.info(f"✅ Обработано: поставщик={parsed_data.get('supplier_name')}, товаров={len(parsed_data.get('items', []))}")
+            try:
+                parsed_data = self._process_ocr_result(ocr_result)
+                logger.info(f"✅ Обработано: поставщик={parsed_data.get('supplier_name')}, товаров={len(parsed_data.get('items', []))}")
+            except Exception as e:
+                raise Exception(f"[ШАГ 2 - Обработка данных] {e}")
 
             # 4. Создать черновик поставки в Poster
             logger.info("📦 Создаю черновик поставки в Poster...")
-            supply_draft = await self._create_supply_draft(parsed_data)
+            try:
+                supply_draft = await self._create_supply_draft(parsed_data)
+            except Exception as e:
+                raise Exception(f"[ШАГ 3 - Создание черновика] {e}")
 
             return {
                 'success': True,
@@ -77,7 +92,9 @@ class InvoiceProcessor:
             logger.error(f"❌ Ошибка обработки накладной: {e}")
             return {
                 'success': False,
-                'error': str(e)
+                'error': str(e),
+                'ocr_result': ocr_result,
+                'parsed_data': parsed_data
             }
 
     async def _get_telegram_file_url(self, file_id: str, bot_token: str) -> str:
