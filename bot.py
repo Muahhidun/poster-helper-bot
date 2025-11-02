@@ -44,6 +44,57 @@ logger = logging.getLogger(__name__)
 
 # === Helper Functions ===
 
+def fix_user_poster_urls():
+    """
+    Автоматическое исправление poster_base_url для всех пользователей при старте бота.
+    Обновляет пользователей с неправильным URL на правильный из конфига.
+    """
+    try:
+        from config import POSTER_BASE_URL
+        db = get_database()
+
+        # Получаем всех пользователей
+        conn = db._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT telegram_user_id, poster_base_url FROM users")
+        users = cursor.fetchall()
+
+        conn.close()
+
+        if not users:
+            logger.info("📋 Нет пользователей для проверки URL")
+            return
+
+        logger.info(f"🔍 Проверка poster_base_url для {len(users)} пользователей...")
+        logger.info(f"   Правильный URL: {POSTER_BASE_URL}")
+
+        fixed_count = 0
+        for user in users:
+            telegram_user_id = user['telegram_user_id'] if hasattr(user, '__getitem__') else user[0]
+            current_url = user['poster_base_url'] if hasattr(user, '__getitem__') else user[1]
+
+            # Проверяем нужно ли обновление
+            if current_url != POSTER_BASE_URL:
+                logger.info(f"   🔧 Исправляю пользователя {telegram_user_id}: {current_url} → {POSTER_BASE_URL}")
+
+                success = db.update_user(
+                    telegram_user_id=telegram_user_id,
+                    poster_base_url=POSTER_BASE_URL
+                )
+
+                if success:
+                    fixed_count += 1
+
+        if fixed_count > 0:
+            logger.info(f"✅ Обновлено poster_base_url для {fixed_count}/{len(users)} пользователей")
+        else:
+            logger.info(f"✅ Все пользователи имеют правильный poster_base_url")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при исправлении poster_base_url: {e}")
+
+
 def extract_packing_size(item_name: str) -> int:
     """
     Extract packing size from canonical item name in Poster.
@@ -4526,6 +4577,9 @@ def main():
 
         # Initialize database (creates tables if needed)
         get_database()
+
+        # Fix poster_base_url for existing users (auto-migration)
+        fix_user_poster_urls()
 
         # Create application
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
