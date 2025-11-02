@@ -51,11 +51,19 @@ def fix_user_poster_urls():
     """
     try:
         from config import POSTER_BASE_URL
+        from database import DB_TYPE
         db = get_database()
 
         # Получаем всех пользователей
         conn = db._get_connection()
-        cursor = conn.cursor()
+
+        # Используем правильный cursor для каждого типа БД
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+        else:
+            # PostgreSQL - используем RealDictCursor
+            from psycopg2.extras import RealDictCursor
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         cursor.execute("SELECT telegram_user_id, poster_base_url FROM users")
         users = cursor.fetchall()
@@ -71,8 +79,13 @@ def fix_user_poster_urls():
 
         fixed_count = 0
         for user in users:
-            telegram_user_id = user['telegram_user_id'] if hasattr(user, '__getitem__') else user[0]
-            current_url = user['poster_base_url'] if hasattr(user, '__getitem__') else user[1]
+            # Для PostgreSQL RealDictCursor возвращает dict, для SQLite - Row
+            if DB_TYPE == "sqlite":
+                telegram_user_id = user[0]
+                current_url = user[1]
+            else:
+                telegram_user_id = user['telegram_user_id']
+                current_url = user['poster_base_url']
 
             # Проверяем нужно ли обновление
             if current_url != POSTER_BASE_URL:
@@ -92,7 +105,7 @@ def fix_user_poster_urls():
             logger.info(f"✅ Все пользователи имеют правильный poster_base_url")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка при исправлении poster_base_url: {e}")
+        logger.error(f"❌ Ошибка при исправлении poster_base_url: {e}", exc_info=True)
 
 
 def extract_packing_size(item_name: str) -> int:
