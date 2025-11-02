@@ -69,7 +69,7 @@ class PosterClient:
                 async with session.get(url, params=params) as response:
                     result = await response.json()
             elif method.upper() == 'POST':
-                async with session.post(url, params=params, data=data) as response:
+                async with session.post(url, params=params, json=data) as response:
                     result = await response.json()
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
