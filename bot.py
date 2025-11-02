@@ -4195,7 +4195,8 @@ def main():
         app.add_handler(MessageHandler(filters.VOICE, handle_voice))
         app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         # Handle documents (PDF or images sent as files without compression)
-        app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+        # Document handler removed (not needed for current functionality)
+        # app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         app.add_handler(CallbackQueryHandler(handle_callback))
