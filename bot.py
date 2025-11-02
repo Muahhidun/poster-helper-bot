@@ -771,13 +771,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
-        # Not in receipt mode - process as invoice via Pokee AI (default behavior)
-        logger.info("📸 Processing photo as invoice via Pokee AI...")
+        # Not in receipt mode - process as invoice via GPT-4 Vision OCR (default behavior)
+        logger.info("📸 Processing photo as invoice via GPT-4 Vision...")
 
         from invoice_processor import InvoiceProcessor
 
         # Send initial processing message
-        processing_msg = await update.message.reply_text("🤖 Обрабатываю накладную через Pokee AI...")
+        processing_msg = await update.message.reply_text("🤖 Распознаю накладную через GPT-4 Vision...")
 
         processor = InvoiceProcessor(telegram_user_id)
         try:
@@ -794,10 +794,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 supply_draft = result['supply_draft']
                 parsed_data = result['parsed_data']
 
-                # DEBUG: Отправить пользователю что распознал Pokee AI
-                pokee_text = result.get('formatted_text', '')
-                if pokee_text:
-                    debug_msg = f"🔍 DEBUG - Текст от Pokee AI:\n\n{pokee_text[:1000]}"
+                # DEBUG: Отправить пользователю что распознал GPT-4 Vision
+                ocr_result = result.get('ocr_result', {})
+                if ocr_result.get('raw_response'):
+                    debug_msg = f"🔍 DEBUG - Ответ от GPT-4 Vision:\n\n{ocr_result['raw_response'][:1000]}"
                     await update.message.reply_text(debug_msg)
 
                 # Build message with supply details

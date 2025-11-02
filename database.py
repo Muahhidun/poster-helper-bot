@@ -62,7 +62,7 @@ class UserDatabase:
                     telegram_user_id INTEGER PRIMARY KEY,
                     poster_token TEXT NOT NULL,
                     poster_user_id TEXT NOT NULL,
-                    poster_base_url TEXT NOT NULL DEFAULT 'https://joinposter.com/api',
+                    poster_base_url TEXT NOT NULL,
                     subscription_status TEXT NOT NULL DEFAULT 'trial',
                     subscription_expires_at TEXT,
                     created_at TEXT NOT NULL,
@@ -86,7 +86,7 @@ class UserDatabase:
                     telegram_user_id BIGINT PRIMARY KEY,
                     poster_token TEXT NOT NULL,
                     poster_user_id TEXT NOT NULL,
-                    poster_base_url TEXT NOT NULL DEFAULT 'https://joinposter.com/api',
+                    poster_base_url TEXT NOT NULL,
                     subscription_status TEXT NOT NULL DEFAULT 'trial',
                     subscription_expires_at TIMESTAMP,
                     created_at TIMESTAMP NOT NULL,
@@ -140,10 +140,15 @@ class UserDatabase:
         telegram_user_id: int,
         poster_token: str,
         poster_user_id: str,
-        poster_base_url: str = "https://joinposter.com/api"
+        poster_base_url: str = None
     ) -> bool:
         """Create new user"""
         try:
+            # Use config default if poster_base_url not provided
+            if poster_base_url is None:
+                from config import POSTER_BASE_URL
+                poster_base_url = POSTER_BASE_URL
+
             conn = self._get_connection()
             cursor = conn.cursor()
 
