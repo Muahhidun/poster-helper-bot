@@ -213,8 +213,9 @@ class InvoiceProcessor:
             raise Exception("Не найдено ни одного товара в накладной")
 
         # Подготовить ингредиенты для Poster API
-        # Используем dict для объединения дубликатов по ingredient_id
-        ingredients_dict = {}  # ingredient_id -> {id, num, price, names[]}
+        # НЕ объединяем дубликаты - каждая позиция из накладной отдельная!
+        ingredients_for_poster = []
+        added_items = []
         skipped_items = []
 
         for item in items:
@@ -223,44 +224,25 @@ class InvoiceProcessor:
                 skipped_items.append(item['name'])
                 continue
 
-            ingredient_id = item['ingredient_id']
+            # Добавляем каждую позицию отдельно (без объединения)
+            ingredients_for_poster.append({
+                'id': item['ingredient_id'],
+                'num': item['quantity'],
+                'price': item['price']
+            })
 
-            if ingredient_id in ingredients_dict:
-                # Дубликат - складываем количество
-                logger.info(f"  📎 Объединяю дубликат: {item['name']} (ingredient_id={ingredient_id})")
-                ingredients_dict[ingredient_id]['num'] += item['quantity']
-                ingredients_dict[ingredient_id]['names'].append(item['name'])
-            else:
-                # Новый ингредиент
-                ingredients_dict[ingredient_id] = {
-                    'id': ingredient_id,
-                    'num': item['quantity'],
-                    'price': item['price'],
-                    'names': [item['name']],
-                    'unit': item['unit']
-                }
-                logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")
+            added_items.append({
+                'name': item['name'],
+                'quantity': item['quantity'],
+                'unit': item['unit'],
+                'price': item['price'],
+                'total': item['quantity'] * item['price']
+            })
 
-        if not ingredients_dict:
+            logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")
+
+        if not ingredients_for_poster:
             raise Exception("Ни один товар не был сопоставлен с ингредиентами в Poster")
-
-        # Конвертируем в список для API
-        ingredients_for_poster = [
-            {'id': ing['id'], 'num': ing['num'], 'price': ing['price']}
-            for ing in ingredients_dict.values()
-        ]
-
-        # Подготовить список добавленных товаров для отображения
-        added_items = [
-            {
-                'name': ' + '.join(ing['names']) if len(ing['names']) > 1 else ing['names'][0],
-                'quantity': ing['num'],
-                'unit': ing['unit'],
-                'price': ing['price'],
-                'total': ing['num'] * ing['price']
-            }
-            for ing in ingredients_dict.values()
-        ]
 
         # Дата поставки - ВСЕГДА текущая (фактическая)
         supply_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
