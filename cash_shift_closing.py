@@ -229,22 +229,13 @@ class CashShiftClosing:
             cashless_diff = calculations['cashless_diff']
             transaction_ids = []
 
-            # 1. Транзакция излишка/недостачи
-            if abs(day_diff) >= 1:  # Только если разница >= 1₸
-                transaction_type = 1 if day_diff > 0 else 0  # 1=внесение, 0=расход
-                surplus_shortage_id = await self.poster_client.create_transaction(
-                    transaction_type=transaction_type,
-                    category_id=CATEGORY_IDS['cash_shifts'],
-                    account_from_id=ACCOUNT_IDS['cash_drawer'],
-                    amount=abs(int(day_diff)),
-                    date=transaction_date,
-                    comment=f"{'Излишек' if day_diff > 0 else 'Недостача'} {datetime.strptime(date, '%Y%m%d').strftime('%d.%m.%Y')}"
-                )
-                transaction_ids.append(surplus_shortage_id)
-                logger.info(f"✅ Излишек/недостача: {day_diff:+,.0f}₸, ID={surplus_shortage_id}")
+            # 1. Излишек/недостача - ТОЛЬКО показываем, транзакцию не создаем
+            # Пользователь сам создаст её с планшета Poster
+            surplus_shortage_id = None
+            if abs(day_diff) >= 1:
+                logger.info(f"📊 Излишек/недостача: {day_diff:+,.0f}₸ (транзакцию создайте вручную с планшета)")
             else:
-                surplus_shortage_id = None
-                logger.info("✅ Излишек/недостача: 0₸ (не создаём транзакцию)")
+                logger.info("📊 Излишек/недостача: 0₸")
 
             # 2. Корректировка безнала (если есть расхождение)
             correction_id = None
@@ -276,20 +267,18 @@ class CashShiftClosing:
             else:
                 logger.info("✅ Корректировка безнал: не требуется")
 
-            # 3. Транзакция "Закрытие смены" (оставленные деньги)
-            closing_id = await self.poster_client.create_transaction(
-                transaction_type=0,  # расход
-                category_id=CATEGORY_IDS['cash_shifts'],
-                account_from_id=ACCOUNT_IDS['cash_left'],
-                amount=cash_to_leave,
-                date=transaction_date,
-                comment=f"Закрытие смены {datetime.strptime(date, '%Y%m%d').strftime('%d.%m.%Y')}"
-            )
-            transaction_ids.append(closing_id)
-            logger.info(f"✅ Закрытие смены: {cash_to_leave:,}₸, ID={closing_id}")
+            # 3. Расчёт остатка на завтра и суммы к инкассации
+            # cash_to_leave (параметр) = бумажные деньги, которые ввёл пользователь
+            # Но на завтра остаются: бумажные + монеты
+            total_cash_remaining = cash_to_leave + calculations['cash_coins']
 
-            # Рассчитываем сумму к инкассации
-            cash_for_collection = calculations['cash_bills'] + calculations['cash_coins'] - cash_to_leave
+            # К инкассации = вся наличка - то что оставили на завтра
+            total_cash = calculations['cash_bills'] + calculations['cash_coins']
+            cash_for_collection = total_cash - total_cash_remaining
+
+            closing_id = None  # Транзакцию закрытия смены не создаём
+            logger.info(f"📝 На завтра остаётся: {total_cash_remaining:,.0f}₸ (бумажные {cash_to_leave:,.0f}₸ + монеты {calculations['cash_coins']:,.0f}₸)")
+            logger.info(f"💰 К инкассации: {cash_for_collection:,.0f}₸")
 
             return {
                 'success': True,
@@ -298,6 +287,7 @@ class CashShiftClosing:
                 'correction_id': correction_id,
                 'closing_id': closing_id,
                 'cash_to_leave': cash_to_leave,
+                'total_cash_remaining': total_cash_remaining,
                 'cash_for_collection': cash_for_collection
             }
 
@@ -349,25 +339,24 @@ class CashShiftClosing:
 • **Итого фактически (с вычетом остатка на начало):** {calculations['fact_adjusted']:,.0f}₸
 
 {diff_emoji} **ИТОГО ДЕНЬ:** {day_diff:+,.0f}₸ {"(Излишек)" if day_diff > 0 else "(Недостача)" if day_diff < 0 else "(Идеально!)"}
-
-💵 **Транзакции созданы:**
 """
 
-        if transactions['surplus_shortage_id']:
-            report += f"• {'Излишек' if day_diff > 0 else 'Недостача'}: ID {transactions['surplus_shortage_id']}\n"
-        else:
-            report += f"• Излишек/недостача: нет (0₸)\n"
+        # Излишек/недостача - напоминание создать вручную
+        if abs(day_diff) >= 1:
+            report += f"\n⚠️ **{'Излишек' if day_diff > 0 else 'Недостача'}: {abs(day_diff):,.0f}₸**\n"
+            report += f"_Создайте эту транзакцию вручную с планшета Poster (счёт: Денежный ящик кассира)_\n"
 
+        # Транзакции, созданные ботом
         if transactions['correction_id']:
             cashless_diff = calculations['cashless_diff']
+            report += f"\n💵 **Транзакция создана:**\n"
             report += f"• Корректировка безнал ({cashless_diff:+,.0f}₸): ID {transactions['correction_id']}\n"
-        else:
-            report += f"• Корректировка безнал: не требуется\n"
-
-        report += f"• Закрытие смены: ID {transactions['closing_id']}\n"
 
         report += f"""
-📝 **На смену оставлено:** {transactions['cash_to_leave']:,.0f}₸
+📝 **На смену оставлено:** {transactions['total_cash_remaining']:,.0f}₸
+   • Бумажные: {transactions['cash_to_leave']:,.0f}₸
+   • Монеты: {calculations['cash_coins']:,.0f}₸
+
 💰 **К инкассации:** {transactions['cash_for_collection']:,.0f}₸
 """
 
