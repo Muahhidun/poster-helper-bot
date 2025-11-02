@@ -4351,11 +4351,29 @@ async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE
         if draft.get('type') == 'supply':
             await query.edit_message_text("⏳ Создаю поставку в Poster...")
 
+            # Объединить дубликаты ингредиентов (по id) перед отправкой в API
+            ingredients_dict = {}
+            for item in draft['items']:
+                item_id = item['id']
+                if item_id in ingredients_dict:
+                    # Дубликат - складываем количество
+                    ingredients_dict[item_id]['num'] += item['num']
+                else:
+                    # Новый ингредиент - только нужные поля
+                    ingredients_dict[item_id] = {
+                        'id': item_id,
+                        'num': item['num'],
+                        'price': item['price']
+                    }
+
+            # Конвертируем в список
+            ingredients_for_api = list(ingredients_dict.values())
+
             supply_id = await poster.create_supply(
                 supplier_id=draft['supplier_id'],
                 storage_id=draft['storage_id'],
                 date=draft['date'],
-                ingredients=draft['items'],
+                ingredients=ingredients_for_api,
                 account_id=draft['account_id'],
                 comment=""
             )
