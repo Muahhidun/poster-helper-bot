@@ -168,6 +168,9 @@ class InvoiceProcessor:
         Returns:
             Данные созданного черновика
         """
+        from datetime import datetime
+        from config import DEFAULT_WAREHOUSE_ID, DEFAULT_ACCOUNT_FROM_ID
+
         supplier_id = parsed_data.get('supplier_id')
         supplier_not_found = False
 
@@ -190,45 +193,47 @@ class InvoiceProcessor:
         if not items:
             raise Exception("Не найдено ни одного товара в накладной")
 
-        # Подготовить данные для Poster API
-        from datetime import datetime
-        supply_date = parsed_data.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
-
-        # Создать поставку
-        supply_data = {
-            'supplier_id': supplier_id,
-            'type': 1,  # Приход
-            'date': supply_date,
-            'status': 0,  # Черновик
-        }
-
-        # Создаём поставку
-        supply_result = await self.poster_client._request('POST', 'supply.createIncomingOrder', data=supply_data)
-        supply_id = supply_result.get('incoming_order_id')
-
-        logger.info(f"✅ Создан черновик поставки #{supply_id}")
-
-        # Добавляем товары
+        # Подготовить ингредиенты для Poster API
+        ingredients_for_poster = []
         added_items = []
+
         for item in items:
             if not item.get('ingredient_id'):
                 logger.warning(f"⚠️ Пропускаю '{item['name']}' - ингредиент не найден в Poster")
                 continue
 
-            item_data = {
-                'incoming_order_id': supply_id,
-                'product_id': item['ingredient_id'],
-                'type': 'ingredient',
+            ingredients_for_poster.append({
+                'id': item['ingredient_id'],
                 'num': item['quantity'],
-                'cost': item['price']
-            }
+                'price': item['price']
+            })
+            added_items.append(item)
+            logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")
 
-            try:
-                await self.poster_client._request('POST', 'supply.createIncomingOrderProduct', data=item_data)
-                added_items.append(item)
-                logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")
-            except Exception as e:
-                logger.error(f"  ✗ Ошибка добавления '{item['name']}': {e}")
+        if not ingredients_for_poster:
+            raise Exception("Ни один товар не был сопоставлен с ингредиентами в Poster")
+
+        # Подготовить дату
+        supply_date = parsed_data.get('invoice_date')
+        if supply_date:
+            # Конвертируем из YYYY-MM-DD в YYYY-MM-DD HH:MM:SS
+            supply_date = f"{supply_date} {datetime.now().strftime('%H:%M:%S')}"
+        else:
+            supply_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Создаём поставку через правильный метод API
+        logger.info(f"📦 Создаю поставку: поставщик={supplier_id}, товаров={len(ingredients_for_poster)}")
+
+        supply_id = await self.poster_client.create_supply(
+            supplier_id=supplier_id,
+            storage_id=DEFAULT_WAREHOUSE_ID,
+            date=supply_date,
+            ingredients=ingredients_for_poster,
+            account_id=DEFAULT_ACCOUNT_FROM_ID,
+            comment=f"Накладная от {parsed_data.get('supplier_name', 'Неизвестно')}"
+        )
+
+        logger.info(f"✅ Создана поставка #{supply_id}")
 
         return {
             'supply_id': supply_id,
