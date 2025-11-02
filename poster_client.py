@@ -52,8 +52,17 @@ class PosterClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def _request(self, method: str, endpoint: str, params: Dict = None, data: Dict = None) -> Dict:
-        """Make API request to Poster"""
+    async def _request(self, method: str, endpoint: str, params: Dict = None, data: Dict = None, use_json: bool = True) -> Dict:
+        """
+        Make API request to Poster
+
+        Args:
+            method: HTTP method (GET, POST)
+            endpoint: API endpoint
+            params: Query parameters
+            data: Request body data
+            use_json: If True, send as JSON. If False, send as form-urlencoded (default: True)
+        """
         session = await self._get_session()
         url = f"{self.base_url}/{endpoint}"
 
@@ -69,8 +78,14 @@ class PosterClient:
                 async with session.get(url, params=params) as response:
                     result = await response.json()
             elif method.upper() == 'POST':
-                async with session.post(url, params=params, json=data) as response:
-                    result = await response.json()
+                if use_json:
+                    # Send as JSON (Content-Type: application/json)
+                    async with session.post(url, params=params, json=data) as response:
+                        result = await response.json()
+                else:
+                    # Send as form-urlencoded (Content-Type: application/x-www-form-urlencoded)
+                    async with session.post(url, params=params, data=data) as response:
+                        result = await response.json()
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -335,7 +350,8 @@ class PosterClient:
         logger.info(f"Creating supply: supplier={supplier_id}, items={len(ingredients)}, total={total_amount}")
         logger.info(f"Supply data: {data}")
 
-        result = await self._request('POST', 'storage.createSupply', data=data)
+        # storage.createSupply требует form-urlencoded, не JSON!
+        result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
 
         supply_id = result.get('response')
         if supply_id:
