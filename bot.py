@@ -838,657 +838,100 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Not in receipt mode - process as invoice via GPT-4 Vision OCR (default behavior)
         logger.info("📸 Processing photo as invoice via GPT-4 Vision...")
 
-        from invoice_processor import InvoiceProcessor
+        import invoice_ocr
         import json
 
         # Send initial processing message
-        step_msg = await update.message.reply_text("🤖 Шаг 1/3: Распознаю накладную через GPT-4 Vision...")
+        step_msg = await update.message.reply_text("🤖 Распознаю накладную через GPT-4 Vision...")
 
-        processor = InvoiceProcessor(telegram_user_id)
         try:
-            result = await processor.process_invoice_photo(
-                photo_file_id=photo.file_id,
-                bot_token=context.bot.token
-            )
+            # 1. Получить URL изображения из Telegram
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.telegram.org/bot{context.bot.token}/getFile?file_id={photo.file_id}"
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        raise Exception(f"Failed to get file info: {response.status}")
+                    data = await response.json()
+                    file_path = data['result']['file_path']
+                file_url = f"https://api.telegram.org/file/bot{context.bot.token}/{file_path}"
+
+            # 2. Распознать через GPT-4 Vision
+            ocr_result = await invoice_ocr.recognize_invoice_from_url(file_url)
 
             # Clean up photo file
             photo_path.unlink()
 
-            if result['success']:
-                ocr_result = result.get('ocr_result', {})
-                parsed_data = result['parsed_data']
-                supply_draft = result['supply_draft']
-
-                # ===== ШАГ 1: Показать сырой JSON от GPT-4 Vision =====
-                if ocr_result.get('raw_response'):
-                    try:
-                        # Форматируем JSON для читабельности
-                        ocr_data = json.loads(ocr_result['raw_response'])
-                        formatted_json = json.dumps(ocr_data, ensure_ascii=False, indent=2)
-
-                        step1_text = (
-                            "✅ Шаг 1/3: Распознавание завершено\n\n"
-                            f"🔍 GPT-4 Vision распознал:\n"
-                            f"📦 Поставщик: {ocr_result.get('supplier_name', 'Не указан')}\n"
-                            f"📅 Дата: {ocr_result.get('invoice_date', 'Не указана')}\n"
-                            f"📊 Товаров: {len(ocr_result.get('items', []))}\n\n"
-                            f"Сырые данные от GPT-4:\n```json\n{formatted_json[:3000]}\n```"
-                        )
-
-                        await update.message.reply_text(step1_text, parse_mode='Markdown')
-                    except:
-                        await update.message.reply_text(
-                            f"✅ Шаг 1/3: Распознавание завершено\n\n{ocr_result['raw_response'][:1000]}"
-                        )
-
-                # ===== ШАГ 2: Показать результат парсинга =====
-                await step_msg.edit_text("🔄 Шаг 2/3: Сопоставляю товары с базой Poster...")
-
-                step2_text = "✅ Шаг 2/3: Обработка данных завершена\n\n"
-
-                # Показать какие товары найдены
-                found_items = [item for item in parsed_data['items'] if item.get('ingredient_id')]
-                not_found_items = [item for item in parsed_data['items'] if not item.get('ingredient_id')]
-
-                step2_text += f"✅ Найдено в базе: {len(found_items)}\n"
-                step2_text += f"❌ Не найдено: {len(not_found_items)}\n\n"
-
-                if found_items:
-                    step2_text += "Найденные товары:\n"
-                    for item in found_items[:8]:
-                        step2_text += f"  ✓ {item['name'][:40]}\n"
-                    if len(found_items) > 8:
-                        step2_text += f"  ... и ещё {len(found_items) - 8}\n"
-
-                if not_found_items:
-                    step2_text += "\n⚠️ Не найдены в базе:\n"
-                    for item in not_found_items[:5]:
-                        step2_text += f"  ✗ {item['name'][:40]}\n"
-                    if len(not_found_items) > 5:
-                        step2_text += f"  ... и ещё {len(not_found_items) - 5}\n"
-
-                await update.message.reply_text(step2_text)
-
-                # ===== ШАГ 3: Создание черновика =====
-                await step_msg.edit_text("🔄 Шаг 3/3: Создаю черновик поставки в Poster...")
-
-                # Build message with supply details
-                message_text = "✅ Шаг 3/3: Черновик создан!\n\n"
-
-                # Предупреждение если поставщик не найден
-                if supply_draft.get('supplier_not_found'):
-                    message_text += "⚠️ Поставщик не распознан, используется дефолтный\n\n"
-
-                message_text += (
-                    f"📦 Поставщик: {supply_draft['supplier_name'] or 'Не распознан'}\n"
-                    f"📅 Дата: {supply_draft['date']}\n"
-                    f"📊 Позиций добавлено: {supply_draft['items_count']}\n"
-                    f"💰 Сумма: {supply_draft['total_sum']:,.0f}₸\n\n"
-                )
-
-                # Show added items
-                if supply_draft['items']:
-                    message_text += "Добавленные товары:\n"
-                    for item in supply_draft['items'][:5]:  # Show first 5 items
-                        message_text += f"  • {item['name']}: {item['quantity']} {item['unit']} × {item['price']:,.0f}₸\n"
-
-                    if supply_draft['items_count'] > 5:
-                        message_text += f"  ... и ещё {supply_draft['items_count'] - 5} позиций\n"
-
-                # Show skipped items if any
-                skipped = supply_draft.get('skipped_items', [])
-                if skipped:
-                    message_text += f"\n⚠️ Пропущено товаров: {len(skipped)}\n"
-                    for skipped_name in skipped[:3]:
-                        message_text += f"  ✗ {skipped_name}\n"
-                    if len(skipped) > 3:
-                        message_text += f"  ... и ещё {len(skipped) - 3}\n"
-
-                message_text += f"\n📝 Черновик поставки #{supply_draft['supply_id']} создан\n\n"
-                message_text += "Подтвердить поставку?"
-
-                # Add confirmation buttons
-                keyboard = [
-                    [
-                        InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_supply:{supply_draft['supply_id']}"),
-                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_supply")
-                    ]
-                ]
-
-                # Добавить кнопку изменения поставщика если не найден
-                if supply_draft.get('supplier_not_found'):
-                    keyboard.insert(0, [
-                        InlineKeyboardButton("🔄 Изменить поставщика", callback_data=f"change_supplier_for_supply:{supply_draft['supply_id']}")
-                    ])
-
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                # Сохранить данные поставки для последующей активации
-                context.user_data[f'supply_draft_{supply_draft["supply_id"]}'] = {
-                    'supplier_id': supply_draft['supplier_id'],
-                    'storage_id': supply_draft['storage_id'],
-                    'account_id': supply_draft['account_id'],
-                    'date': supply_draft['date'],
-                    'ingredients': supply_draft['ingredients_for_api'],
-                    'comment': supply_draft['comment']
-                }
-
-                # Delete processing message and send result
-                await step_msg.delete()
-                await update.message.reply_text(message_text, reply_markup=reply_markup)
-
-            else:
-                # Error processing invoice
-                error_msg = result.get('error', 'Неизвестная ошибка')
-                ocr_result = result.get('ocr_result')
-                parsed_data = result.get('parsed_data')
-
-                # Показать промежуточные данные если они есть
-                if ocr_result and ocr_result.get('raw_response'):
-                    try:
-                        # Шаг 1 прошёл успешно - показываем что было распознано
-                        ocr_data = json.loads(ocr_result['raw_response'])
-                        formatted_json = json.dumps(ocr_data, ensure_ascii=False, indent=2)
-
-                        step1_text = (
-                            "✅ Шаг 1/3: Распознавание завершено\n\n"
-                            f"🔍 GPT-4 Vision распознал:\n"
-                            f"📦 Поставщик: {ocr_result.get('supplier_name', 'Не указан')}\n"
-                            f"📅 Дата: {ocr_result.get('invoice_date', 'Не указана')}\n"
-                            f"📊 Товаров: {len(ocr_result.get('items', []))}\n\n"
-                            f"Сырые данные:\n```json\n{formatted_json[:3000]}\n```"
-                        )
-                        await update.message.reply_text(step1_text, parse_mode='Markdown')
-                    except:
-                        await update.message.reply_text(
-                            f"✅ Шаг 1/3: Распознавание завершено\n\n{ocr_result['raw_response'][:1000]}"
-                        )
-
-                if parsed_data:
-                    # Шаг 2 прошёл успешно - показываем обработку
-                    found_items = [item for item in parsed_data.get('items', []) if item.get('ingredient_id')]
-                    not_found_items = [item for item in parsed_data.get('items', []) if not item.get('ingredient_id')]
-
-                    step2_text = "✅ Шаг 2/3: Обработка данных завершена\n\n"
-                    step2_text += f"✅ Найдено в базе: {len(found_items)}\n"
-                    step2_text += f"❌ Не найдено: {len(not_found_items)}\n"
-
-                    if found_items:
-                        step2_text += "\nНайденные товары:\n"
-                        for item in found_items[:5]:
-                            step2_text += f"  ✓ {item['name'][:40]}\n"
-
-                    await update.message.reply_text(step2_text)
-
-                # Показать ошибку
-                await step_msg.edit_text(
-                    f"❌ Ошибка обработки накладной:\n{error_msg}\n\n"
-                    f"Попробуйте:\n"
-                    f"- Сфотографировать накладную более чётко\n"
-                    f"- Убедиться, что видны поставщик, дата и таблица товаров\n"
-                    f"- Проверить освещение"
-                )
-
-        finally:
-            await processor.close()
-
-    except Exception as e:
-        logger.error(f"Photo handling failed: {e}", exc_info=True)
-        await update.message.reply_text(
-            f"❌ Ошибка обработки фото:\n{str(e)[:200]}\n\n"
-            f"Попробуйте переснять фото."
-        )
-
-
-@authorized_only
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle PDF document (invoice recognition)"""
-    try:
-        document = update.message.document
-        mime_type = document.mime_type
-
-        # Check if it's a supported format (PDF or image)
-        supported_images = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-        if mime_type == "application/pdf":
-            file_type = "PDF"
-            extension = "pdf"
-            emoji = "📄"
-        elif mime_type in supported_images:
-            file_type = "изображение"
-            extension = mime_type.split("/")[1]
-            emoji = "🖼️"
-        else:
-            await update.message.reply_text(
-                "❌ Поддерживаются только PDF и изображения (JPG, PNG, WEBP).\n\n"
-                "Для накладных также можно отправить фото или голосовое сообщение."
-            )
-            return
-
-        await update.message.reply_text(f"{emoji} Распознаю накладную из {file_type} (без сжатия)...")
-
-        # Download file
-        doc_file = await document.get_file()
-        file_path = Path(f"storage/doc_{update.message.message_id}.{extension}")
-        await doc_file.download_to_drive(file_path)
-
-        # Read file bytes
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-
-        # Parse invoice using Claude Vision
-        parser = get_parser_service()
-        parsed = await parser.parse_invoice_image(file_data, media_type=mime_type)
-
-        # Clean up file
-        file_path.unlink()
-
-        if not parsed:
-            await update.message.reply_text(
-                f"❌ Не удалось распознать накладную из {file_type}.\n\n"
-                "Попробуйте:\n"
-                "- Убедиться, что файл содержит таблицу с позициями\n"
-                "- Проверить, что есть название поставщика\n"
-                "- Отправить накладную другим способом"
-            )
-            return
-
-        await update.message.reply_text(
-            f"✅ Накладная из {file_type} распознана!\n\n"
-            f"Поставщик из накладной: {parsed.get('supplier')}\n"
-            f"Позиций найдено: {len(parsed.get('items', []))}"
-        )
-
-        # Process as supply (same logic as photo/voice)
-        if parsed.get('type') == 'supply':
-            await process_supply(update, context, parsed)
-        else:
-            await update.message.reply_text("❌ Неизвестный тип данных из накладной")
-
-    except Exception as e:
-        logger.error(f"Document handling failed: {e}", exc_info=True)
-        await update.message.reply_text(
-            f"❌ Ошибка обработки PDF:\n{str(e)[:200]}\n\n"
-            f"Попробуйте отправить накладную фотографией или голосом."
-        )
-
-
-# === Onboarding Handler ===
-
-async def handle_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE, step: str):
-    """Handle onboarding flow for new users"""
-    from database import get_database
-    import aiohttp
-
-    telegram_user_id = update.effective_user.id
-    text = update.message.text.strip()
-    db = get_database()
-
-    if step == 'waiting_token':
-        # User sent Poster API token
-        await update.message.reply_text("🔍 Проверяю токен...")
-
-        # Validate token by making test request
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    "https://joinposter.com/api/access.getTablets",
-                    params={'token': text},
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    result = await response.json()
-
-                    if 'error' in result:
-                        await update.message.reply_text(
-                            "❌ Неверный токен!\n\n"
-                            "Проверьте:\n"
-                            "1. Скопирован ли токен полностью\n"
-                            "2. Нет ли лишних пробелов\n"
-                            "3. Действителен ли токен в Poster\n\n"
-                            "Попробуйте еще раз или /cancel для отмены:"
-                        )
-                        return
-
-            # Token is valid - now try to get User ID automatically
-            await update.message.reply_text("✅ Токен принят!\n\n⏳ Получаю ваш User ID...")
-
-            # Get current user info from Poster API
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        "https://joinposter.com/api/access.getUsers",
-                        params={'token': text},
-                        timeout=aiohttp.ClientTimeout(total=10)
-                    ) as response:
-                        result = await response.json()
-
-                        if 'error' in result or 'response' not in result:
-                            raise Exception("Failed to get users list")
-
-                        # Find the user with access rights (usually the first one with role_id 1)
-                        users = result.get('response', [])
-                        if not users:
-                            raise Exception("No users found")
-
-                        # Get the first user (owner/admin) - usually the one who created the token
-                        owner_user = None
-                        for usr in users:
-                            if int(usr.get('role_id', 0)) == 1:  # Role 1 = Owner/Admin
-                                owner_user = usr
-                                break
-
-                        if not owner_user:
-                            # If no owner found, just take first user
-                            owner_user = users[0]
-
-                        poster_user_id = str(owner_user['user_id'])
-                        poster_user_name = owner_user.get('name', 'Unknown')
-
-                        # Save user to database
-                        success = db.create_user(
-                            telegram_user_id=telegram_user_id,
-                            poster_token=text,
-                            poster_user_id=poster_user_id,
-                            poster_base_url="https://joinposter.com/api"
-                        )
-
-                        if not success:
-                            await update.message.reply_text(
-                                "❌ Ошибка при создании аккаунта.\n\n"
-                                "Возможно вы уже зарегистрированы?\n"
-                                "Попробуйте /start"
-                            )
-                            return
-
-                        # Clear onboarding data
-                        context.user_data.clear()
-
-                        # Create user's data directory
-                        from pathlib import Path
-                        import csv as csv_module
-                        user_data_dir = config.get_user_data_dir(telegram_user_id)
-                        user_data_dir.mkdir(parents=True, exist_ok=True)
-
-                        # Create empty CSV files with headers only
-                        csv_files = {
-                            'alias_category_mapping.csv': ['alias_text', 'poster_category_id', 'poster_category_name', 'notes'],
-                            'alias_item_mapping.csv': ['alias_text', 'poster_item_id', 'poster_item_name', 'notes'],
-                            'poster_suppliers.csv': ['supplier_id', 'name', 'aliases'],
-                            'poster_accounts.csv': ['account_id', 'account_name', 'account_type'],
-                            'poster_ingredients.csv': ['ingredient_id', 'ingredient_name', 'unit'],
-                            'poster_products.csv': ['product_id', 'product_name', 'category']
-                        }
-
-                        for filename, headers in csv_files.items():
-                            csv_path = user_data_dir / filename
-                            with open(csv_path, 'w', encoding='utf-8', newline='') as f:
-                                writer = csv_module.writer(f)
-                                writer.writerow(headers)
-
-                        logger.info(f"Created empty CSV files for user {telegram_user_id}")
-
-                        # Fetch user's real data from Poster API
-                        await update.message.reply_text("⏳ Загружаю данные из вашего Poster аккаунта...")
-
-                        try:
-                            poster_client = get_poster_client(telegram_user_id)
-
-                            # Fetch categories and generate aliases
-                            categories = await poster_client.get_categories()
-                            logger.info(f"Fetched {len(categories)} categories for user {telegram_user_id}")
-
-                            # Auto-generate category aliases
-                            AliasGenerator.create_category_aliases_csv(
-                                categories,
-                                user_data_dir / 'alias_category_mapping.csv'
-                            )
-
-                            # Fetch accounts and generate aliases
-                            accounts = await poster_client.get_accounts()
-                            AliasGenerator.create_account_aliases_csv(
-                                accounts,
-                                user_data_dir / 'poster_accounts.csv'
-                            )
-                            logger.info(f"Saved {len(accounts)} accounts with aliases for user {telegram_user_id}")
-
-                            # Fetch ingredients
-                            ingredients = await poster_client.get_ingredients()
-                            with open(user_data_dir / 'poster_ingredients.csv', 'w', encoding='utf-8', newline='') as f:
-                                writer = csv_module.writer(f)
-                                writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
-                                for ing in ingredients:
-                                    writer.writerow([ing['ingredient_id'], ing['ingredient_name'], ing.get('unit', '')])
-                            logger.info(f"Saved {len(ingredients)} ingredients for user {telegram_user_id}")
-
-                            # Fetch products
-                            products = await poster_client.get_products()
-                            with open(user_data_dir / 'poster_products.csv', 'w', encoding='utf-8', newline='') as f:
-                                writer = csv_module.writer(f)
-                                writer.writerow(['product_id', 'product_name', 'category'])
-                                for prod in products:
-                                    writer.writerow([prod['product_id'], prod['product_name'], prod.get('category_name', '')])
-                            logger.info(f"Saved {len(products)} products for user {telegram_user_id}")
-
-                            # Fetch suppliers from recent supplies (last 30 days)
-                            from datetime import datetime, timedelta
-                            date_to = datetime.now().strftime("%Y%m%d")
-                            date_from = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
-                            supplies = await poster_client.get_supplies(date_from=date_from, date_to=date_to)
-
-                            # Extract unique suppliers
-                            suppliers_dict = {}
-                            for supply in supplies:
-                                supplier_id = supply.get('supplier_id')
-                                supplier_name = supply.get('supplier_name', '')
-                                if supplier_id and supplier_name:
-                                    suppliers_dict[supplier_id] = supplier_name
-
-                            # Save suppliers with auto-generated aliases
-                            suppliers_list = [
-                                {'supplier_id': sid, 'supplier_name': sname}
-                                for sid, sname in suppliers_dict.items()
-                            ]
-                            AliasGenerator.create_supplier_aliases_csv(
-                                suppliers_list,
-                                user_data_dir / 'poster_suppliers.csv'
-                            )
-                            logger.info(f"Saved {len(suppliers_dict)} suppliers with aliases for user {telegram_user_id}")
-
-                        except Exception as e:
-                            logger.error(f"Failed to fetch Poster data: {e}")
-                            await update.message.reply_text(
-                                "⚠️ Не удалось загрузить данные из Poster.\n"
-                                "Но регистрация завершена - вы можете начать работу!"
-                            )
-
-                        # Notify admin about successful registration
-                        user = update.effective_user
-                        user_data = db.get_user(telegram_user_id)
-                        await notify_admin(
-                            context,
-                            f"🎉 Регистрация завершена!\n\n"
-                            f"Пользователь: {user.first_name} {user.last_name or ''}\n"
-                            f"Username: @{user.username or 'нет'}\n"
-                            f"Telegram ID: {telegram_user_id}\n"
-                            f"Poster User: {poster_user_name}\n"
-                            f"Poster User ID: {poster_user_id}\n"
-                            f"Триал до: {user_data['subscription_expires_at'][:10] if user_data else 'N/A'}"
-                        )
-
-                        await update.message.reply_text(
-                            "🎉 Настройка завершена!\n\n"
-                            "✅ Ваш аккаунт подключен\n"
-                            f"✅ Определён пользователь: {poster_user_name}\n"
-                            "✅ Триал на 14 дней активирован\n\n"
-                            "Теперь можете:\n"
-                            "   • 🎤 Отправлять голосовые для транзакций\n"
-                            "   • 📸 Отправлять фото накладных для поставок\n\n"
-                            "Попробуйте отправить голосовое сообщение:\n"
-                            "\"Оставил в кассе 5000 кассир Айгуль\"\n\n"
-                            "Команды:\n"
-                            "/settings - настройки\n"
-                            "/subscription - подписка\n"
-                            "/help - помощь"
-                        )
-                        return
-
-            except Exception as e:
-                logger.error(f"Auto User ID detection failed: {e}")
-                # Fallback to User ID = 1 (owner is always 1 in Poster)
-                logger.info("Using default User ID = 1 (owner)")
-
-                poster_user_id = "1"
-
-                # Save user to database
-                success = db.create_user(
-                    telegram_user_id=telegram_user_id,
-                    poster_token=text,
-                    poster_user_id=poster_user_id,
-                    poster_base_url="https://joinposter.com/api"
-                )
-
-                if not success:
-                    await update.message.reply_text(
-                        "❌ Ошибка при создании аккаунта.\n\n"
-                        "Возможно вы уже зарегистрированы?\n"
-                        "Попробуйте /start"
-                    )
-                    return
-
-                # Clear onboarding data
-                context.user_data.clear()
-
-                # Create user's data directory
-                from pathlib import Path
-                import csv as csv_module
-                user_data_dir = config.get_user_data_dir(telegram_user_id)
-                user_data_dir.mkdir(parents=True, exist_ok=True)
-
-                # Create empty CSV files with headers only
-                csv_files = {
-                    'alias_category_mapping.csv': ['alias_text', 'poster_category_id', 'poster_category_name', 'notes'],
-                    'alias_item_mapping.csv': ['alias_text', 'poster_item_id', 'poster_item_name', 'notes'],
-                    'poster_suppliers.csv': ['supplier_id', 'name', 'aliases'],
-                    'poster_accounts.csv': ['account_id', 'account_name', 'account_type'],
-                    'poster_ingredients.csv': ['ingredient_id', 'ingredient_name', 'unit'],
-                    'poster_products.csv': ['product_id', 'product_name', 'category']
-                }
-
-                for filename, headers in csv_files.items():
-                    csv_path = user_data_dir / filename
-                    with open(csv_path, 'w', encoding='utf-8', newline='') as f:
-                        writer = csv_module.writer(f)
-                        writer.writerow(headers)
-
-                logger.info(f"Created empty CSV files for user {telegram_user_id}")
-
-                # Fetch user's real data from Poster API
-                await update.message.reply_text("⏳ Загружаю данные из вашего Poster аккаунта...")
-
-                try:
-                    poster_client = get_poster_client(telegram_user_id)
-
-                    # Fetch categories
-                    categories = await poster_client.get_categories()
-                    logger.info(f"Fetched {len(categories)} categories for user {telegram_user_id}")
-
-                    # Fetch accounts
-                    accounts = await poster_client.get_accounts()
-                    with open(user_data_dir / 'poster_accounts.csv', 'w', encoding='utf-8', newline='') as f:
-                        writer = csv_module.writer(f)
-                        writer.writerow(['account_id', 'account_name', 'account_type'])
-                        for acc in accounts:
-                            writer.writerow([acc['account_id'], acc['name'], acc.get('type', '')])
-                    logger.info(f"Saved {len(accounts)} accounts for user {telegram_user_id}")
-
-                    # Fetch ingredients
-                    ingredients = await poster_client.get_ingredients()
-                    with open(user_data_dir / 'poster_ingredients.csv', 'w', encoding='utf-8', newline='') as f:
-                        writer = csv_module.writer(f)
-                        writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
-                        for ing in ingredients:
-                            writer.writerow([ing['ingredient_id'], ing['ingredient_name'], ing.get('unit', '')])
-                    logger.info(f"Saved {len(ingredients)} ingredients for user {telegram_user_id}")
-
-                    # Fetch products
-                    products = await poster_client.get_products()
-                    with open(user_data_dir / 'poster_products.csv', 'w', encoding='utf-8', newline='') as f:
-                        writer = csv_module.writer(f)
-                        writer.writerow(['product_id', 'product_name', 'category'])
-                        for prod in products:
-                            writer.writerow([prod['product_id'], prod['product_name'], prod.get('category_name', '')])
-                    logger.info(f"Saved {len(products)} products for user {telegram_user_id}")
-
-                    # Fetch suppliers from recent supplies (last 30 days)
-                    from datetime import datetime, timedelta
-                    date_to = datetime.now().strftime("%Y%m%d")
-                    date_from = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
-                    supplies = await poster_client.get_supplies(date_from=date_from, date_to=date_to)
-
-                    # Extract unique suppliers
-                    suppliers_dict = {}
-                    for supply in supplies:
-                        supplier_id = supply.get('supplier_id')
-                        supplier_name = supply.get('supplier_name', '')
-                        if supplier_id and supplier_name:
-                            suppliers_dict[supplier_id] = supplier_name
-
-                    # Save suppliers
-                    with open(user_data_dir / 'poster_suppliers.csv', 'w', encoding='utf-8', newline='') as f:
-                        writer = csv_module.writer(f)
-                        writer.writerow(['supplier_id', 'name', 'aliases'])
-                        for supplier_id, supplier_name in suppliers_dict.items():
-                            writer.writerow([supplier_id, supplier_name, ''])
-                    logger.info(f"Saved {len(suppliers_dict)} suppliers for user {telegram_user_id}")
-
-                except Exception as fetch_error:
-                    logger.error(f"Failed to fetch Poster data: {fetch_error}")
-                    await update.message.reply_text(
-                        "⚠️ Не удалось загрузить данные из Poster.\n"
-                        "Но регистрация завершена - вы можете начать работу!"
-                    )
-
-                # Notify admin about successful registration
-                user = update.effective_user
-                user_data = db.get_user(telegram_user_id)
-                await notify_admin(
-                    context,
-                    f"🎉 Регистрация завершена!\n\n"
-                    f"Пользователь: {user.first_name} {user.last_name or ''}\n"
-                    f"Username: @{user.username or 'нет'}\n"
-                    f"Telegram ID: {telegram_user_id}\n"
-                    f"Poster User ID: {poster_user_id} (по умолчанию)\n"
-                    f"Триал до: {user_data['subscription_expires_at'][:10] if user_data else 'N/A'}"
-                )
-
-                await update.message.reply_text(
-                    "🎉 Настройка завершена!\n\n"
-                    "✅ Ваш аккаунт подключен\n"
-                    "✅ User ID установлен автоматически\n"
-                    "✅ Триал на 14 дней активирован\n\n"
-                    "Теперь можете:\n"
-                    "   • 🎤 Отправлять голосовые для транзакций\n"
-                    "   • 📸 Отправлять фото накладных для поставок\n\n"
-                    "Попробуйте отправить голосовое сообщение:\n"
-                    "\"Оставил в кассе 5000 кассир Айгуль\"\n\n"
-                    "Команды:\n"
-                    "/settings - настройки\n"
-                    "/subscription - подписка\n"
-                    "/help - помощь"
-                )
+            if not ocr_result.get('success'):
+                await step_msg.edit_text(f"❌ Ошибка распознавания: {ocr_result.get('error')}")
                 return
 
-        except Exception as e:
-            logger.error(f"Token validation failed: {e}")
-            await update.message.reply_text(
-                "❌ Не удалось проверить токен.\n\n"
-                "Возможные причины:\n"
-                "• Нет интернета\n"
-                "• Сервер Poster недоступен\n\n"
-                "Попробуйте позже или /cancel для отмены"
+            # 3. Сформировать текст в формате текстовой поставки
+            items = ocr_result.get('items', [])
+            if not items:
+                await step_msg.edit_text("❌ Не найдено товаров в накладной")
+                return
+
+            # Формат: Поставка\nПоставщик [название]\nСо счета [счет]\n[Название] [кол-во] по [цена]
+            supply_text_lines = ["Поставка"]
+
+            # Поставщик (если распознан)
+            supplier_name = ocr_result.get('supplier_name')
+            if supplier_name:
+                supply_text_lines.append(f"Поставщик {supplier_name}")
+
+            # Счёт (по умолчанию Каспий)
+            supply_text_lines.append("Со счета Каспий")
+
+            # Товары
+            for item in items:
+                name = item['name']
+                quantity = item['quantity']
+                price = item['price']
+                supply_text_lines.append(f"{name} {quantity} по {price}")
+
+            supply_text = "\n".join(supply_text_lines)
+
+            # Показать распознанный текст
+            await step_msg.edit_text(
+                f"✅ Накладная распознана!\n\n"
+                f"📦 Поставщик: {supplier_name or 'Не распознан'}\n"
+                f"📊 Товаров: {len(items)}\n\n"
+                f"Текст для обработки:\n```\n{supply_text[:1000]}\n```",
+                parse_mode='Markdown'
             )
 
+            # 4. Передать в обработчик текстовых поставок
+            from parser_service import get_parser_service, get_simple_parser
 
-# === Text Handler ===
+            # Попробовать распарсить через парсер
+            parsed = None
+            try:
+                parser = get_parser_service()
+                parsed = await parser.parse_transaction(supply_text)
+            except Exception as e:
+                logger.warning(f"Claude parser failed: {e}, trying simple parser")
+
+            # Fallback to simple parser
+            if not parsed:
+                simple_parser = get_simple_parser()
+                parsed = simple_parser.parse_transaction(supply_text)
+
+            if not parsed or parsed.get('type') != 'supply':
+                await update.message.reply_text("❌ Не удалось распарсить текст поставки")
+                return
+
+            # Передать в process_supply
+            await process_supply(update, context, parsed)
+
+        except Exception as e:
+            logger.error(f"Invoice processing failed: {e}", exc_info=True)
+            await step_msg.edit_text(f"❌ Ошибка обработки накладной: {str(e)[:200]}")
+
+    except Exception as e:
+        logger.error(f"Photo processing failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка обработки фото: {str(e)[:200]}")
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text message"""
