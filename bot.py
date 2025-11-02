@@ -935,6 +935,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if supply_draft['items_count'] > 5:
                         message_text += f"  ... и ещё {supply_draft['items_count'] - 5} позиций\n"
 
+                # Show skipped items if any
+                skipped = supply_draft.get('skipped_items', [])
+                if skipped:
+                    message_text += f"\n⚠️ Пропущено товаров: {len(skipped)}\n"
+                    for skipped_name in skipped[:3]:
+                        message_text += f"  ✗ {skipped_name}\n"
+                    if len(skipped) > 3:
+                        message_text += f"  ... и ещё {len(skipped) - 3}\n"
+
                 message_text += f"\n📝 Черновик поставки #{supply_draft['supply_id']} создан\n\n"
                 message_text += "Подтвердить поставку?"
 
