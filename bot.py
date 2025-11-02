@@ -108,6 +108,85 @@ def fix_user_poster_urls():
         logger.error(f"❌ Ошибка при исправлении poster_base_url: {e}", exc_info=True)
 
 
+def migrate_csv_aliases_to_db():
+    """
+    Автоматическая миграция алиасов из CSV в PostgreSQL при первом запуске.
+    Проверяет каждого пользователя и импортирует алиасы если их нет в БД.
+    """
+    try:
+        import csv
+        from config import DATA_DIR
+        from database import DB_TYPE
+
+        db = get_database()
+        users_dir = DATA_DIR / "users"
+
+        if not users_dir.exists():
+            return
+
+        logger.info("🔄 Проверка миграции алиасов из CSV в БД...")
+
+        # Получаем всех пользователей из БД
+        conn = db._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+        else:
+            from psycopg2.extras import RealDictCursor
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        cursor.execute("SELECT telegram_user_id FROM users")
+        db_users = cursor.fetchall()
+        conn.close()
+
+        total_imported = 0
+
+        for user_row in db_users:
+            telegram_user_id = user_row[0] if DB_TYPE == "sqlite" else user_row['telegram_user_id']
+
+            # Проверяем, есть ли уже алиасы в БД для этого пользователя
+            existing_aliases = db.get_ingredient_aliases(telegram_user_id)
+
+            if existing_aliases:
+                logger.debug(f"   ✓ User {telegram_user_id}: {len(existing_aliases)} aliases already in DB")
+                continue
+
+            # Алиасов нет в БД - пробуем импортировать из CSV
+            csv_path = users_dir / str(telegram_user_id) / "alias_item_mapping.csv"
+
+            if not csv_path.exists():
+                continue
+
+            # Читаем CSV
+            aliases_to_import = []
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get('source', '').strip().lower() != 'ingredient':
+                        continue
+
+                    aliases_to_import.append({
+                        'alias_text': row['alias_text'].strip(),
+                        'poster_item_id': int(row['poster_item_id']),
+                        'poster_item_name': row['poster_item_name'].strip(),
+                        'source': row.get('source', 'ingredient').strip(),
+                        'notes': row.get('notes', '').strip()
+                    })
+
+            if aliases_to_import:
+                count = db.bulk_add_aliases(telegram_user_id, aliases_to_import)
+                logger.info(f"   ✓ User {telegram_user_id}: Imported {count} aliases from CSV")
+                total_imported += count
+
+        if total_imported > 0:
+            logger.info(f"✅ Миграция завершена: {total_imported} алиасов импортировано в БД")
+        else:
+            logger.info("   ✓ All aliases already in database")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при миграции алиасов: {e}", exc_info=True)
+
+
 def extract_packing_size(item_name: str) -> int:
     """
     Extract packing size from canonical item name in Poster.
@@ -4175,6 +4254,9 @@ def main():
 
         # Fix poster_base_url for existing users (auto-migration)
         fix_user_poster_urls()
+
+        # Migrate CSV aliases to PostgreSQL (one-time auto-migration)
+        migrate_csv_aliases_to_db()
 
         # Create application
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
