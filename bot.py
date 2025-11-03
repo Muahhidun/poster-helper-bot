@@ -147,14 +147,35 @@ def migrate_csv_aliases_to_db():
             # Проверяем, есть ли уже алиасы в БД для этого пользователя
             existing_aliases = db.get_ingredient_aliases(telegram_user_id)
 
-            if existing_aliases:
+            # Если алиасов достаточно (>100) - пропускаем импорт
+            if len(existing_aliases) > 100:
                 logger.debug(f"   ✓ User {telegram_user_id}: {len(existing_aliases)} aliases already in DB")
                 continue
 
-            # Алиасов нет в БД - пробуем импортировать из CSV
+            # Алиасов нет или мало - пробуем импортировать из CSV
             csv_path = users_dir / str(telegram_user_id) / "alias_item_mapping.csv"
 
             if not csv_path.exists():
+                # CSV файла нет (Railway) - импортируем хардкод алиасы для пользователя 167084307
+                if telegram_user_id == 167084307:
+                    try:
+                        from railway_aliases import RAILWAY_ALIASES
+                        aliases_to_import = []
+                        for alias_text, item_id, item_name, source in RAILWAY_ALIASES:
+                            aliases_to_import.append({
+                                'alias_text': alias_text,
+                                'poster_item_id': item_id,
+                                'poster_item_name': item_name,
+                                'source': source,
+                                'notes': 'Auto-imported on Railway'
+                            })
+
+                        if aliases_to_import:
+                            count = db.bulk_add_aliases(telegram_user_id, aliases_to_import)
+                            logger.info(f"   ✓ User {telegram_user_id}: Imported {count} Railway aliases")
+                            total_imported += count
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ Failed to import Railway aliases: {e}")
                 continue
 
             # Читаем CSV
