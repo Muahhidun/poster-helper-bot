@@ -935,14 +935,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
-        # Not in receipt mode - process as invoice via Google Document AI (default behavior)
-        logger.info("📸 Processing photo as invoice via Google Document AI...")
+        # Not in receipt mode - process as invoice (гибридный подход: Document AI OCR + GPT-4)
+        logger.info("📸 Processing photo as invoice (hybrid: Document AI OCR + GPT-4)...")
 
         import invoice_ocr
         import json
 
         # Send initial processing message
-        step_msg = await update.message.reply_text("🤖 Распознаю накладную через Google Document AI...")
+        step_msg = await update.message.reply_text("🤖 Распознаю накладную (Document AI OCR + GPT-4)...")
 
         try:
             # 1. Получить URL изображения из Telegram
@@ -994,7 +994,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Показать распознанный текст
             await step_msg.edit_text(
-                f"✅ Накладная распознана (Google Document AI)!\n\n"
+                f"✅ Накладная распознана (OCR + AI)!\n\n"
                 f"📦 Поставщик: {supplier_name or 'Не распознан'}\n"
                 f"📊 Товаров: {len(items)}\n\n"
                 f"Текст для обработки:\n```\n{supply_text[:1000]}\n```",
