@@ -509,10 +509,48 @@ class IngredientMatcher:
             if alias_match:  # Removed higher threshold - use same as score_cutoff
                 matched_alias = alias_match[0]
                 score = alias_match[1]
-                ingredient_id = self.aliases[matched_alias]
-                ingredient = self.ingredients[ingredient_id]
-                logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
-                return (ingredient_id, ingredient['name'], ingredient['unit'], score)
+
+                # Защита от false positives при token_set_ratio:
+                # Если score очень высокий (>95), но совпадает только часть токенов,
+                # перепроверяем с WRatio чтобы избежать match только по одному общему слову
+                alias_words = set(matched_alias.split())
+                text_words = set(text_lower.split())
+                common_tokens = alias_words & text_words
+
+                # Suspicious: высокий score, но либо input/alias разной длины, либо мало общих токенов
+                is_suspicious = (
+                    score > 95 and (
+                        (len(alias_words) > 1 and len(common_tokens) == 1) or  # Только 1 общий токен
+                        (len(alias_words) <= 2 and len(text_words) >= 3) or     # Короткий alias, длинный input
+                        (len(text_words) == 1 and len(alias_words) > 1)         # Короткий input, длинный alias
+                    )
+                )
+
+                if is_suspicious:
+                    # Проверяем как длину так и WRatio
+                    wratio_score = fuzz.WRatio(text_lower, matched_alias)
+                    length_ratio = len(text_lower) / len(matched_alias) if len(matched_alias) > 0 else 1.0
+
+                    logger.info(f"      ⚠️  Suspicious match: '{text_lower}' → '{matched_alias}' (token_set={score:.1f}, WRatio={wratio_score:.1f}, length_ratio={length_ratio:.2f}, common_tokens={len(common_tokens)})")
+
+                    # Reject если:
+                    # 1. Только 1 общий токен И (WRatio < 85 ИЛИ длина input < 60% от alias)
+                    # 2. ИЛИ длина input < 40% от alias (слишком короткий)
+                    should_reject = (
+                        (len(common_tokens) == 1 and (wratio_score < 85 or length_ratio < 0.6)) or
+                        (length_ratio < 0.4)
+                    )
+
+                    if should_reject:
+                        # False positive - пропускаем этот alias
+                        logger.info(f"      ❌ Rejected due to suspicious match")
+                        alias_match = None  # Nullify match, will try names next
+
+                if alias_match:  # Re-check after potential rejection
+                    ingredient_id = self.aliases[matched_alias]
+                    ingredient = self.ingredients[ingredient_id]
+                    logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
+                    return (ingredient_id, ingredient['name'], ingredient['unit'], score)
 
         # 4. Fuzzy match on ingredient names
         names_list = list(self.names.keys())
