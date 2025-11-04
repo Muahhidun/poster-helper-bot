@@ -992,6 +992,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             supply_text = "\n".join(supply_text_lines)
 
+            # ВРЕМЕННО: Показать OCR текст для отладки
+            ocr_text = ocr_result.get('ocr_text', '')
+            if ocr_text:
+                ocr_preview = ocr_text[:2000] if len(ocr_text) > 2000 else ocr_text
+                await update.message.reply_text(
+                    f"🔍 **DEBUG - OCR Текст (Шаг 1):**\n\n```\n{ocr_preview}\n```",
+                    parse_mode='Markdown'
+                )
+
             # Показать распознанный текст
             await step_msg.edit_text(
                 f"✅ Накладная распознана!\n\n"
