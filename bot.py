@@ -144,22 +144,29 @@ def migrate_csv_aliases_to_db():
         for user_row in db_users:
             telegram_user_id = user_row[0] if DB_TYPE == "sqlite" else user_row['telegram_user_id']
 
+            logger.info(f"🔍 Проверка пользователя {telegram_user_id}...")
+
             # Проверяем, есть ли уже алиасы в БД для этого пользователя
             existing_aliases = db.get_ingredient_aliases(telegram_user_id)
+            logger.info(f"   → Найдено алиасов в БД: {len(existing_aliases)}")
 
             # Если алиасов достаточно (>100) - пропускаем импорт
             if len(existing_aliases) > 100:
-                logger.debug(f"   ✓ User {telegram_user_id}: {len(existing_aliases)} aliases already in DB")
+                logger.info(f"   ✓ User {telegram_user_id}: {len(existing_aliases)} aliases already in DB - SKIP")
                 continue
 
             # Алиасов нет или мало - пробуем импортировать из CSV
             csv_path = users_dir / str(telegram_user_id) / "alias_item_mapping.csv"
+            logger.info(f"   → CSV путь: {csv_path}, exists={csv_path.exists()}")
 
             if not csv_path.exists():
                 # CSV файла нет (Railway) - импортируем хардкод алиасы для пользователя 167084307
                 if telegram_user_id == 167084307:
+                    logger.info(f"   → User 167084307 detected - trying Railway aliases import...")
                     try:
                         from railway_aliases import RAILWAY_ALIASES
+                        logger.info(f"   → Loaded RAILWAY_ALIASES, count={len(RAILWAY_ALIASES)}")
+
                         aliases_to_import = []
                         for alias_text, item_id, item_name, source in RAILWAY_ALIASES:
                             aliases_to_import.append({
@@ -170,12 +177,16 @@ def migrate_csv_aliases_to_db():
                                 'notes': 'Auto-imported on Railway'
                             })
 
+                        logger.info(f"   → Prepared {len(aliases_to_import)} aliases for import")
+
                         if aliases_to_import:
                             count = db.bulk_add_aliases(telegram_user_id, aliases_to_import)
-                            logger.info(f"   ✓ User {telegram_user_id}: Imported {count} Railway aliases")
+                            logger.info(f"   ✅ User {telegram_user_id}: Imported {count} Railway aliases")
                             total_imported += count
                     except Exception as e:
-                        logger.warning(f"   ⚠️ Failed to import Railway aliases: {e}")
+                        logger.error(f"   ❌ Failed to import Railway aliases: {e}", exc_info=True)
+                else:
+                    logger.info(f"   → User {telegram_user_id} != 167084307 - skipping Railway import")
                 continue
 
             # Читаем CSV
@@ -453,6 +464,54 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /cancel - Отменить текущее действие",
         parse_mode="Markdown"
     )
+
+
+@authorized_only
+async def reload_aliases_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительно переимпортировать алиасы из railway_aliases.py"""
+    telegram_user_id = update.effective_user.id
+
+    # Только для пользователя 167084307
+    if telegram_user_id != 167084307:
+        await update.message.reply_text("❌ Эта команда доступна только администратору")
+        return
+
+    await update.message.reply_text("🔄 Переимпорт алиасов...")
+
+    try:
+        from railway_aliases import RAILWAY_ALIASES
+        from database import get_database
+
+        db = get_database()
+
+        # Удаляем старые алиасы
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ingredient_aliases WHERE telegram_user_id = %s", (telegram_user_id,))
+        conn.commit()
+        conn.close()
+
+        # Импортируем новые
+        aliases_to_import = []
+        for alias_text, item_id, item_name, source in RAILWAY_ALIASES:
+            aliases_to_import.append({
+                'alias_text': alias_text,
+                'poster_item_id': item_id,
+                'poster_item_name': item_name,
+                'source': source,
+                'notes': 'Manual reload via /reload_aliases'
+            })
+
+        count = db.bulk_add_aliases(telegram_user_id, aliases_to_import)
+
+        await update.message.reply_text(
+            f"✅ Переимпортировано {count} алиасов!\n\n"
+            f"Теперь matcher будет использовать их для сопоставления товаров."
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка переимпорта: {e}")
+        logger.error(f"Reload aliases error: {e}", exc_info=True)
 
 
 @authorized_only
@@ -4290,6 +4349,7 @@ def main():
         app.add_handler(CommandHandler("settings", settings_command))
         app.add_handler(CommandHandler("subscription", subscription_command))
         app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
+        app.add_handler(CommandHandler("reload_aliases", reload_aliases_command))
         app.add_handler(CommandHandler("sync", sync_command))
         app.add_handler(CommandHandler("cancel", cancel_command))
         app.add_handler(CommandHandler("test_daily", test_daily_command))
