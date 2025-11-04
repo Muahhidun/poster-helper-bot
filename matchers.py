@@ -10,6 +10,29 @@ import config
 logger = logging.getLogger(__name__)
 
 
+def normalize_text_for_matching(text: str) -> str:
+    """
+    Normalize text for better fuzzy matching
+
+    - Remove leading/trailing quotes
+    - Remove extra whitespace
+    - Lowercase
+    """
+    if not text:
+        return ""
+
+    # Strip and lowercase
+    text = text.strip().lower()
+
+    # Remove leading/trailing quotes (", ', «, »)
+    text = text.strip('"\'«»')
+
+    # Remove extra spaces
+    text = ' '.join(text.split())
+
+    return text
+
+
 class CategoryMatcher:
     """Matcher for finance categories using aliases"""
 
@@ -380,7 +403,8 @@ class IngredientMatcher:
 
                 filtered_count = 0
                 for row in db_aliases:
-                    alias = row['alias_text'].strip().lower()
+                    # Normalize alias text (same as input text normalization)
+                    alias = normalize_text_for_matching(row['alias_text'])
                     item_id = int(row['poster_item_id'])
 
                     # Verify that this ingredient exists
@@ -418,7 +442,8 @@ class IngredientMatcher:
                 if row.get('source', '').strip().lower() != 'ingredient':
                     continue
 
-                alias = row['alias_text'].strip().lower()
+                # Normalize alias text
+                alias = normalize_text_for_matching(row['alias_text'])
                 item_id = int(row['poster_item_id'])
 
                 # Verify that this ingredient exists
@@ -444,7 +469,8 @@ class IngredientMatcher:
         if not text:
             return None
 
-        text_lower = text.strip().lower()
+        # Normalize text for better matching
+        text_lower = normalize_text_for_matching(text)
 
         # 1. Exact alias match (highest priority)
         if text_lower in self.aliases:
@@ -463,18 +489,26 @@ class IngredientMatcher:
         # 3. Fuzzy match on aliases first (higher confidence)
         if self.aliases:
             aliases_list = list(self.aliases.keys())
+
+            # Try token_set_ratio first - better for partial word matches
             alias_match = process.extractOne(
                 text_lower,
                 aliases_list,
-                scorer=fuzz.WRatio,
+                scorer=fuzz.token_set_ratio,
                 score_cutoff=score_cutoff
             )
-            if alias_match and alias_match[1] >= 85:  # Higher threshold for aliases
+
+            # Log top 3 matches for debugging
+            if logger.isEnabledFor(logging.DEBUG):
+                top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
+                logger.debug(f"Top 3 alias matches for '{text}': {top_matches}")
+
+            if alias_match:  # Removed higher threshold - use same as score_cutoff
                 matched_alias = alias_match[0]
                 score = alias_match[1]
                 ingredient_id = self.aliases[matched_alias]
                 ingredient = self.ingredients[ingredient_id]
-                logger.debug(f"Ingredient fuzzy alias match: '{text}' -> {ingredient} (score={score})")
+                logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
                 return (ingredient_id, ingredient['name'], ingredient['unit'], score)
 
         # 4. Fuzzy match on ingredient names
@@ -669,7 +703,8 @@ class ProductMatcher:
                         continue
 
                     product_count += 1
-                    alias = row['alias_text'].strip().lower()
+                    # Normalize alias text (same as input text normalization)
+                    alias = normalize_text_for_matching(row['alias_text'])
                     item_id = int(row['poster_item_id'])
 
                     # Verify that this product exists
@@ -707,7 +742,8 @@ class ProductMatcher:
                 if row.get('source', '').strip().lower() != 'product':
                     continue
 
-                alias = row['alias_text'].strip().lower()
+                # Normalize alias text
+                alias = normalize_text_for_matching(row['alias_text'])
                 item_id = int(row['poster_item_id'])
 
                 # Verify that this product exists
@@ -733,7 +769,8 @@ class ProductMatcher:
         if not text:
             return None
 
-        text_lower = text.strip().lower()
+        # Normalize text for better matching
+        text_lower = normalize_text_for_matching(text)
 
         # 1. Exact alias match (highest priority)
         if text_lower in self.aliases:
@@ -752,18 +789,26 @@ class ProductMatcher:
         # 3. Fuzzy match on aliases first (higher confidence)
         if self.aliases:
             aliases_list = list(self.aliases.keys())
+
+            # Try token_set_ratio first - better for partial word matches
             alias_match = process.extractOne(
                 text_lower,
                 aliases_list,
-                scorer=fuzz.WRatio,
+                scorer=fuzz.token_set_ratio,
                 score_cutoff=score_cutoff
             )
-            if alias_match and alias_match[1] >= 85:  # Higher threshold for aliases
+
+            # Log top 3 matches for debugging
+            if logger.isEnabledFor(logging.DEBUG):
+                top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
+                logger.debug(f"Top 3 product alias matches for '{text}': {top_matches}")
+
+            if alias_match:  # Removed higher threshold - use same as score_cutoff
                 matched_alias = alias_match[0]
                 score = alias_match[1]
                 product_id = self.aliases[matched_alias]
                 product = self.products[product_id]
-                logger.debug(f"Product fuzzy alias match: '{text}' -> {product} (score={score})")
+                logger.info(f"✅ Product fuzzy alias match: '{text}' -> {product['name']} (score={score})")
                 return (product_id, product['name'], product['unit'], score)
 
         # 4. Fuzzy match on product names
