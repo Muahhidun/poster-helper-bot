@@ -674,6 +674,11 @@ class ProductMatcher:
                 name = row['product_name'].strip()
                 category = row.get('category_name', '').strip()
 
+                # Только товары категории "Напитки" могут быть в поставках
+                # Остальные категории (Бургеры, Пиццы и т.д.) - это техкарты, они не закупаются
+                if category != 'Напитки':
+                    continue
+
                 self.products[product_id] = {
                     'id': product_id,
                     'name': name,
