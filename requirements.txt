@@ -43,3 +43,4 @@ tzlocal==5.3.1
 urllib3==2.5.0
 yarl==1.22.0
 psycopg2-binary==2.9.9
+google-cloud-documentai==2.30.0

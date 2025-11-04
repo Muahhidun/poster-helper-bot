@@ -935,14 +935,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
-        # Not in receipt mode - process as invoice via GPT-4 Vision OCR (default behavior)
-        logger.info("📸 Processing photo as invoice via GPT-4 Vision...")
+        # Not in receipt mode - process as invoice via Google Document AI (default behavior)
+        logger.info("📸 Processing photo as invoice via Google Document AI...")
 
         import invoice_ocr
         import json
 
         # Send initial processing message
-        step_msg = await update.message.reply_text("🤖 Распознаю накладную через GPT-4 Vision...")
+        step_msg = await update.message.reply_text("🤖 Распознаю накладную через Google Document AI...")
 
         try:
             # 1. Получить URL изображения из Telegram
@@ -992,18 +992,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             supply_text = "\n".join(supply_text_lines)
 
-            # ВРЕМЕННО: Показать OCR текст для отладки
-            ocr_text = ocr_result.get('ocr_text', '')
-            if ocr_text:
-                ocr_preview = ocr_text[:3000] if len(ocr_text) > 3000 else ocr_text
-                # Без parse_mode чтобы избежать ошибок с спецсимволами
-                await update.message.reply_text(
-                    f"🔍 DEBUG - OCR Текст (Шаг 1):\n\n{ocr_preview}"
-                )
-
             # Показать распознанный текст
             await step_msg.edit_text(
-                f"✅ Накладная распознана!\n\n"
+                f"✅ Накладная распознана (Google Document AI)!\n\n"
                 f"📦 Поставщик: {supplier_name or 'Не распознан'}\n"
                 f"📊 Товаров: {len(items)}\n\n"
                 f"Текст для обработки:\n```\n{supply_text[:1000]}\n```",

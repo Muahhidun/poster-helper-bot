@@ -1,19 +1,42 @@
-"""Модуль для распознавания накладных с помощью OCR (GPT-4 Vision)"""
+"""Модуль для распознавания накладных с помощью Google Document AI"""
 import base64
+import json
 import logging
 from typing import Dict, List, Optional
-from openai import OpenAI
-from config import OPENAI_API_KEY
+from google.cloud import documentai_v1 as documentai
+from google.oauth2 import service_account
+from config import (
+    GOOGLE_CLOUD_PROJECT_ID,
+    GOOGLE_CLOUD_LOCATION,
+    GOOGLE_DOCAI_PROCESSOR_ID,
+    GOOGLE_APPLICATION_CREDENTIALS_JSON
+)
 
 logger = logging.getLogger(__name__)
 
-# Создаём клиент OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Создаём клиент Document AI
+def get_docai_client():
+    """Создать клиент Document AI с credentials из переменной окружения"""
+    if not GOOGLE_APPLICATION_CREDENTIALS_JSON:
+        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS_JSON не установлен")
+
+    # Парсим JSON credentials
+    credentials_dict = json.loads(GOOGLE_APPLICATION_CREDENTIALS_JSON)
+    credentials = service_account.Credentials.from_service_account_info(credentials_dict)
+
+    # Создаём клиент с правильным endpoint
+    opts = {"api_endpoint": f"{GOOGLE_CLOUD_LOCATION}-documentai.googleapis.com"}
+    client = documentai.DocumentProcessorServiceClient(
+        credentials=credentials,
+        client_options=opts
+    )
+
+    return client
 
 
 async def recognize_invoice(image_path: str) -> Dict:
     """
-    Распознать накладную с фото с помощью GPT-4 Vision (двухэтапный подход)
+    Распознать накладную с фото с помощью Google Document AI
 
     Args:
         image_path: Путь к файлу с фото накладной
@@ -28,139 +51,73 @@ async def recognize_invoice(image_path: str) -> Dict:
         - error: str (если ошибка)
     """
     try:
-        # Читаем изображение и кодируем в base64
+        # Читаем изображение
         with open(image_path, 'rb') as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
+            image_content = f.read()
 
-        # ШАГ 1: Чистый OCR - просто прочитать ВСЁ что на изображении
-        ocr_prompt = """
-Ты OCR система. Твоя ЕДИНСТВЕННАЯ задача - прочитать ВЕСЬ текст с изображения БУКВАЛЬНО.
+        logger.info("🔍 Отправляю накладную в Google Document AI...")
 
-ИНСТРУКЦИИ:
-1. Прочитай ВСЕ строки текста с изображения
-2. Копируй ТОЧНО как написано - каждую букву, цифру, символ
-3. НЕ интерпретируй, НЕ анализируй, НЕ резюмируй
-4. НЕ пропускай ни одной строки
-5. Сохрани структуру документа (таблицы, колонки)
+        # Создаём клиент
+        client = get_docai_client()
 
-Верни ТОЛЬКО текст, который видишь. Ничего больше.
-"""
-
-        logger.info("🔍 ШАГ 1/2: Отправляю изображение для чистого OCR...")
-
-        # Вызов GPT-4 Vision для чистого OCR
-        ocr_response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": ocr_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_data}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            max_tokens=3000,
-            temperature=0.0   # Максимальная точность для OCR
+        # Формируем имя процессора
+        processor_name = client.processor_path(
+            GOOGLE_CLOUD_PROJECT_ID,
+            GOOGLE_CLOUD_LOCATION,
+            GOOGLE_DOCAI_PROCESSOR_ID
         )
 
-        ocr_text = ocr_response.choices[0].message.content.strip()
-        logger.info(f"📄 OCR получен: {len(ocr_text)} символов")
-        logger.debug(f"OCR текст:\n{ocr_text}")
-
-        # ШАГ 2: Парсинг текста в JSON
-        parsing_prompt = f"""
-Вот текст накладной (распознан через OCR):
-
----
-{ocr_text}
----
-
-Извлеки данные в JSON формате:
-
-1. Найди название поставщика (ТОО, ИП, ООО)
-2. Найди дату (преобразуй в YYYY-MM-DD)
-3. Найди ВСЕ строки товаров в таблице
-
-Для КАЖДОЙ строки товара извлеки:
-- name: полное название (со всеми характеристиками)
-- quantity: количество (число)
-- unit: единица измерения (упак/шт/кг/л)
-- price: цена за единицу (число)
-
-ВАЖНО - Каждая строка таблицы = ОДНА позиция в items!
-НЕ дублируй позиции. НЕ пропускай строки.
-
-Пример OCR текста:
-```
-ТОО "Поставщик"
-Дата: 01.11.2025
-Товар А  5 кг  100
-Товар Б  3 шт  200
-```
-
-Правильный JSON:
-{{
-    "supplier_name": "ТОО Поставщик",
-    "invoice_date": "2025-11-01",
-    "total_sum": 1100.0,
-    "items": [
-        {{"name": "Товар А", "quantity": 5.0, "unit": "кг", "price": 100.0}},
-        {{"name": "Товар Б", "quantity": 3.0, "unit": "шт", "price": 200.0}}
-    ]
-}}
-
-Верни JSON для текста выше:
-"""
-
-        logger.info("🔍 ШАГ 2/2: Парсинг текста в JSON...")
-
-        # Вызов GPT-4 для парсинга (БЕЗ изображения!)
-        # Используем JSON mode для гарантированного валидного JSON
-        parsing_response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Ты система извлечения данных из накладных. Ты ВСЕГДА возвращаешь валидный JSON."
-                },
-                {
-                    "role": "user",
-                    "content": parsing_prompt
-                }
-            ],
-            max_tokens=3000,
-            temperature=0.1,
-            response_format={"type": "json_object"}  # Гарантирует валидный JSON
+        # Создаём запрос
+        raw_document = documentai.RawDocument(
+            content=image_content,
+            mime_type="image/jpeg"
         )
 
-        # Парсим ответ
-        result_text = parsing_response.choices[0].message.content.strip()
+        request = documentai.ProcessRequest(
+            name=processor_name,
+            raw_document=raw_document
+        )
 
-        logger.info(f"📄 Получен JSON ({len(result_text)} символов)")
+        # Отправляем запрос
+        result = client.process_document(request=request)
+        document = result.document
 
-        # Удаляем markdown форматирование если есть
-        if result_text.startswith('```'):
-            result_text = result_text.split('```')[1]
-            if result_text.startswith('json'):
-                result_text = result_text[4:]
-            result_text = result_text.strip()
+        logger.info(f"📄 Документ обработан Document AI")
 
-        # Парсим JSON
-        import json
-        data = json.loads(result_text)
+        # Извлекаем данные из entities
+        supplier_name = None
+        invoice_date = None
+        total_sum = None
+        items = []
 
-        # Валидация и нормализация данных
-        items = data.get('items', [])
+        # Обрабатываем entities
+        for entity in document.entities:
+            entity_type = entity.type_
 
-        # Проверяем что есть хотя бы один товар
+            # Поставщик
+            if entity_type in ['supplier_name', 'remit_to_name', 'vendor_name']:
+                supplier_name = entity.mention_text
+
+            # Дата
+            elif entity_type in ['invoice_date', 'invoice_receipt_date']:
+                # Document AI возвращает дату, нужно преобразовать
+                date_text = entity.mention_text
+                invoice_date = _parse_date(date_text)
+
+            # Общая сумма
+            elif entity_type in ['total_amount', 'net_amount']:
+                total_sum = _parse_amount(entity.mention_text)
+
+            # Позиции товаров
+            elif entity_type == 'line_item':
+                item = _extract_line_item(entity)
+                if item:
+                    items.append(item)
+
+        # Если нет line_items, пробуем извлечь из таблиц
         if not items:
-            logger.warning("⚠️ GPT-4 Vision не нашел товаров в накладной")
+            logger.info("📋 Line items не найдены, пробую извлечь из таблиц...")
+            items = _extract_items_from_tables(document)
 
         # Нормализуем единицы измерения
         for item in items:
@@ -173,12 +130,11 @@ async def recognize_invoice(image_path: str) -> Dict:
 
         result = {
             'success': True,
-            'supplier_name': data.get('supplier_name'),
-            'invoice_date': data.get('invoice_date'),
-            'total_sum': data.get('total_sum'),
+            'supplier_name': supplier_name,
+            'invoice_date': invoice_date,
+            'total_sum': total_sum,
             'items': items,
-            'ocr_text': ocr_text,  # Для отладки
-            'raw_response': result_text
+            'raw_text': document.text  # Для отладки
         }
 
         logger.info(
@@ -188,13 +144,6 @@ async def recognize_invoice(image_path: str) -> Dict:
 
         return result
 
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ Ошибка парсинга JSON от GPT-4 Vision: {e}")
-        logger.error(f"Ответ GPT-4: {result_text if 'result_text' in locals() else 'не получен'}")
-        return {
-            'success': False,
-            'error': f'Не удалось распарсить ответ GPT-4: {str(e)}'
-        }
     except Exception as e:
         logger.error(f"❌ Ошибка распознавания накладной: {e}", exc_info=True)
         return {
@@ -246,6 +195,133 @@ async def recognize_invoice_from_url(image_url: str) -> Dict:
             'success': False,
             'error': str(e)
         }
+
+
+def _extract_line_item(entity: documentai.Document.Entity) -> Optional[Dict]:
+    """Извлечь данные позиции товара из entity"""
+    item = {
+        'name': None,
+        'quantity': 0.0,
+        'unit': 'шт',
+        'price': 0.0
+    }
+
+    # Обрабатываем свойства line_item
+    for prop in entity.properties:
+        prop_type = prop.type_
+
+        if prop_type in ['line_item/description', 'line_item/product_code']:
+            item['name'] = prop.mention_text
+        elif prop_type == 'line_item/quantity':
+            item['quantity'] = _parse_amount(prop.mention_text)
+        elif prop_type == 'line_item/unit_price':
+            item['price'] = _parse_amount(prop.mention_text)
+        elif prop_type == 'line_item/unit':
+            item['unit'] = prop.mention_text
+
+    # Валидация: должны быть хотя бы название и цена
+    if item['name'] and item['price'] > 0:
+        if item['quantity'] == 0:
+            item['quantity'] = 1.0
+        return item
+
+    return None
+
+
+def _extract_items_from_tables(document: documentai.Document) -> List[Dict]:
+    """Извлечь товары из таблиц документа"""
+    items = []
+
+    for page in document.pages:
+        for table in page.tables:
+            # Пропускаем заголовок (первая строка)
+            for row_idx, row in enumerate(table.body_rows):
+                if row_idx == 0:
+                    continue  # Скип заголовка
+
+                # Извлекаем данные из колонок
+                # Обычно: № | Название | ... | Кол-во | Цена | ...
+                cells = row.cells
+                if len(cells) < 4:
+                    continue
+
+                item = {
+                    'name': _get_cell_text(cells[1], document),  # Колонка 2 - название
+                    'quantity': 1.0,
+                    'unit': 'шт',
+                    'price': 0.0
+                }
+
+                # Ищем количество и цену
+                for cell in cells[2:]:
+                    text = _get_cell_text(cell, document).strip()
+
+                    # Пробуем распарсить как число
+                    amount = _parse_amount(text)
+                    if amount > 0:
+                        # Эвристика: если < 1000 и есть дробная часть - скорее всего количество
+                        if amount < 1000 and ('.' in text or ',' in text):
+                            item['quantity'] = amount
+                        # Иначе если > 10 - скорее всего цена
+                        elif amount > 10:
+                            item['price'] = amount
+
+                # Валидация
+                if item['name'] and item['price'] > 0:
+                    items.append(item)
+
+    return items
+
+
+def _get_cell_text(cell: documentai.Document.Page.Table.TableCell, document: documentai.Document) -> str:
+    """Получить текст из ячейки таблицы"""
+    text = ""
+    for segment in cell.layout.text_anchor.text_segments:
+        start_index = int(segment.start_index) if hasattr(segment, 'start_index') else 0
+        end_index = int(segment.end_index) if hasattr(segment, 'end_index') else 0
+        text += document.text[start_index:end_index]
+    return text.strip()
+
+
+def _parse_amount(text: str) -> float:
+    """Распарсить сумму из текста"""
+    if not text:
+        return 0.0
+
+    # Удаляем пробелы и заменяем запятую на точку
+    text = text.strip().replace(' ', '').replace(',', '.')
+
+    # Убираем валюту и другие символы
+    text = ''.join(c for c in text if c.isdigit() or c == '.')
+
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def _parse_date(text: str) -> str:
+    """Распарсить дату в формат YYYY-MM-DD"""
+    from datetime import datetime
+
+    # Пробуем разные форматы
+    formats = [
+        '%d.%m.%Y',
+        '%d/%m/%Y',
+        '%Y-%m-%d',
+        '%d-%m-%Y',
+        '%m/%d/%Y'
+    ]
+
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(text.strip(), fmt)
+            return dt.strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+
+    # Если не получилось - возвращаем как есть
+    return text
 
 
 if __name__ == "__main__":

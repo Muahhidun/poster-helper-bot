@@ -45,6 +45,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # Anthropic (Claude)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# Google Document AI (для распознавания накладных)
+GOOGLE_CLOUD_PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT_ID", "still-function-477205-u2")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us")
+GOOGLE_DOCAI_PROCESSOR_ID = os.getenv("GOOGLE_DOCAI_PROCESSOR_ID", "c0fd9504fc970145")
+# Service Account credentials (JSON строка из переменной окружения)
+GOOGLE_APPLICATION_CREDENTIALS_JSON = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+
 # Pokee AI (DEPRECATED - теперь используется GPT-4 Vision в invoice_ocr.py)
 # POKEE_API_TOKEN = os.getenv("POKEE_API_TOKEN", "56ecc5ba51ae2a1a99c4ddaf463364d0f1fabd7f89c3e7af")
 
