@@ -342,6 +342,8 @@ class IngredientMatcher:
             logger.warning(f"Ingredients file not found: {self.ingredients_csv}")
             return
 
+        logger.info(f"Loading ingredients from: {self.ingredients_csv}")
+
         with open(self.ingredients_csv, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -358,7 +360,12 @@ class IngredientMatcher:
                 # Add name for matching
                 self.names[name.lower()] = ingredient_id
 
-        logger.info(f"Loaded {len(self.ingredients)} ingredients for user {self.telegram_user_id}")
+        logger.info(f"✅ Loaded {len(self.ingredients)} ingredients from CSV for user {self.telegram_user_id}")
+
+        # Debug: показать первые 5 ID
+        if self.ingredients:
+            sample_ids = list(self.ingredients.keys())[:5]
+            logger.info(f"   Sample ingredient IDs: {sample_ids}")
 
     def load_aliases(self):
         """Load ingredient aliases from database (with CSV fallback)"""
@@ -369,6 +376,9 @@ class IngredientMatcher:
                 db = get_database()
                 db_aliases = db.get_ingredient_aliases(self.telegram_user_id)
 
+                logger.info(f"📋 Found {len(db_aliases)} aliases in database for user {self.telegram_user_id}")
+
+                filtered_count = 0
                 for row in db_aliases:
                     alias = row['alias_text'].strip().lower()
                     item_id = int(row['poster_item_id'])
@@ -377,9 +387,20 @@ class IngredientMatcher:
                     if item_id in self.ingredients:
                         self.aliases[alias] = item_id
                     else:
-                        logger.warning(f"Alias '{alias}' references non-existent ingredient {item_id}")
+                        filtered_count += 1
+                        if filtered_count <= 3:  # Показать первые 3 отфильтрованных
+                            logger.warning(f"⚠️ Alias '{alias}' references non-existent ingredient ID {item_id}")
 
-                logger.info(f"Loaded {len(self.aliases)} ingredient aliases from database for user {self.telegram_user_id}")
+                if filtered_count > 0:
+                    logger.warning(f"⚠️ Filtered out {filtered_count}/{len(db_aliases)} aliases (ingredient IDs not found in self.ingredients)")
+
+                logger.info(f"✅ Loaded {len(self.aliases)} ingredient aliases from database for user {self.telegram_user_id}")
+
+                # Debug: показать первые 3 алиаса
+                if self.aliases:
+                    sample_aliases = list(self.aliases.items())[:3]
+                    logger.info(f"   Sample aliases: {sample_aliases}")
+
                 return  # Successfully loaded from DB
 
             except Exception as e:

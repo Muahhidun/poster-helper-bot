@@ -117,8 +117,16 @@ def sync_ingredients_if_needed():
     try:
         ingredients_csv = DATA_DIR / "poster_ingredients.csv"
 
+        logger.info(f"🔍 Проверка ингредиентов...")
+        logger.info(f"   DATA_DIR: {DATA_DIR}")
+        logger.info(f"   CSV path: {ingredients_csv}")
+        logger.info(f"   File exists: {ingredients_csv.exists()}")
+
         if ingredients_csv.exists():
-            logger.info(f"✅ Ингредиенты уже загружены ({ingredients_csv})")
+            # Посчитать строки
+            with open(ingredients_csv, 'r') as f:
+                line_count = sum(1 for _ in f) - 1  # -1 for header
+            logger.info(f"✅ Ингредиенты уже загружены ({line_count} штук)")
             return
 
         logger.info("🔄 Синхронизация ингредиентов из Poster API...")
@@ -126,7 +134,13 @@ def sync_ingredients_if_needed():
         # Запускаем async функцию sync_ingredients
         asyncio.run(sync_ingredients())
 
-        logger.info("✅ Ингредиенты успешно синхронизированы")
+        # Проверяем что файл создан
+        if ingredients_csv.exists():
+            with open(ingredients_csv, 'r') as f:
+                line_count = sum(1 for _ in f) - 1
+            logger.info(f"✅ Ингредиенты успешно синхронизированы ({line_count} штук)")
+        else:
+            logger.error(f"❌ CSV файл не был создан после синхронизации!")
 
     except Exception as e:
         logger.error(f"❌ Ошибка при синхронизации ингредиентов: {e}", exc_info=True)
