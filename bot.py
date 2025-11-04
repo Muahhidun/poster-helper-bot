@@ -17,7 +17,7 @@ from telegram.ext import (
 # Local imports
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
-    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config
+    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -27,6 +27,7 @@ from simple_parser import get_simple_parser
 from matchers import get_category_matcher, get_account_matcher, get_supplier_matcher, get_ingredient_matcher, get_product_matcher
 from daily_transactions import DailyTransactionScheduler, is_daily_transactions_enabled
 from alias_generator import AliasGenerator
+from sync_ingredients import sync_ingredients
 import re
 
 # APScheduler для автоматических задач
@@ -108,6 +109,30 @@ def fix_user_poster_urls():
         logger.error(f"❌ Ошибка при исправлении poster_base_url: {e}", exc_info=True)
 
 
+def sync_ingredients_if_needed():
+    """
+    Синхронизация ингредиентов из Poster API если CSV файл отсутствует.
+    Нужно для Railway, где файловая система эфемерная.
+    """
+    try:
+        ingredients_csv = DATA_DIR / "poster_ingredients.csv"
+
+        if ingredients_csv.exists():
+            logger.info(f"✅ Ингредиенты уже загружены ({ingredients_csv})")
+            return
+
+        logger.info("🔄 Синхронизация ингредиентов из Poster API...")
+
+        # Запускаем async функцию sync_ingredients
+        asyncio.run(sync_ingredients())
+
+        logger.info("✅ Ингредиенты успешно синхронизированы")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при синхронизации ингредиентов: {e}", exc_info=True)
+        logger.warning("⚠️ Бот продолжит работу без ингредиентов (alias matching не будет работать)")
+
+
 def migrate_csv_aliases_to_db():
     """
     Автоматическая миграция алиасов из CSV в PostgreSQL при первом запуске.
@@ -124,7 +149,9 @@ def migrate_csv_aliases_to_db():
         if not users_dir.exists():
             return
 
-        logger.info("🔄 Проверка миграции алиасов из CSV в БД...")
+        logger.info("=" * 70)
+        logger.info("🔄 ПРОВЕРКА МИГРАЦИИ АЛИАСОВ ИЗ CSV В БД...")
+        logger.info("=" * 70)
 
         # Получаем всех пользователей из БД
         conn = db._get_connection()
@@ -138,6 +165,8 @@ def migrate_csv_aliases_to_db():
         cursor.execute("SELECT telegram_user_id FROM users")
         db_users = cursor.fetchall()
         conn.close()
+
+        logger.info(f"📊 Найдено пользователей в БД: {len(db_users)}")
 
         total_imported = 0
 
@@ -4331,6 +4360,9 @@ def main():
 
         # Initialize database (creates tables if needed)
         get_database()
+
+        # Sync ingredients from Poster API if CSV doesn't exist (for Railway)
+        sync_ingredients_if_needed()
 
         # Fix poster_base_url for existing users (auto-migration)
         fix_user_poster_urls()
