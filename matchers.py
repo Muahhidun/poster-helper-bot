@@ -623,6 +623,8 @@ class ProductMatcher:
             logger.warning(f"Products file not found: {self.products_csv}")
             return
 
+        logger.info(f"Loading products from: {self.products_csv}")
+
         with open(self.products_csv, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -640,10 +642,60 @@ class ProductMatcher:
                 # Add name for matching
                 self.names[name.lower()] = product_id
 
-        logger.info(f"Loaded {len(self.products)} products for user {self.telegram_user_id}")
+        logger.info(f"✅ Loaded {len(self.products)} products from CSV for user {self.telegram_user_id}")
+
+        # Debug: показать первые 5 ID
+        if self.products:
+            sample_ids = list(self.products.keys())[:5]
+            logger.info(f"   Sample product IDs: {sample_ids}")
 
     def load_aliases(self):
-        """Load product aliases from CSV"""
+        """Load product aliases from database (with CSV fallback)"""
+        # Try loading from database first (for Railway)
+        if self.telegram_user_id:
+            try:
+                from database import get_database
+                db = get_database()
+                db_aliases = db.get_ingredient_aliases(self.telegram_user_id)
+
+                logger.info(f"📋 Found {len(db_aliases)} aliases in database for user {self.telegram_user_id}")
+
+                filtered_count = 0
+                product_count = 0
+
+                for row in db_aliases:
+                    # Only load product aliases (skip ingredient aliases)
+                    if row.get('source', '').strip().lower() != 'product':
+                        continue
+
+                    product_count += 1
+                    alias = row['alias_text'].strip().lower()
+                    item_id = int(row['poster_item_id'])
+
+                    # Verify that this product exists
+                    if item_id in self.products:
+                        self.aliases[alias] = item_id
+                    else:
+                        filtered_count += 1
+                        if filtered_count <= 3:  # Показать первые 3 отфильтрованных
+                            logger.warning(f"⚠️ Alias '{alias}' references non-existent product ID {item_id}")
+
+                if filtered_count > 0:
+                    logger.warning(f"⚠️ Filtered out {filtered_count}/{product_count} product aliases (product IDs not found in self.products)")
+
+                logger.info(f"✅ Loaded {len(self.aliases)} product aliases from database for user {self.telegram_user_id}")
+
+                # Debug: показать первые 3 алиаса
+                if self.aliases:
+                    sample_aliases = list(self.aliases.items())[:3]
+                    logger.info(f"   Sample product aliases: {sample_aliases}")
+
+                return  # Successfully loaded from DB
+
+            except Exception as e:
+                logger.warning(f"Could not load product aliases from database: {e}. Falling back to CSV...")
+
+        # Fallback: load from CSV (for local development)
         if not self.aliases_csv.exists():
             logger.warning(f"Item aliases file not found: {self.aliases_csv}")
             return
@@ -664,7 +716,7 @@ class ProductMatcher:
                 else:
                     logger.warning(f"Alias '{alias}' references non-existent product {item_id}")
 
-        logger.info(f"Loaded {len(self.aliases)} product aliases for user {self.telegram_user_id}")
+        logger.info(f"Loaded {len(self.aliases)} product aliases from CSV for user {self.telegram_user_id}")
 
     def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int]]:
         """

@@ -28,6 +28,7 @@ from matchers import get_category_matcher, get_account_matcher, get_supplier_mat
 from daily_transactions import DailyTransactionScheduler, is_daily_transactions_enabled
 from alias_generator import AliasGenerator
 from sync_ingredients import sync_ingredients
+from sync_products import sync_products
 import re
 
 # APScheduler для автоматических задач
@@ -145,6 +146,43 @@ def sync_ingredients_if_needed():
     except Exception as e:
         logger.error(f"❌ Ошибка при синхронизации ингредиентов: {e}", exc_info=True)
         logger.warning("⚠️ Бот продолжит работу без ингредиентов (alias matching не будет работать)")
+
+
+def sync_products_if_needed():
+    """
+    Синхронизация products из Poster API если CSV файл отсутствует.
+    Нужно для Railway, где файловая система эфемерная.
+    """
+    try:
+        products_csv = DATA_DIR / "poster_products.csv"
+
+        logger.info(f"🔍 Проверка products...")
+        logger.info(f"   CSV path: {products_csv}")
+        logger.info(f"   File exists: {products_csv.exists()}")
+
+        if products_csv.exists():
+            # Посчитать строки
+            with open(products_csv, 'r') as f:
+                line_count = sum(1 for _ in f) - 1  # -1 for header
+            logger.info(f"✅ Products уже загружены ({line_count} штук)")
+            return
+
+        logger.info("🔄 Синхронизация products из Poster API...")
+
+        # Запускаем async функцию sync_products
+        asyncio.run(sync_products())
+
+        # Проверяем что файл создан
+        if products_csv.exists():
+            with open(products_csv, 'r') as f:
+                line_count = sum(1 for _ in f) - 1
+            logger.info(f"✅ Products успешно синхронизированы ({line_count} штук)")
+        else:
+            logger.error(f"❌ CSV файл не был создан после синхронизации!")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка при синхронизации products: {e}", exc_info=True)
+        logger.warning("⚠️ Бот продолжит работу без products (product alias matching не будет работать)")
 
 
 def migrate_csv_aliases_to_db():
@@ -4420,6 +4458,9 @@ def main():
 
         # Sync ingredients from Poster API if CSV doesn't exist (for Railway)
         sync_ingredients_if_needed()
+
+        # Sync products from Poster API if CSV doesn't exist (for Railway)
+        sync_products_if_needed()
 
         # Fix poster_base_url for existing users (auto-migration)
         fix_user_poster_urls()
