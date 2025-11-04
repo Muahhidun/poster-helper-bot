@@ -1547,13 +1547,24 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
         total_amount = 0
 
         for item in items:
+            # Log original item name from OCR
+            logger.info(f"🔍 Matching item: \"{item['name']}\"")
+
             # Try ingredient match first
             ingredient_match = ingredient_matcher.match(item['name'])
+            if ingredient_match:
+                logger.info(f"   Ingredient match: {ingredient_match[1]} (ID: {ingredient_match[0]}, score: {ingredient_match[3]:.1f})")
+            else:
+                logger.info(f"   Ingredient match: None")
 
             # Try product match if ingredient not found or score too low
             product_match = None
             if not ingredient_match or ingredient_match[3] < 75:
                 product_match = product_matcher.match(item['name'])
+                if product_match:
+                    logger.info(f"   Product match: {product_match[1]} (ID: {product_match[0]}, score: {product_match[3]:.1f})")
+                else:
+                    logger.info(f"   Product match: None")
 
             # Use best match
             best_match = None

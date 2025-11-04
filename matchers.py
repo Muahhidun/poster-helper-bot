@@ -498,10 +498,9 @@ class IngredientMatcher:
                 score_cutoff=score_cutoff
             )
 
-            # Log top 3 matches for debugging
-            if logger.isEnabledFor(logging.DEBUG):
-                top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
-                logger.debug(f"Top 3 alias matches for '{text}': {top_matches}")
+            # Log top 3 matches for debugging (always show for ingredients)
+            top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
+            logger.info(f"      Top 3 ingredient alias matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_matches]}")
 
             if alias_match:  # Removed higher threshold - use same as score_cutoff
                 matched_alias = alias_match[0]
@@ -519,6 +518,11 @@ class IngredientMatcher:
             scorer=fuzz.WRatio,
             score_cutoff=score_cutoff
         )
+
+        # Log top 3 ingredient name matches
+        if names_list:
+            top_name_matches = process.extract(text_lower, names_list, scorer=fuzz.WRatio, limit=3)
+            logger.info(f"      Top 3 ingredient name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_name_matches]}")
 
         if name_match:
             matched_name = name_match[0]
@@ -798,10 +802,9 @@ class ProductMatcher:
                 score_cutoff=score_cutoff
             )
 
-            # Log top 3 matches for debugging
-            if logger.isEnabledFor(logging.DEBUG):
-                top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
-                logger.debug(f"Top 3 product alias matches for '{text}': {top_matches}")
+            # Log top 3 matches for debugging (always show for products)
+            top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
+            logger.info(f"      Top 3 product alias matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_matches]}")
 
             if alias_match:  # Removed higher threshold - use same as score_cutoff
                 matched_alias = alias_match[0]
@@ -819,6 +822,11 @@ class ProductMatcher:
             scorer=fuzz.WRatio,
             score_cutoff=score_cutoff
         )
+
+        # Log top 3 product name matches
+        if names_list:
+            top_name_matches = process.extract(text_lower, names_list, scorer=fuzz.WRatio, limit=3)
+            logger.info(f"      Top 3 product name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_name_matches]}")
 
         if name_match:
             matched_name = name_match[0]
