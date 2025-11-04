@@ -403,6 +403,10 @@ class IngredientMatcher:
 
                 filtered_count = 0
                 for row in db_aliases:
+                    # Only load ingredient aliases (skip product aliases)
+                    if row.get('source', '').strip().lower() != 'ingredient':
+                        continue
+
                     # Normalize alias text (same as input text normalization)
                     alias = normalize_text_for_matching(row['alias_text'])
                     item_id = int(row['poster_item_id'])
