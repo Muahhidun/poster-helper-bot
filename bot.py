@@ -1250,18 +1250,13 @@ async def handle_quantity_change_input(update: Update, context: ContextTypes.DEF
         f"{item['name']}: {quantity} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
     )
 
-    # Show updated draft
-    class FakeQuery:
-        def __init__(self, message):
-            self.message = message
-        async def edit_message_text(self, *args, **kwargs):
-            pass
+    # Show updated draft with edit buttons
+    message = await show_supply_draft(update, context, draft)
 
-    fake_update = type('obj', (object,), {
-        'callback_query': FakeQuery(update.message),
-        'effective_user': update.effective_user
-    })()
-    await show_draft_again(fake_update, context)
+    # Update current_message_id to the new message
+    if message:
+        context.user_data['current_message_id'] = message.message_id
+        context.user_data['drafts'][message.message_id] = draft
 
 
 async def handle_price_change_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1313,18 +1308,13 @@ async def handle_price_change_input(update: Update, context: ContextTypes.DEFAUL
         f"{item['name']}: {item['num']} x {price:,} = {item['sum']:,} {CURRENCY}"
     )
 
-    # Show updated draft
-    class FakeQuery:
-        def __init__(self, message):
-            self.message = message
-        async def edit_message_text(self, *args, **kwargs):
-            pass
+    # Show updated draft with edit buttons
+    message = await show_supply_draft(update, context, draft)
 
-    fake_update = type('obj', (object,), {
-        'callback_query': FakeQuery(update.message),
-        'effective_user': update.effective_user
-    })()
-    await show_draft_again(fake_update, context)
+    # Update current_message_id to the new message
+    if message:
+        context.user_data['current_message_id'] = message.message_id
+        context.user_data['drafts'][message.message_id] = draft
 
 
 async def process_transaction_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
@@ -1680,6 +1670,55 @@ async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return await context.bot.send_message(chat.id, message_text, reply_markup=reply_markup)
     else:
         return await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+
+async def show_supply_draft_edit(query, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
+    """Show supply draft with edit buttons (for editing existing message)"""
+    items_text = "\n".join([
+        f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        for idx, item in enumerate(draft['items'])
+    ])
+
+    message_text = (
+        "📦 Черновик поставки:\n\n"
+        f"Поставщик: {draft['supplier_name']}\n"
+        f"Счёт: {draft['account_name']}\n"
+        f"Склад: {draft['storage_name']}\n\n"
+        f"Товары:\n{items_text}\n\n"
+        f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
+        f"Дата: {draft['date']}\n\n"
+        f"💡 Нажмите на товар чтобы изменить"
+    )
+
+    # Create keyboard with item edit buttons
+    keyboard = []
+
+    # Add buttons for each item (2 per row)
+    item_buttons = []
+    for idx, item in enumerate(draft['items']):
+        button_text = f"{idx+1}. {item['name'][:20]}"  # Truncate long names
+        item_buttons.append(InlineKeyboardButton(button_text, callback_data=f"edit_item:{idx}"))
+
+        if len(item_buttons) == 2 or idx == len(draft['items']) - 1:
+            keyboard.append(item_buttons)
+            item_buttons = []
+
+    # Add main action buttons
+    keyboard.extend([
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="confirm"),
+        ],
+        [
+            InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
+            InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
+        ],
+        [
+            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
+        ]
+    ])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
 
 
 async def show_transfer_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
@@ -3430,7 +3469,9 @@ async def delete_item_from_draft(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['drafts'] = drafts
 
     await query.answer(f"Удалено: {removed_item['name']}")
-    await show_draft_again(update, context)
+
+    # Show updated draft with edit buttons
+    await show_supply_draft_edit(query, context, draft)
 
 
 async def start_ingredient_change(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
@@ -3544,7 +3585,9 @@ async def update_item_ingredient(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['drafts'] = drafts
 
     await query.answer(f"Изменено на: {ingredient_info['name']}")
-    await show_draft_again(update, context)
+
+    # Show full draft with edit buttons for all items
+    await show_supply_draft_edit(query, context, draft)
 
 
 async def start_quantity_change(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
