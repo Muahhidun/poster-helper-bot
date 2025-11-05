@@ -583,7 +583,7 @@ class IngredientMatcher:
 
     def add_alias(self, alias_text: str, ingredient_id: int, notes: str = ""):
         """
-        Add new ingredient alias and save to CSV
+        Add new ingredient alias and save to database (with CSV fallback)
 
         Args:
             alias_text: The alias text to add
@@ -594,25 +594,52 @@ class IngredientMatcher:
             logger.error(f"Cannot add alias: ingredient {ingredient_id} does not exist")
             return False
 
-        alias_lower = alias_text.strip().lower()
+        alias_lower = normalize_text_for_matching(alias_text)
         ingredient = self.ingredients[ingredient_id]
+
+        # Check if alias already exists (avoid duplicates)
+        if alias_lower in self.aliases and self.aliases[alias_lower] == ingredient_id:
+            logger.info(f"Alias already exists: '{alias_text}' -> {ingredient_id}")
+            return True  # Not an error, just already exists
 
         # Add to memory
         self.aliases[alias_lower] = ingredient_id
 
-        # Append to CSV (use user-specific or global path)
-        with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                alias_text,
-                ingredient_id,
-                ingredient['name'],
-                'ingredient',
-                notes
-            ])
+        # Try saving to database first (for Railway/PostgreSQL)
+        if self.telegram_user_id:
+            try:
+                from database import get_database
+                db = get_database()
+                success = db.add_ingredient_alias(
+                    telegram_user_id=self.telegram_user_id,
+                    alias_text=alias_text,
+                    poster_item_id=ingredient_id,
+                    poster_item_name=ingredient['name'],
+                    source='ingredient',
+                    notes=notes
+                )
+                if success:
+                    logger.info(f"✅ Added ingredient alias to database: '{alias_text}' -> {ingredient_id} ({ingredient['name']}) for user {self.telegram_user_id}")
+                    return True
+            except Exception as e:
+                logger.warning(f"Could not save alias to database: {e}. Falling back to CSV...")
 
-        logger.info(f"Added ingredient alias: '{alias_text}' -> {ingredient_id} ({ingredient['name']}) for user {self.telegram_user_id}")
-        return True
+        # Fallback: save to CSV (for local development)
+        try:
+            with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    alias_text,
+                    ingredient_id,
+                    ingredient['name'],
+                    'ingredient',
+                    notes
+                ])
+            logger.info(f"Added ingredient alias to CSV: '{alias_text}' -> {ingredient_id} ({ingredient['name']}) for user {self.telegram_user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save alias to CSV: {e}")
+            return False
 
     def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int]]:
         """
@@ -892,7 +919,7 @@ class ProductMatcher:
 
     def add_alias(self, alias_text: str, product_id: int, notes: str = ""):
         """
-        Add new product alias and save to CSV
+        Add new product alias and save to database (with CSV fallback)
 
         Args:
             alias_text: The alias text to add
@@ -903,25 +930,52 @@ class ProductMatcher:
             logger.error(f"Cannot add alias: product {product_id} does not exist")
             return False
 
-        alias_lower = alias_text.strip().lower()
+        alias_lower = normalize_text_for_matching(alias_text)
         product = self.products[product_id]
+
+        # Check if alias already exists (avoid duplicates)
+        if alias_lower in self.aliases and self.aliases[alias_lower] == product_id:
+            logger.info(f"Alias already exists: '{alias_text}' -> {product_id}")
+            return True  # Not an error, just already exists
 
         # Add to memory
         self.aliases[alias_lower] = product_id
 
-        # Append to CSV (use user-specific or global path)
-        with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                alias_text,
-                product_id,
-                product['name'],
-                'product',
-                notes
-            ])
+        # Try saving to database first (for Railway/PostgreSQL)
+        if self.telegram_user_id:
+            try:
+                from database import get_database
+                db = get_database()
+                success = db.add_ingredient_alias(
+                    telegram_user_id=self.telegram_user_id,
+                    alias_text=alias_text,
+                    poster_item_id=product_id,
+                    poster_item_name=product['name'],
+                    source='product',
+                    notes=notes
+                )
+                if success:
+                    logger.info(f"✅ Added product alias to database: '{alias_text}' -> {product_id} ({product['name']}) for user {self.telegram_user_id}")
+                    return True
+            except Exception as e:
+                logger.warning(f"Could not save alias to database: {e}. Falling back to CSV...")
 
-        logger.info(f"Added product alias: '{alias_text}' -> {product_id} ({product['name']}) for user {self.telegram_user_id}")
-        return True
+        # Fallback: save to CSV (for local development)
+        try:
+            with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    alias_text,
+                    product_id,
+                    product['name'],
+                    'product',
+                    notes
+                ])
+            logger.info(f"Added product alias to CSV: '{alias_text}' -> {product_id} ({product['name']}) for user {self.telegram_user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save alias to CSV: {e}")
+            return False
 
     def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int]]:
         """

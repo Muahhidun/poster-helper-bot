@@ -1669,10 +1669,15 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
 
 async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
     """Show supply draft with confirmation buttons"""
-    items_text = "\n".join([
-        f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
-        for idx, item in enumerate(draft['items'])
-    ])
+    items_lines = []
+    for idx, item in enumerate(draft['items']):
+        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        # Add original name from invoice if available
+        if item.get('original_name'):
+            line += f"\n   _из накладной: {item['original_name']}_"
+        items_lines.append(line)
+
+    items_text = "\n".join(items_lines)
 
     message_text = (
         "📦 Черновик поставки:\n\n"
@@ -1723,10 +1728,15 @@ async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 async def show_supply_draft_edit(query, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
     """Show supply draft with edit buttons (for editing existing message)"""
-    items_text = "\n".join([
-        f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
-        for idx, item in enumerate(draft['items'])
-    ])
+    items_lines = []
+    for idx, item in enumerate(draft['items']):
+        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        # Add original name from invoice if available
+        if item.get('original_name'):
+            line += f"\n   _из накладной: {item['original_name']}_"
+        items_lines.append(line)
+
+    items_text = "\n".join(items_lines)
 
     message_text = (
         "📦 Черновик поставки:\n\n"
@@ -2289,17 +2299,37 @@ async def handle_ingredient_selection(update: Update, context: ContextTypes.DEFA
     supply_ctx['matched_items'].append(matched_item)
     supply_ctx['total_amount'] += item_sum
 
-    # Save alias (auto-learning)
-    ingredient_matcher.add_alias(
-        current_item['name'],
-        ingredient_id,
-        notes="Auto-learned from user selection"
-    )
+    # Auto-learning: Save alias
+    alias_created = False
+    original_name = current_item['name'].strip()
 
-    await query.edit_message_text(
-        f"✅ Выбрано: {ingredient_info['name']}\n"
-        f"Алиас сохранён: \"{current_item['name']}\" → \"{ingredient_info['name']}\""
-    )
+    # Check conditions for creating alias
+    if original_name and len(original_name) >= 3:
+        # Normalize both names for comparison
+        from matchers import normalize_text_for_matching
+        original_normalized = normalize_text_for_matching(original_name)
+        new_normalized = normalize_text_for_matching(ingredient_info['name'])
+
+        # Only create alias if names are different
+        if original_normalized != new_normalized:
+            try:
+                success = ingredient_matcher.add_alias(
+                    alias_text=original_name,
+                    ingredient_id=ingredient_id,
+                    notes="Auto-learned from user selection"
+                )
+                if success:
+                    alias_created = True
+                    logger.info(f"📚 Auto-created alias: '{original_name}' -> {ingredient_id} ({ingredient_info['name']})")
+            except Exception as e:
+                logger.error(f"Failed to auto-create alias: {e}")
+
+    # Show confirmation message
+    message = f"✅ Выбрано: {ingredient_info['name']}"
+    if alias_created:
+        message += f"\n📚 Алиас сохранён: \"{original_name}\" → \"{ingredient_info['name']}\""
+
+    await query.edit_message_text(message)
 
     # Move to next unmatched item
     supply_ctx['current_unmatched_index'] += 1
@@ -3617,6 +3647,8 @@ async def update_item_ingredient(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("❌ Ошибка: товар не найден.")
         return
 
+    item = draft['items'][item_index]
+
     # Get ingredient info
     ingredient_matcher = get_ingredient_matcher(telegram_user_id)
     ingredient_info = ingredient_matcher.get_ingredient_info(ingredient_id)
@@ -3624,6 +3656,33 @@ async def update_item_ingredient(update: Update, context: ContextTypes.DEFAULT_T
     if not ingredient_info:
         await query.edit_message_text("❌ Ошибка: ингредиент не найден.")
         return
+
+    # Auto-learning: Create alias from original name if available
+    alias_created = False
+    original_name = item.get('original_name', '').strip()
+    new_name = ingredient_info['name']
+
+    # Check conditions for creating alias
+    if original_name and len(original_name) >= 3:
+        # Normalize both names for comparison
+        from matchers import normalize_text_for_matching
+        original_normalized = normalize_text_for_matching(original_name)
+        new_normalized = normalize_text_for_matching(new_name)
+
+        # Only create alias if names are different
+        if original_normalized != new_normalized:
+            try:
+                success = ingredient_matcher.add_alias(
+                    alias_text=original_name,
+                    ingredient_id=ingredient_id,
+                    notes='Auto-learned from user correction'
+                )
+                if success:
+                    alias_created = True
+                    logger.info(f"📚 Auto-created alias: '{original_name}' -> {ingredient_id} ({new_name})")
+            except Exception as e:
+                logger.error(f"Failed to auto-create alias: {e}")
+                # Don't fail the main operation if alias creation fails
 
     # Update item
     draft['items'][item_index]['id'] = ingredient_id
@@ -3633,7 +3692,12 @@ async def update_item_ingredient(update: Update, context: ContextTypes.DEFAULT_T
     drafts[message_id] = draft
     context.user_data['drafts'] = drafts
 
-    await query.answer(f"Изменено на: {ingredient_info['name']}")
+    # Notify user with alias info if created
+    notification = f"Изменено на: {ingredient_info['name']}"
+    if alias_created:
+        notification += "\n📚 Alias сохранён для будущих распознаваний"
+
+    await query.answer(notification)
 
     # Show full draft with edit buttons for all items
     await show_supply_draft_edit(query, context, draft)
@@ -3782,10 +3846,15 @@ async def update_account_in_draft(update: Update, context: ContextTypes.DEFAULT_
 
     if draft_type == 'supply':
         # Show supply draft
-        items_text = "\n".join([
-            f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
-            for item in draft['items']
-        ])
+        items_lines = []
+        for item in draft['items']:
+            line = f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+            # Add original name from invoice if available
+            if item.get('original_name'):
+                line += f"\n   _из накладной: {item['original_name']}_"
+            items_lines.append(line)
+
+        items_text = "\n".join(items_lines)
 
         message = (
             f"📦 Черновик поставки:\n\n"
@@ -3961,10 +4030,15 @@ async def update_supplier_in_draft(update: Update, context: ContextTypes.DEFAULT
     context.user_data['drafts'] = drafts
 
     # Show supply draft again
-    items_text = "\n".join([
-        f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
-        for item in draft['items']
-    ])
+    items_lines = []
+    for item in draft['items']:
+        line = f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+        # Add original name from invoice if available
+        if item.get('original_name'):
+            line += f"\n   _из накладной: {item['original_name']}_"
+        items_lines.append(line)
+
+    items_text = "\n".join(items_lines)
 
     message_text = (
         f"📦 Черновик поставки:\n\n"
@@ -4014,10 +4088,15 @@ async def show_draft_again(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if draft_type == 'supply':
         # Show supply draft
-        items_text = "\n".join([
-            f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
-            for item in draft['items']
-        ])
+        items_lines = []
+        for item in draft['items']:
+            line = f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+            # Add original name from invoice if available
+            if item.get('original_name'):
+                line += f"\n   _из накладной: {item['original_name']}_"
+            items_lines.append(line)
+
+        items_text = "\n".join(items_lines)
 
         message_text = (
             f"📦 Черновик поставки:\n\n"
@@ -4139,10 +4218,15 @@ async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
             # Success message
-            items_text = "\n".join([
-                f"  • {item['name']}: {item['num']} x {item['price']:,}"
-                for item in draft['items']
-            ])
+            items_lines = []
+            for item in draft['items']:
+                line = f"  • {item['name']}: {item['num']} x {item['price']:,}"
+                # Add original name from invoice if available
+                if item.get('original_name'):
+                    line += f"\n     _из накладной: {item['original_name']}_"
+                items_lines.append(line)
+
+            items_text = "\n".join(items_lines)
 
             await query.edit_message_text(
                 f"✅ Поставка создана успешно!\n\n"
