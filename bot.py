@@ -2179,7 +2179,7 @@ async def show_ingredient_selection(update: Update, context: ContextTypes.DEFAUL
 
     # Get top matches
     ingredient_matcher = get_ingredient_matcher(telegram_user_id)
-    top_matches = ingredient_matcher.get_top_matches(item_name, limit=4, score_cutoff=40)
+    top_matches = ingredient_matcher.get_top_matches(item_name, limit=3, score_cutoff=40)
 
     if not top_matches:
         # No matches at all, skip this item
@@ -2196,42 +2196,33 @@ async def show_ingredient_selection(update: Update, context: ContextTypes.DEFAUL
         await show_ingredient_selection(update, context)
         return
 
-    # Build keyboard with top matches
+    # Build keyboard with top matches (one button per row)
     keyboard = []
-    row = []
 
-    for ing_id, ing_name, unit, score in top_matches:
-        button_text = f"{ing_name} ({int(score)}%)"
+    for idx, (ing_id, ing_name, unit, score) in enumerate(top_matches):
+        button_text = f"[{idx+1}] {ing_name} ({int(score)}%)"
         button = InlineKeyboardButton(
             button_text,
             callback_data=f"select_ingredient_{ing_id}"
         )
-        row.append(button)
-
-        # 2 buttons per row
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-
-    # Add remaining buttons
-    if row:
-        keyboard.append(row)
+        keyboard.append([button])
 
     # Add "Manual search" and "Skip" buttons
     keyboard.append([
-        InlineKeyboardButton("✏️ Ввести название вручную", callback_data="manual_ingredient_search")
+        InlineKeyboardButton("✏️ Другое (ввести вручную)", callback_data="manual_ingredient_search")
     ])
     keyboard.append([
-        InlineKeyboardButton("❌ Пропустить этот товар", callback_data="skip_ingredient")
+        InlineKeyboardButton("⏭️ Пропустить", callback_data="skip_ingredient")
     ])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     progress = f"({current_index + 1}/{len(unmatched_items)})"
+    item_sum = int(current_item['qty'] * current_item['price'])
     message = (
-        f"❓ Не удалось точно определить ингредиент {progress}:\n"
-        f"**\"{item_name}\"**\n"
-        f"Количество: {current_item['qty']}, Цена: {current_item['price']}\n\n"
+        f"❓ Не уверен в распознавании товара #{current_index + 1}:\n\n"
+        f"📝 Оригинал: \"{item_name}\"\n"
+        f"📦 Количество: {current_item['qty']} x {current_item['price']:,} = {item_sum:,} {CURRENCY}\n\n"
         f"Выберите правильный вариант:"
     )
 
@@ -2452,24 +2443,16 @@ async def handle_manual_ingredient_input(update: Update, context: ContextTypes.D
     current_index = supply_ctx['current_unmatched_index']
     current_item = unmatched_items[current_index]
 
-    # Build keyboard with matches
+    # Build keyboard with matches (one button per row for better readability)
     keyboard = []
-    row = []
 
-    for ing_id, ing_name, unit, score in top_matches:
-        button_text = f"{ing_name} ({int(score)}%)"
+    for idx, (ing_id, ing_name, unit, score) in enumerate(top_matches):
+        button_text = f"[{idx+1}] {ing_name} ({int(score)}%)"
         button = InlineKeyboardButton(
             button_text,
             callback_data=f"select_ingredient_{ing_id}"
         )
-        row.append(button)
-
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-
-    if row:
-        keyboard.append(row)
+        keyboard.append([button])
 
     # Add back button
     keyboard.append([
@@ -2478,10 +2461,11 @@ async def handle_manual_ingredient_input(update: Update, context: ContextTypes.D
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    item_sum = int(current_item['qty'] * current_item['price'])
     message = (
         f"🔍 Найдено {len(top_matches)} совпадений для \"{user_input}\":\n\n"
-        f"Оригинальное название: \"{current_item['name']}\"\n"
-        f"Количество: {current_item['qty']}, Цена: {current_item['price']}\n\n"
+        f"📝 Оригинал: \"{current_item['name']}\"\n"
+        f"📦 Количество: {current_item['qty']} x {current_item['price']:,} = {item_sum:,} {CURRENCY}\n\n"
         f"Выберите подходящий:"
     )
 
