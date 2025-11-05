@@ -615,6 +615,80 @@ class UserDatabase:
             logger.error(f"Failed to delete alias: {e}")
             return False
 
+    def clean_orphaned_ingredient_aliases(self, telegram_user_id: int, valid_ingredient_ids: list) -> int:
+        """
+        Delete aliases that reference ingredient IDs that no longer exist
+
+        Args:
+            telegram_user_id: User ID
+            valid_ingredient_ids: List of ingredient IDs that currently exist in Poster
+
+        Returns:
+            Number of deleted aliases
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Fetch all aliases for this user
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    SELECT id, alias_text, poster_item_id
+                    FROM ingredient_aliases
+                    WHERE telegram_user_id = ?
+                """, (telegram_user_id,))
+            else:
+                cursor.execute("""
+                    SELECT id, alias_text, poster_item_id
+                    FROM ingredient_aliases
+                    WHERE telegram_user_id = %s
+                """, (telegram_user_id,))
+
+            all_aliases = cursor.fetchall()
+
+            # Find orphaned aliases
+            orphaned_ids = []
+            for alias in all_aliases:
+                if DB_TYPE == "sqlite":
+                    alias_id = alias['id']
+                    poster_item_id = alias['poster_item_id']
+                    alias_text = alias['alias_text']
+                else:
+                    alias_id = alias[0]
+                    poster_item_id = alias[2]
+                    alias_text = alias[1]
+
+                if poster_item_id not in valid_ingredient_ids:
+                    orphaned_ids.append(alias_id)
+                    logger.info(f"  Orphaned alias: '{alias_text}' -> ingredient_id {poster_item_id} (deleted)")
+
+            # Delete orphaned aliases
+            if orphaned_ids:
+                if DB_TYPE == "sqlite":
+                    placeholders = ','.join('?' * len(orphaned_ids))
+                    cursor.execute(f"""
+                        DELETE FROM ingredient_aliases
+                        WHERE id IN ({placeholders}) AND telegram_user_id = ?
+                    """, orphaned_ids + [telegram_user_id])
+                else:
+                    placeholders = ','.join(['%s'] * len(orphaned_ids))
+                    cursor.execute(f"""
+                        DELETE FROM ingredient_aliases
+                        WHERE id IN ({placeholders}) AND telegram_user_id = %s
+                    """, orphaned_ids + [telegram_user_id])
+
+            conn.commit()
+            conn.close()
+
+            if orphaned_ids:
+                logger.info(f"✅ Cleaned {len(orphaned_ids)} orphaned ingredient aliases for user {telegram_user_id}")
+
+            return len(orphaned_ids)
+
+        except Exception as e:
+            logger.error(f"Failed to clean orphaned aliases: {e}")
+            return 0
+
 
 # Singleton instance
 _db: Optional[UserDatabase] = None

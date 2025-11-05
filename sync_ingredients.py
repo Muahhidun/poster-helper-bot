@@ -10,7 +10,12 @@ import config
 logger = logging.getLogger(__name__)
 
 async def sync_ingredients():
-    """Fetch ingredients from Poster API and save to CSV"""
+    """
+    Fetch ingredients from Poster API and save to CSV
+
+    Returns:
+        Tuple of (count, list of ingredient_ids)
+    """
     client = get_poster_client()
 
     try:
@@ -19,7 +24,7 @@ async def sync_ingredients():
 
         if not ingredients:
             logger.warning("No ingredients found!")
-            return 0
+            return (0, [])
 
         logger.info(f"Found {len(ingredients)} ingredients")
 
@@ -30,7 +35,8 @@ async def sync_ingredients():
             shutil.copy(csv_path, backup_path)
             logger.info(f"Backup created: {backup_path}")
 
-        # Сохранить новый файл
+        # Сохранить новый файл и собрать список ID
+        ingredient_ids = []
         with open(csv_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
@@ -41,9 +47,10 @@ async def sync_ingredients():
                 unit = ingredient.get('unit', '')
 
                 writer.writerow([ingredient_id, name, unit])
+                ingredient_ids.append(ingredient_id)
 
         logger.info(f"✅ Saved {len(ingredients)} ingredients to {csv_path}")
-        return len(ingredients)
+        return (len(ingredients), ingredient_ids)
 
     finally:
         await client.close()

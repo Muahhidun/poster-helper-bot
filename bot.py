@@ -4589,7 +4589,13 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
         from sync_accounts import sync_accounts
 
         # 1. Синхронизировать ингредиенты
-        ingredients_count = await sync_ingredients()
+        ingredients_result = await sync_ingredients()
+        if isinstance(ingredients_result, tuple):
+            ingredients_count, ingredient_ids = ingredients_result
+        else:
+            # Backward compatibility: если старая версия возвращает только count
+            ingredients_count = ingredients_result
+            ingredient_ids = []
 
         # 2. Синхронизировать продукты
         products_count = await sync_products()
@@ -4600,7 +4606,22 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
         # 4. Синхронизировать счета
         accounts_count = await sync_accounts()
 
-        # 5. Перезагрузить matchers (чтобы подхватили новые данные)
+        # 5. Очистить "мертвые" алиасы для ингредиентов (для всех пользователей)
+        cleaned_aliases_count = 0
+        if ingredient_ids:
+            try:
+                db = get_database()
+                # Очистить для каждого пользователя из ALLOWED_USER_IDS
+                for user_id in ALLOWED_USER_IDS:
+                    cleaned = db.clean_orphaned_ingredient_aliases(user_id, ingredient_ids)
+                    cleaned_aliases_count += cleaned
+
+                if cleaned_aliases_count > 0:
+                    logger.info(f"🧹 Cleaned {cleaned_aliases_count} orphaned ingredient aliases")
+            except Exception as e:
+                logger.error(f"Failed to clean orphaned aliases: {e}")
+
+        # 6. Перезагрузить matchers (чтобы подхватили новые данные)
         from matchers import _ingredient_matchers, _product_matchers, _category_matchers, _account_matchers, _supplier_matchers
 
         _ingredient_matchers.clear()
@@ -4618,9 +4639,12 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
                 f"📦 Ингредиенты: {ingredients_count}\n"
                 f"🍕 Продукты: {products_count}\n"
                 f"🏢 Поставщики: {suppliers_count}\n"
-                f"💰 Счета: {accounts_count}\n\n"
-                "Все справочники обновлены."
+                f"💰 Счета: {accounts_count}\n"
             )
+            if cleaned_aliases_count > 0:
+                message += f"🧹 Очищено устаревших алиасов: {cleaned_aliases_count}\n"
+            message += "\nВсе справочники обновлены."
+
             for admin_id in ADMIN_USER_IDS:
                 try:
                     await context.bot.send_message(chat_id=admin_id, text=message)
