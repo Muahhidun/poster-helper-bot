@@ -1,27 +1,36 @@
 """Script to sync ingredients from Poster API to CSV file"""
 import asyncio
 import csv
+import shutil
+import logging
 from pathlib import Path
 from poster_client import get_poster_client
 import config
+
+logger = logging.getLogger(__name__)
 
 async def sync_ingredients():
     """Fetch ingredients from Poster API and save to CSV"""
     client = get_poster_client()
 
     try:
-        print("Fetching ingredients from Poster API...")
+        logger.info("Fetching ingredients from Poster API...")
         ingredients = await client.get_ingredients()
 
         if not ingredients:
-            print("No ingredients found!")
-            return
+            logger.warning("No ingredients found!")
+            return 0
 
-        print(f"Found {len(ingredients)} ingredients")
+        logger.info(f"Found {len(ingredients)} ingredients")
 
-        # Save to CSV
+        # Backup старого файла
         csv_path = Path(config.DATA_DIR) / "poster_ingredients.csv"
+        if csv_path.exists():
+            backup_path = csv_path.with_suffix('.csv.backup')
+            shutil.copy(csv_path, backup_path)
+            logger.info(f"Backup created: {backup_path}")
 
+        # Сохранить новый файл
         with open(csv_path, 'w', encoding='utf-8', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
@@ -33,7 +42,8 @@ async def sync_ingredients():
 
                 writer.writerow([ingredient_id, name, unit])
 
-        print(f"✅ Saved {len(ingredients)} ingredients to {csv_path}")
+        logger.info(f"✅ Saved {len(ingredients)} ingredients to {csv_path}")
+        return len(ingredients)
 
     finally:
         await client.close()

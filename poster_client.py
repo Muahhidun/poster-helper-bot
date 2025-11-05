@@ -272,10 +272,8 @@ class PosterClient:
 
     async def get_suppliers(self) -> List[Dict]:
         """Get list of suppliers"""
-        # Note: Poster API doesn't have a direct getSuppliers endpoint
-        # Suppliers are returned from getSupplies with supplier info
-        # For now, we'll need to maintain a local mapping
-        return []
+        result = await self._request('GET', 'storage.getSuppliers')
+        return result.get('response', [])
 
     async def create_supply(
         self,

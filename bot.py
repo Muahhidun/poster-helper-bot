@@ -622,6 +622,25 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 @authorized_only
+async def force_sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительная синхронизация всех данных из Poster"""
+    await update.message.reply_text("🔄 Запускаю принудительную синхронизацию...")
+
+    try:
+        # Запустить синхронизацию
+        await auto_sync_poster_data(context)
+
+        await update.message.reply_text(
+            "✅ Синхронизация завершена!\n\n"
+            "Все данные обновлены из Poster API."
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка синхронизации:\n{str(e)}")
+        logger.error(f"Force sync failed: {e}", exc_info=True)
+
+
+@authorized_only
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /cancel command"""
     context.user_data.clear()
@@ -4558,6 +4577,69 @@ def setup_scheduler(app: Application):
     return scheduler
 
 
+async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
+    """Автоматическая синхронизация данных из Poster API"""
+    logger.info("🔄 Starting automatic sync from Poster API...")
+
+    try:
+        # Import sync functions
+        from sync_ingredients import sync_ingredients
+        from sync_products import sync_products
+        from sync_suppliers import sync_suppliers
+        from sync_accounts import sync_accounts
+
+        # 1. Синхронизировать ингредиенты
+        ingredients_count = await sync_ingredients()
+
+        # 2. Синхронизировать продукты
+        products_count = await sync_products()
+
+        # 3. Синхронизировать поставщиков
+        suppliers_count = await sync_suppliers()
+
+        # 4. Синхронизировать счета
+        accounts_count = await sync_accounts()
+
+        # 5. Перезагрузить matchers (чтобы подхватили новые данные)
+        from matchers import _ingredient_matchers, _product_matchers, _category_matchers, _account_matchers, _supplier_matchers
+
+        _ingredient_matchers.clear()
+        _product_matchers.clear()
+        _category_matchers.clear()
+        _account_matchers.clear()
+        _supplier_matchers.clear()
+
+        logger.info("✅ Auto-sync completed successfully")
+
+        # Отправить уведомление админам
+        if ADMIN_USER_IDS:
+            message = (
+                "✅ Автосинхронизация завершена:\n\n"
+                f"📦 Ингредиенты: {ingredients_count}\n"
+                f"🍕 Продукты: {products_count}\n"
+                f"🏢 Поставщики: {suppliers_count}\n"
+                f"💰 Счета: {accounts_count}\n\n"
+                "Все справочники обновлены."
+            )
+            for admin_id in ADMIN_USER_IDS:
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=message)
+                except Exception as e:
+                    logger.error(f"Failed to send notification to admin {admin_id}: {e}")
+
+    except Exception as e:
+        logger.error(f"❌ Auto-sync failed: {e}", exc_info=True)
+
+        # Уведомить админов об ошибке
+        if ADMIN_USER_IDS:
+            error_message = f"❌ Ошибка автосинхронизации:\n\n{str(e)}"
+            for admin_id in ADMIN_USER_IDS:
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=error_message)
+                except Exception as notify_error:
+                    logger.error(f"Failed to send error notification to admin {admin_id}: {notify_error}")
+
+
 def main():
     """Run the bot"""
     try:
@@ -4593,6 +4675,7 @@ def main():
         app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
         app.add_handler(CommandHandler("reload_aliases", reload_aliases_command))
         app.add_handler(CommandHandler("sync", sync_command))
+        app.add_handler(CommandHandler("force_sync", force_sync_command))
         app.add_handler(CommandHandler("cancel", cancel_command))
         app.add_handler(CommandHandler("test_daily", test_daily_command))
         app.add_handler(CommandHandler("test_report", test_report_command))
@@ -4606,6 +4689,20 @@ def main():
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         app.add_handler(CallbackQueryHandler(handle_callback))
+
+        # Зарегистрировать фоновую задачу автосинхронизации
+        from datetime import timedelta
+        job_queue = app.job_queue
+
+        # Запуск каждые 24 часа, первый запуск через 1 час
+        job_queue.run_repeating(
+            auto_sync_poster_data,
+            interval=timedelta(hours=24),
+            first=timedelta(hours=1),
+            name='auto_sync_poster'
+        )
+
+        logger.info("✅ Auto-sync job scheduled: every 24 hours, first run in 1 hour")
 
         # Setup scheduler для автоматических задач
         scheduler = setup_scheduler(app)
