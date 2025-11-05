@@ -1,0 +1,20 @@
+{
+  "name": "poster-helper-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for Poster invoice processing with Mini App",
+  "scripts": {
+    "build:miniapp": "cd mini_app && npm install && npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Muahhidun/poster-helper-bot"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "poster",
+    "mini-app"
+  ],
+  "author": "",
+  "license": "ISC"
+}

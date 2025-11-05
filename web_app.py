@@ -1,9 +1,13 @@
-"""Flask web application for managing ingredient aliases"""
+"""Flask web application for managing ingredient aliases and Telegram Mini App API"""
 import os
 import csv
 import secrets
+import hmac
+import hashlib
+import json
 from pathlib import Path
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from urllib.parse import parse_qsl
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g
 from database import get_database
 import config
 
@@ -18,6 +22,9 @@ app.secret_key = SECRET_KEY
 
 # Hardcoded user ID for demo (can be extended to multi-user with login)
 TELEGRAM_USER_ID = 167084307
+
+# Telegram Bot Token for WebApp validation
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
 
 def load_items_from_csv():
@@ -188,6 +195,235 @@ def delete_alias(alias_id):
     return redirect(url_for('list_aliases'))
 
 
+# ========================================
+# Telegram Mini App API Endpoints
+# ========================================
+
+def validate_telegram_web_app_data(init_data: str, bot_token: str) -> bool:
+    """Validate Telegram WebApp init data"""
+    if not bot_token:
+        # Allow development without token
+        return True
+
+    try:
+        parsed_data = dict(parse_qsl(init_data))
+        hash_str = parsed_data.pop('hash', '')
+
+        data_check_string = '\n'.join(
+            f"{k}={v}" for k, v in sorted(parsed_data.items())
+        )
+
+        secret_key = hmac.new(
+            "WebAppData".encode(),
+            bot_token.encode(),
+            hashlib.sha256
+        ).digest()
+
+        calculated_hash = hmac.new(
+            secret_key,
+            data_check_string.encode(),
+            hashlib.sha256
+        ).hexdigest()
+
+        return calculated_hash == hash_str
+    except Exception as e:
+        print(f"Validation error: {e}")
+        return False
+
+
+def get_user_id_from_init_data(init_data: str) -> int:
+    """Extract user ID from init data"""
+    try:
+        parsed_data = dict(parse_qsl(init_data))
+        user_data = json.loads(parsed_data.get('user', '{}'))
+        return user_data.get('id', TELEGRAM_USER_ID)
+    except:
+        return TELEGRAM_USER_ID
+
+
+@app.before_request
+def validate_api_request():
+    """Validate API requests from Mini App"""
+    if request.path.startswith('/api/'):
+        init_data = request.headers.get('X-Telegram-Init-Data', '')
+
+        # Validate init data
+        if not validate_telegram_web_app_data(init_data, TELEGRAM_TOKEN):
+            # In development, allow without validation
+            if not TELEGRAM_TOKEN:
+                g.user_id = TELEGRAM_USER_ID
+            else:
+                return jsonify({'error': 'Unauthorized'}), 401
+        else:
+            g.user_id = get_user_id_from_init_data(init_data)
+
+
+@app.route('/api/dashboard')
+def api_dashboard():
+    """Dashboard data for Mini App"""
+    # TODO: Implement statistics service
+    # For now, return mock data
+    return jsonify({
+        'supplies_count': 45,
+        'items_count': 312,
+        'avg_accuracy': 89.4,
+        'accuracy_trend': [
+            {'date': '2024-10-29', 'accuracy': 85.2},
+            {'date': '2024-10-30', 'accuracy': 87.1},
+            {'date': '2024-10-31', 'accuracy': 88.5},
+            {'date': '2024-11-01', 'accuracy': 90.2},
+            {'date': '2024-11-02', 'accuracy': 89.8},
+            {'date': '2024-11-03', 'accuracy': 91.3},
+            {'date': '2024-11-04', 'accuracy': 89.4},
+        ],
+        'top_problematic': [
+            {'item': 'Сухари панировочные', 'count': 5},
+            {'item': 'Перчатки виниловые', 'count': 3},
+        ]
+    })
+
+
+@app.route('/api/supplies')
+def api_supplies():
+    """List supplies with pagination for Mini App"""
+    # TODO: Implement in database.py
+    # For now, return mock data
+    return jsonify({
+        'supplies': [
+            {
+                'id': 1,
+                'created_at': '2024-11-04T18:34:00',
+                'supplier_name': 'YAPOSHA MARKET',
+                'items_count': 7,
+                'total_amount': 34350,
+                'avg_confidence': 85.7
+            },
+            {
+                'id': 2,
+                'created_at': '2024-11-04T14:22:00',
+                'supplier_name': 'Inarini',
+                'items_count': 12,
+                'total_amount': 89200,
+                'avg_confidence': 100.0
+            }
+        ],
+        'total': 2,
+        'page': 1,
+        'pages': 1
+    })
+
+
+@app.route('/api/supplies/<int:supply_id>')
+def api_supply_detail(supply_id):
+    """Get supply details for Mini App"""
+    # TODO: Implement in database.py
+    # For now, return mock data
+    return jsonify({
+        'id': supply_id,
+        'created_at': '2024-11-04T18:34:00',
+        'supplier_name': 'YAPOSHA MARKET ЕКИБАСТУЗ',
+        'account_name': 'Каспий',
+        'storage_name': 'Основной склад',
+        'total_amount': 34350,
+        'poster_supply_id': 15238,
+        'items': [
+            {
+                'original_text': 'Соус сырный (на бургер) 1кг',
+                'matched_item_name': 'Соус сырный 1кг',
+                'quantity': 2,
+                'unit': 'шт',
+                'price': 1750,
+                'total': 3500,
+                'confidence_score': 92.5
+            },
+            {
+                'original_text': 'Оливкое масло 5л',
+                'matched_item_name': 'Оливковое масло 5л',
+                'quantity': 1,
+                'unit': 'шт',
+                'price': 9000,
+                'total': 9000,
+                'confidence_score': 77.3
+            }
+        ]
+    })
+
+
+@app.route('/api/aliases')
+def api_aliases():
+    """List aliases for Mini App"""
+    search = request.args.get('search', '')
+    source = request.args.get('source', '')
+
+    db = get_database()
+    aliases = db.get_ingredient_aliases(g.user_id)
+
+    # Filter
+    if search:
+        aliases = [a for a in aliases if search.lower() in a['alias_text'].lower() or
+                   search.lower() in a['poster_item_name'].lower()]
+    if source:
+        aliases = [a for a in aliases if a['source'] == source]
+
+    return jsonify({'aliases': aliases})
+
+
+@app.route('/api/aliases', methods=['POST'])
+def api_create_alias():
+    """Create new alias for Mini App"""
+    data = request.json
+    db = get_database()
+
+    success = db.add_ingredient_alias(
+        telegram_user_id=g.user_id,
+        alias_text=data['alias_text'],
+        poster_item_id=data['poster_item_id'],
+        poster_item_name=data['poster_item_name'],
+        source=data.get('source', 'user'),
+        notes=data.get('notes', '')
+    )
+
+    if success:
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Failed to create alias'}), 500
+
+
+@app.route('/api/aliases/<int:alias_id>', methods=['PUT'])
+def api_update_alias(alias_id):
+    """Update alias for Mini App"""
+    data = request.json
+    db = get_database()
+
+    success = db.update_alias(
+        alias_id=alias_id,
+        telegram_user_id=g.user_id,
+        alias_text=data.get('alias_text', ''),
+        poster_item_id=data.get('poster_item_id', 0),
+        poster_item_name=data.get('poster_item_name', ''),
+        source=data.get('source', 'user'),
+        notes=data.get('notes', '')
+    )
+
+    if success:
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Failed to update alias'}), 500
+
+
+@app.route('/api/aliases/<int:alias_id>', methods=['DELETE'])
+def api_delete_alias(alias_id):
+    """Delete alias for Mini App"""
+    db = get_database()
+
+    success = db.delete_alias_by_id(alias_id, g.user_id)
+
+    if success:
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Failed to delete alias'}), 500
+
+
 @app.route('/api/items/search')
 def search_items():
     """API endpoint for searching items (autocomplete)"""
@@ -208,6 +444,30 @@ def search_items():
     items = items[:50]
 
     return jsonify(items)
+
+
+# ========================================
+# Serve Mini App static files
+# ========================================
+
+@app.route('/mini-app')
+@app.route('/mini-app/')
+@app.route('/mini-app/<path:path>')
+def serve_mini_app(path=''):
+    """Serve Mini App frontend"""
+    mini_app_dir = os.path.join(os.path.dirname(__file__), 'mini_app', 'dist')
+
+    # Check if dist exists
+    if not os.path.exists(mini_app_dir):
+        return jsonify({
+            'error': 'Mini App not built',
+            'message': 'Run "cd mini_app && npm install && npm run build" first'
+        }), 404
+
+    if path and os.path.exists(os.path.join(mini_app_dir, path)):
+        return send_from_directory(mini_app_dir, path)
+    else:
+        return send_from_directory(mini_app_dir, 'index.html')
 
 
 if __name__ == '__main__':
