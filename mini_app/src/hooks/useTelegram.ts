@@ -20,9 +20,6 @@ export const useTelegram = (): UseTelegramReturn => {
       app.expand()
       setWebApp(app)
       setIsReady(true)
-
-      // Enable closing confirmation
-      app.enableClosingConfirmation()
     } else {
       console.warn('Telegram WebApp not available')
       setIsReady(true) // Allow development without Telegram

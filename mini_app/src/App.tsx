@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useTelegram } from './hooks/useTelegram'
 import { initApiClient } from './api/client'
@@ -16,10 +16,6 @@ function App() {
     if (webApp) {
       // Initialize API client with Telegram initData
       initApiClient(webApp.initData)
-
-      // Configure WebApp appearance
-      webApp.setHeaderColor('bg_color')
-      webApp.setBackgroundColor('bg_color')
     }
   }, [webApp])
 
