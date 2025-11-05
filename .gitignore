@@ -39,3 +39,10 @@ data/*.sqlite3
 
 # User-specific data (generated at runtime)
 data/users/
+
+# Mini App (Telegram Mini App)
+mini_app/node_modules/
+mini_app/.vite/
+mini_app/dist/
+mini_app/.env
+mini_app/package-lock.json
