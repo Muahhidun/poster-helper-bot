@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}{% if mode == 'new' %}Добавить{% else %}Редактировать{% endif %} Alias{% endblock %}
+
+{% block content %}
+<h2>{% if mode == 'new' %}➕ Добавить{% else %}✏️ Редактировать{% endif %} Alias</h2>
+
+<form method="post" class="mt-4">
+    <div class="mb-3">
+        <label for="alias_text" class="form-label">Alias текст <span class="text-danger">*</span></label>
+        <input type="text" class="form-control" id="alias_text" name="alias_text"
+               value="{{ alias.alias_text if alias else '' }}" required>
+        <div class="form-text">Текст, который будет использоваться для поиска товара (например, "Кола ПЭТ 1л×12")</div>
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Тип <span class="text-danger">*</span></label><br>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="source" id="ingredient" value="ingredient"
+                   {% if not alias or alias.source == 'ingredient' %}checked{% endif %} required>
+            <label class="form-check-label" for="ingredient">Ингредиент</label>
+        </div>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="source" id="product" value="product"
+                   {% if alias and alias.source == 'product' %}checked{% endif %}>
+            <label class="form-check-label" for="product">Продукт</label>
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <label for="poster_item_name" class="form-label">Товар (начните вводить для поиска) <span class="text-danger">*</span></label>
+        <input type="text" class="form-control" id="poster_item_name" name="poster_item_name"
+               value="{{ alias.poster_item_name if alias else '' }}"
+               list="items_list" required autocomplete="off">
+        <datalist id="items_list">
+            {% for item in items %}
+            <option value="{{ item.name }}" data-id="{{ item.id }}">{{ item.name }} (ID: {{ item.id }})</option>
+            {% endfor %}
+        </datalist>
+        <input type="hidden" id="poster_item_id" name="poster_item_id"
+               value="{{ alias.poster_item_id if alias else '' }}" required>
+        <div class="form-text">Выберите товар из списка Poster</div>
+    </div>
+
+    <div class="mb-3">
+        <label for="notes" class="form-label">Примечание (опционально)</label>
+        <input type="text" class="form-control" id="notes" name="notes"
+               value="{{ alias.notes if alias else '' }}">
+        <div class="form-text">Дополнительная информация о alias</div>
+    </div>
+
+    <div class="mt-4">
+        <a href="{{ url_for('list_aliases') }}" class="btn btn-secondary">Отмена</a>
+        <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-fill poster_item_id when user selects from datalist
+    const posterItemNameInput = document.getElementById('poster_item_name');
+    const posterItemIdInput = document.getElementById('poster_item_id');
+    const itemsList = document.getElementById('items_list');
+
+    posterItemNameInput.addEventListener('input', function() {
+        const selectedOption = Array.from(itemsList.options).find(
+            option => option.value === posterItemNameInput.value
+        );
+
+        if (selectedOption) {
+            posterItemIdInput.value = selectedOption.getAttribute('data-id');
+        } else {
+            // Clear the hidden field if no match
+            posterItemIdInput.value = '';
+        }
+    });
+
+    // Validation on form submit
+    document.querySelector('form').addEventListener('submit', function(e) {
+        if (!posterItemIdInput.value) {
+            e.preventDefault();
+            alert('Пожалуйста, выберите товар из списка');
+        }
+    });
+</script>
+{% endblock %}

@@ -365,7 +365,7 @@ class UserDatabase:
         if DB_TYPE == "sqlite":
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT alias_text, poster_item_id, poster_item_name, source, notes
+                SELECT id, alias_text, poster_item_id, poster_item_name, source, notes
                 FROM ingredient_aliases
                 WHERE telegram_user_id = ?
                 ORDER BY alias_text
@@ -374,7 +374,7 @@ class UserDatabase:
         else:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT alias_text, poster_item_id, poster_item_name, source, notes
+                SELECT id, alias_text, poster_item_id, poster_item_name, source, notes
                 FROM ingredient_aliases
                 WHERE telegram_user_id = %s
                 ORDER BY alias_text
@@ -498,6 +498,122 @@ class UserDatabase:
 
         logger.info(f"✅ Bulk import: {count}/{len(aliases)} aliases added")
         return count
+
+    def get_alias_by_id(self, alias_id: int, telegram_user_id: int) -> Optional[Dict]:
+        """Get a single alias by ID"""
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, alias_text, poster_item_id, poster_item_name, source, notes
+                FROM ingredient_aliases
+                WHERE id = ? AND telegram_user_id = ?
+            """, (alias_id, telegram_user_id))
+            row = cursor.fetchone()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id, alias_text, poster_item_id, poster_item_name, source, notes
+                FROM ingredient_aliases
+                WHERE id = %s AND telegram_user_id = %s
+            """, (alias_id, telegram_user_id))
+            row = cursor.fetchone()
+
+        conn.close()
+
+        if row:
+            return dict(row)
+        return None
+
+    def update_alias(
+        self,
+        alias_id: int,
+        telegram_user_id: int,
+        alias_text: str,
+        poster_item_id: int,
+        poster_item_name: str,
+        source: str = "user",
+        notes: str = ""
+    ) -> bool:
+        """Update an existing alias"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    UPDATE ingredient_aliases
+                    SET alias_text = ?,
+                        poster_item_id = ?,
+                        poster_item_name = ?,
+                        source = ?,
+                        notes = ?
+                    WHERE id = ? AND telegram_user_id = ?
+                """, (
+                    alias_text.strip().lower(),
+                    poster_item_id,
+                    poster_item_name,
+                    source,
+                    notes,
+                    alias_id,
+                    telegram_user_id
+                ))
+            else:
+                cursor.execute("""
+                    UPDATE ingredient_aliases
+                    SET alias_text = %s,
+                        poster_item_id = %s,
+                        poster_item_name = %s,
+                        source = %s,
+                        notes = %s
+                    WHERE id = %s AND telegram_user_id = %s
+                """, (
+                    alias_text.strip().lower(),
+                    poster_item_id,
+                    poster_item_name,
+                    source,
+                    notes,
+                    alias_id,
+                    telegram_user_id
+                ))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Alias updated: ID={alias_id}, '{alias_text}' -> {poster_item_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update alias: {e}")
+            return False
+
+    def delete_alias_by_id(self, alias_id: int, telegram_user_id: int) -> bool:
+        """Delete an alias by ID"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    DELETE FROM ingredient_aliases
+                    WHERE id = ? AND telegram_user_id = ?
+                """, (alias_id, telegram_user_id))
+            else:
+                cursor.execute("""
+                    DELETE FROM ingredient_aliases
+                    WHERE id = %s AND telegram_user_id = %s
+                """, (alias_id, telegram_user_id))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Alias deleted: ID={alias_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete alias: {e}")
+            return False
 
 
 # Singleton instance
