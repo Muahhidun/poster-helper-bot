@@ -1667,11 +1667,25 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
         await update.message.reply_text(f"❌ Ошибка обработки поставки: {e}")
 
 
+def get_confidence_indicator(score):
+    """Возвращает эмодзи индикатор на основе confidence score"""
+    if score >= 85:
+        return "✅"
+    elif score >= 60:
+        return "⚠️"
+    else:
+        return "❌"
+
+
 async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
     """Show supply draft with confirmation buttons"""
     items_lines = []
     for idx, item in enumerate(draft['items']):
-        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        # Get confidence score and indicator
+        confidence = item.get('match_score', 100)  # default 100 если нет
+        indicator = get_confidence_indicator(confidence)
+
+        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY} {indicator} {confidence:.0f}%"
         # Add original name from invoice if available
         if item.get('original_name'):
             line += f"\n   _из накладной: {item['original_name']}_"
@@ -1679,12 +1693,19 @@ async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     items_text = "\n".join(items_lines)
 
+    # Count low confidence items
+    low_confidence_count = sum(1 for item in draft['items'] if item.get('match_score', 100) < 85)
+    low_confidence_hint = ""
+    if low_confidence_count > 0:
+        low_confidence_hint = f"\n💡 ⚠️ {low_confidence_count} поз. с низкой уверенностью - проверьте\n"
+
     message_text = (
         "📦 Черновик поставки:\n\n"
         f"Поставщик: {draft['supplier_name']}\n"
         f"Счёт: {draft['account_name']}\n"
         f"Склад: {draft['storage_name']}\n\n"
-        f"Товары:\n{items_text}\n\n"
+        f"Товары:\n{items_text}\n"
+        f"{low_confidence_hint}\n"
         f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
         f"Дата: {draft['date']}\n\n"
         f"💡 Нажмите на товар чтобы изменить"
@@ -1730,7 +1751,11 @@ async def show_supply_draft_edit(query, context: ContextTypes.DEFAULT_TYPE, draf
     """Show supply draft with edit buttons (for editing existing message)"""
     items_lines = []
     for idx, item in enumerate(draft['items']):
-        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        # Get confidence score and indicator
+        confidence = item.get('match_score', 100)  # default 100 если нет
+        indicator = get_confidence_indicator(confidence)
+
+        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY} {indicator} {confidence:.0f}%"
         # Add original name from invoice if available
         if item.get('original_name'):
             line += f"\n   _из накладной: {item['original_name']}_"
@@ -1738,12 +1763,19 @@ async def show_supply_draft_edit(query, context: ContextTypes.DEFAULT_TYPE, draf
 
     items_text = "\n".join(items_lines)
 
+    # Count low confidence items
+    low_confidence_count = sum(1 for item in draft['items'] if item.get('match_score', 100) < 85)
+    low_confidence_hint = ""
+    if low_confidence_count > 0:
+        low_confidence_hint = f"\n💡 ⚠️ {low_confidence_count} поз. с низкой уверенностью - проверьте\n"
+
     message_text = (
         "📦 Черновик поставки:\n\n"
         f"Поставщик: {draft['supplier_name']}\n"
         f"Счёт: {draft['account_name']}\n"
         f"Склад: {draft['storage_name']}\n\n"
-        f"Товары:\n{items_text}\n\n"
+        f"Товары:\n{items_text}\n"
+        f"{low_confidence_hint}\n"
         f"Итого: {draft['total_amount']:,} {CURRENCY}\n"
         f"Дата: {draft['date']}\n\n"
         f"💡 Нажмите на товар чтобы изменить"
@@ -3687,6 +3719,7 @@ async def update_item_ingredient(update: Update, context: ContextTypes.DEFAULT_T
     # Update item
     draft['items'][item_index]['id'] = ingredient_id
     draft['items'][item_index]['name'] = ingredient_info['name']
+    draft['items'][item_index]['match_score'] = 100  # User confirmed
 
     # Save draft
     drafts[message_id] = draft
