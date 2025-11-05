@@ -1,0 +1,17 @@
+# Nixpacks configuration for Railway deployment
+# This app requires both Python and Node.js
+
+[phases.setup]
+nixPkgs = ["python311", "nodejs-18_x", "npm-9_x"]
+
+[phases.install]
+cmds = [
+    "pip install -r requirements.txt",
+    "cd mini_app && npm install"
+]
+
+[phases.build]
+cmds = ["cd mini_app && npm run build"]
+
+[start]
+cmd = "python3 start_server.py"
