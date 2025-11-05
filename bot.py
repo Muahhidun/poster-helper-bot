@@ -1669,10 +1669,15 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
 
 async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
     """Show supply draft with confirmation buttons"""
-    items_text = "\n".join([
-        f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
-        for idx, item in enumerate(draft['items'])
-    ])
+    items_lines = []
+    for idx, item in enumerate(draft['items']):
+        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        # Add original name from invoice if available
+        if item.get('original_name'):
+            line += f"\n   _из накладной: {item['original_name']}_"
+        items_lines.append(line)
+
+    items_text = "\n".join(items_lines)
 
     message_text = (
         "📦 Черновик поставки:\n\n"
@@ -1723,10 +1728,15 @@ async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 async def show_supply_draft_edit(query, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
     """Show supply draft with edit buttons (for editing existing message)"""
-    items_text = "\n".join([
-        f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
-        for idx, item in enumerate(draft['items'])
-    ])
+    items_lines = []
+    for idx, item in enumerate(draft['items']):
+        line = f"  {idx+1}. {item['name']}: {item['num']} x {item['price']:,} = {item['sum']:,} {CURRENCY}"
+        # Add original name from invoice if available
+        if item.get('original_name'):
+            line += f"\n   _из накладной: {item['original_name']}_"
+        items_lines.append(line)
+
+    items_text = "\n".join(items_lines)
 
     message_text = (
         "📦 Черновик поставки:\n\n"
@@ -3782,10 +3792,15 @@ async def update_account_in_draft(update: Update, context: ContextTypes.DEFAULT_
 
     if draft_type == 'supply':
         # Show supply draft
-        items_text = "\n".join([
-            f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
-            for item in draft['items']
-        ])
+        items_lines = []
+        for item in draft['items']:
+            line = f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+            # Add original name from invoice if available
+            if item.get('original_name'):
+                line += f"\n   _из накладной: {item['original_name']}_"
+            items_lines.append(line)
+
+        items_text = "\n".join(items_lines)
 
         message = (
             f"📦 Черновик поставки:\n\n"
@@ -3961,10 +3976,15 @@ async def update_supplier_in_draft(update: Update, context: ContextTypes.DEFAULT
     context.user_data['drafts'] = drafts
 
     # Show supply draft again
-    items_text = "\n".join([
-        f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
-        for item in draft['items']
-    ])
+    items_lines = []
+    for item in draft['items']:
+        line = f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+        # Add original name from invoice if available
+        if item.get('original_name'):
+            line += f"\n   _из накладной: {item['original_name']}_"
+        items_lines.append(line)
+
+    items_text = "\n".join(items_lines)
 
     message_text = (
         f"📦 Черновик поставки:\n\n"
@@ -4014,10 +4034,15 @@ async def show_draft_again(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if draft_type == 'supply':
         # Show supply draft
-        items_text = "\n".join([
-            f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
-            for item in draft['items']
-        ])
+        items_lines = []
+        for item in draft['items']:
+            line = f"• {item['name']}: {item['num']} × {item['price']} = {item['sum']:,} {CURRENCY}"
+            # Add original name from invoice if available
+            if item.get('original_name'):
+                line += f"\n   _из накладной: {item['original_name']}_"
+            items_lines.append(line)
+
+        items_text = "\n".join(items_lines)
 
         message_text = (
             f"📦 Черновик поставки:\n\n"
@@ -4139,10 +4164,15 @@ async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
             # Success message
-            items_text = "\n".join([
-                f"  • {item['name']}: {item['num']} x {item['price']:,}"
-                for item in draft['items']
-            ])
+            items_lines = []
+            for item in draft['items']:
+                line = f"  • {item['name']}: {item['num']} x {item['price']:,}"
+                # Add original name from invoice if available
+                if item.get('original_name'):
+                    line += f"\n     _из накладной: {item['original_name']}_"
+                items_lines.append(line)
+
+            items_text = "\n".join(items_lines)
 
             await query.edit_message_text(
                 f"✅ Поставка создана успешно!\n\n"
