@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ['python312', 'nodejs_20']
+
+[phases.install]
+cmds = [
+    'pip install -r requirements.txt'
+]
+
+[phases.build]
+cmds = [
+    'cd mini_app && npm install && npm run build || echo "Mini app build skipped"'
+]
+
+[start]
+cmd = 'python start_server.py'
