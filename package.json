@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "description": "Telegram bot for Poster invoice processing with Mini App",
   "scripts": {
+    "build": "cd mini_app && npm install && npm run build",
     "build:miniapp": "cd mini_app && npm install && npm run build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "repository": {
     "type": "git",
