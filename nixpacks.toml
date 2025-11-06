@@ -6,7 +6,7 @@ nixPkgs = ["python311", "nodejs-18_x", "npm-9_x"]
 
 [phases.install]
 cmds = [
-  "pip install -r requirements.txt",
+  "python3 -m pip install -r requirements.txt",
   "cd mini_app && npm install"
 ]
 
