@@ -2,12 +2,13 @@
 # This app requires both Python and Node.js
 
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "nodejs-18_x", "npm-9_x"]
+nixPkgs = ["python311", "python311Packages.pip", "python311Packages.virtualenv", "nodejs-18_x", "npm-9_x"]
 
 [phases.install]
 cmds = [
-  "pip install --upgrade pip setuptools wheel",
-  "pip install -r requirements.txt",
+  "python3 -m venv /opt/venv",
+  "/opt/venv/bin/pip install --upgrade pip setuptools wheel",
+  "/opt/venv/bin/pip install -r requirements.txt",
   "cd mini_app && npm install"
 ]
 
@@ -15,4 +16,4 @@ cmds = [
 cmds = ["cd mini_app && npm run build"]
 
 [start]
-cmd = "python3 start_server.py"
+cmd = "/opt/venv/bin/python start_server.py"
