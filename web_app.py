@@ -447,6 +447,103 @@ def search_items():
 
 
 # ========================================
+# Shipment Templates API
+# ========================================
+
+@app.route('/api/templates')
+def get_templates():
+    """Get all shipment templates for the user"""
+    db = get_database()
+    user_id = g.user_id
+
+    templates = db.get_shipment_templates(user_id)
+
+    return jsonify({
+        'templates': templates
+    })
+
+
+@app.route('/api/templates', methods=['POST'])
+def create_template():
+    """Create a new shipment template"""
+    db = get_database()
+    user_id = g.user_id
+
+    data = request.get_json()
+
+    # Validate required fields
+    required_fields = ['template_name', 'supplier_id', 'supplier_name',
+                      'account_id', 'account_name', 'items']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({'error': f'Missing required field: {field}'}), 400
+
+    # Validate items format
+    if not isinstance(data['items'], list) or len(data['items']) == 0:
+        return jsonify({'error': 'items must be a non-empty list'}), 400
+
+    for item in data['items']:
+        if not all(k in item for k in ['id', 'name', 'price']):
+            return jsonify({'error': 'Each item must have id, name, and price'}), 400
+
+    success = db.create_shipment_template(
+        telegram_user_id=user_id,
+        template_name=data['template_name'],
+        supplier_id=data['supplier_id'],
+        supplier_name=data['supplier_name'],
+        account_id=data['account_id'],
+        account_name=data['account_name'],
+        items=data['items'],
+        storage_id=data.get('storage_id', 1)
+    )
+
+    if success:
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Failed to create template'}), 400
+
+
+@app.route('/api/templates/<template_name>', methods=['PUT'])
+def update_template(template_name):
+    """Update a shipment template"""
+    db = get_database()
+    user_id = g.user_id
+
+    data = request.get_json()
+
+    # Update template
+    success = db.update_shipment_template(
+        telegram_user_id=user_id,
+        template_name=template_name,
+        supplier_id=data.get('supplier_id'),
+        supplier_name=data.get('supplier_name'),
+        account_id=data.get('account_id'),
+        account_name=data.get('account_name'),
+        items=data.get('items'),
+        storage_id=data.get('storage_id')
+    )
+
+    if success:
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Failed to update template'}), 400
+
+
+@app.route('/api/templates/<template_name>', methods=['DELETE'])
+def delete_template(template_name):
+    """Delete a shipment template"""
+    db = get_database()
+    user_id = g.user_id
+
+    success = db.delete_shipment_template(user_id, template_name)
+
+    if success:
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Failed to delete template'}), 400
+
+
+# ========================================
 # Serve Mini App static files
 # ========================================
 
