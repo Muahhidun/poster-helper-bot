@@ -105,8 +105,18 @@ export const Dashboard: React.FC = () => {
             📦 История поставок
           </Link>
           <Link
-            to="/aliases"
+            to="/templates"
             className="p-4 rounded-lg text-center font-medium shadow-sm"
+            style={{
+              backgroundColor: themeParams.button_color || '#3b82f6',
+              color: themeParams.button_text_color || '#ffffff',
+            }}
+          >
+            ⚡ Шаблоны
+          </Link>
+          <Link
+            to="/aliases"
+            className="p-4 rounded-lg text-center font-medium shadow-sm col-span-2"
             style={{
               backgroundColor: themeParams.button_color || '#3b82f6',
               color: themeParams.button_text_color || '#ffffff',

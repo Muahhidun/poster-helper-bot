@@ -7,6 +7,7 @@ import { SupplyHistory } from './pages/SupplyHistory'
 import { SupplyDetail } from './pages/SupplyDetail'
 import { Aliases } from './pages/Aliases'
 import { AliasForm } from './pages/AliasForm'
+import { Templates } from './pages/Templates'
 import { Loading } from './components/Loading'
 
 function App() {
@@ -41,6 +42,7 @@ function App() {
         <Route path="/aliases" element={<Aliases />} />
         <Route path="/aliases/new" element={<AliasForm />} />
         <Route path="/aliases/:id/edit" element={<AliasForm />} />
+        <Route path="/templates" element={<Templates />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

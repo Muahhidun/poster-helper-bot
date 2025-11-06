@@ -165,3 +165,44 @@ export interface PosterItem {
   name: string
   type: 'ingredient' | 'product'
 }
+
+// Shipment Templates
+export interface TemplateItem {
+  id: number
+  name: string
+  price: number
+}
+
+export interface ShipmentTemplate {
+  id?: number
+  template_name: string
+  supplier_id: number
+  supplier_name: string
+  account_id: number
+  account_name: string
+  storage_id: number
+  items: TemplateItem[]
+}
+
+export interface TemplatesResponse {
+  templates: ShipmentTemplate[]
+}
+
+export interface CreateTemplateRequest {
+  template_name: string
+  supplier_id: number
+  supplier_name: string
+  account_id: number
+  account_name: string
+  items: TemplateItem[]
+  storage_id?: number
+}
+
+export interface UpdateTemplateRequest {
+  supplier_id?: number
+  supplier_name?: string
+  account_id?: number
+  account_name?: string
+  items?: TemplateItem[]
+  storage_id?: number
+}

@@ -6,6 +6,9 @@ import type {
   CreateAliasRequest,
   UpdateAliasRequest,
   PosterItem,
+  TemplatesResponse,
+  CreateTemplateRequest,
+  UpdateTemplateRequest,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -98,6 +101,34 @@ class ApiClient {
     if (source) params.set('source', source)
 
     return this.request<PosterItem[]>(`/api/items/search?${params}`)
+  }
+
+  // Shipment Templates
+  async getTemplates(): Promise<TemplatesResponse> {
+    return this.request<TemplatesResponse>('/api/templates')
+  }
+
+  async createTemplate(data: CreateTemplateRequest): Promise<{ success: boolean }> {
+    return this.request('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async updateTemplate(
+    templateName: string,
+    data: UpdateTemplateRequest
+  ): Promise<{ success: boolean }> {
+    return this.request(`/api/templates/${encodeURIComponent(templateName)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteTemplate(templateName: string): Promise<{ success: boolean }> {
+    return this.request(`/api/templates/${encodeURIComponent(templateName)}`, {
+      method: 'DELETE',
+    })
   }
 }
 
