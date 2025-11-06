@@ -13,9 +13,18 @@ function App() {
   const { webApp, isReady } = useTelegram()
 
   useEffect(() => {
+    // Initialize API client with Telegram initData (or empty string for development)
+    const initData = webApp?.initData || ''
+    initApiClient(initData)
+
     if (webApp) {
-      // Initialize API client with Telegram initData
-      initApiClient(webApp.initData)
+      console.log('Telegram WebApp initialized:', {
+        version: webApp.version,
+        platform: webApp.platform,
+        user: webApp.initDataUnsafe?.user,
+      })
+    } else {
+      console.warn('Running in development mode without Telegram WebApp')
     }
   }, [webApp])
 
