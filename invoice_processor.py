@@ -261,6 +261,53 @@ class InvoiceProcessor:
 
         logger.info(f"✅ Создана поставка #{supply_id}")
 
+        # Save price history for smart monitoring
+        try:
+            from database import get_database
+            db = get_database()
+
+            # Get supplier name
+            supplier_name = parsed_data.get('supplier_name', 'Неизвестно')
+
+            # Prepare price history records
+            price_records = []
+            for item in added_items:
+                # Find ingredient_id for this item
+                ingredient_id = None
+                for ing in ingredients_for_poster:
+                    # Match by checking if the item name corresponds to this ingredient
+                    # We need to find the original item to get ingredient_id
+                    pass
+
+                # Actually, we need to iterate through original items with ingredient_id
+                for original_item in items:
+                    if (original_item.get('ingredient_id') and
+                        original_item['name'] == item['name'] and
+                        original_item['quantity'] == item['quantity'] and
+                        original_item['price'] == item['price']):
+
+                        price_records.append({
+                            'ingredient_id': original_item['ingredient_id'],
+                            'ingredient_name': original_item['name'],
+                            'supplier_id': supplier_id,
+                            'supplier_name': supplier_name,
+                            'date': supply_date.split()[0],  # Extract date part only
+                            'price': original_item['price'],
+                            'quantity': original_item['quantity'],
+                            'unit': original_item.get('unit', ''),
+                            'supply_id': supply_id
+                        })
+                        break
+
+            # Bulk save price history
+            if price_records:
+                saved_count = db.bulk_add_price_history(self.telegram_user_id, price_records)
+                logger.info(f"💾 Saved {saved_count} price records to history")
+
+        except Exception as e:
+            # Don't fail the supply creation if price history fails
+            logger.error(f"⚠️ Failed to save price history: {e}")
+
         return {
             'supply_id': supply_id,
             'supplier_name': parsed_data.get('supplier_name'),

@@ -126,6 +126,36 @@ class UserDatabase:
                 CREATE INDEX IF NOT EXISTS idx_templates_user_name
                 ON shipment_templates(telegram_user_id, template_name)
             """)
+
+            # Table for ingredient price history (for smart price monitoring)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingredient_price_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    ingredient_id INTEGER NOT NULL,
+                    ingredient_name TEXT,
+                    supplier_id INTEGER,
+                    supplier_name TEXT,
+                    date DATE NOT NULL,
+                    price DECIMAL(10, 2) NOT NULL,
+                    quantity DECIMAL(10, 3),
+                    unit TEXT,
+                    supply_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            # Indexes for fast lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_price_history_ingredient_date
+                ON ingredient_price_history(telegram_user_id, ingredient_id, date)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_price_history_supplier
+                ON ingredient_price_history(telegram_user_id, supplier_id)
+            """)
         else:
             # PostgreSQL syntax
             cursor.execute("""
@@ -196,6 +226,36 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_templates_user_name
                 ON shipment_templates(telegram_user_id, template_name)
+            """)
+
+            # Table for ingredient price history (for smart price monitoring)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingredient_price_history (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    ingredient_id INTEGER NOT NULL,
+                    ingredient_name TEXT,
+                    supplier_id INTEGER,
+                    supplier_name TEXT,
+                    date DATE NOT NULL,
+                    price DECIMAL(10, 2) NOT NULL,
+                    quantity DECIMAL(10, 3),
+                    unit TEXT,
+                    supply_id INTEGER,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            # Indexes for fast lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_price_history_ingredient_date
+                ON ingredient_price_history(telegram_user_id, ingredient_id, date)
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_price_history_supplier
+                ON ingredient_price_history(telegram_user_id, supplier_id)
             """)
 
         conn.commit()
@@ -738,6 +798,172 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to clean orphaned aliases: {e}")
             return 0
+
+    # === Price History Methods ===
+
+    def add_price_history(
+        self,
+        telegram_user_id: int,
+        ingredient_id: int,
+        ingredient_name: str,
+        supplier_id: int,
+        supplier_name: str,
+        date: str,
+        price: float,
+        quantity: float,
+        unit: str,
+        supply_id: int = None
+    ) -> bool:
+        """
+        Add ingredient price record to history
+
+        Args:
+            telegram_user_id: User ID
+            ingredient_id: Poster ingredient ID
+            ingredient_name: Ingredient name
+            supplier_id: Poster supplier ID
+            supplier_name: Supplier name
+            date: Date in format "YYYY-MM-DD"
+            price: Price per unit
+            quantity: Quantity purchased
+            unit: Unit of measurement (кг, л, шт)
+            supply_id: Poster supply ID
+
+        Returns:
+            True if successful
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO ingredient_price_history (
+                        telegram_user_id, ingredient_id, ingredient_name,
+                        supplier_id, supplier_name, date, price,
+                        quantity, unit, supply_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    telegram_user_id, ingredient_id, ingredient_name,
+                    supplier_id, supplier_name, date, price,
+                    quantity, unit, supply_id
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO ingredient_price_history (
+                        telegram_user_id, ingredient_id, ingredient_name,
+                        supplier_id, supplier_name, date, price,
+                        quantity, unit, supply_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    telegram_user_id, ingredient_id, ingredient_name,
+                    supplier_id, supplier_name, date, price,
+                    quantity, unit, supply_id
+                ))
+
+            conn.commit()
+            conn.close()
+
+            logger.debug(f"✅ Price history added: {ingredient_name} - {price}₸")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add price history: {e}")
+            return False
+
+    def get_price_history(
+        self,
+        telegram_user_id: int,
+        ingredient_id: int = None,
+        supplier_id: int = None,
+        date_from: str = None,
+        date_to: str = None
+    ) -> list:
+        """
+        Get price history with optional filters
+
+        Args:
+            telegram_user_id: User ID
+            ingredient_id: Optional ingredient ID filter
+            supplier_id: Optional supplier ID filter
+            date_from: Optional start date "YYYY-MM-DD"
+            date_to: Optional end date "YYYY-MM-DD"
+
+        Returns:
+            List of price history records
+        """
+        conn = self._get_connection()
+
+        query = """
+            SELECT id, ingredient_id, ingredient_name, supplier_id, supplier_name,
+                   date, price, quantity, unit, supply_id, created_at
+            FROM ingredient_price_history
+            WHERE telegram_user_id = {}
+        """.format('?' if DB_TYPE == 'sqlite' else '%s')
+
+        params = [telegram_user_id]
+
+        if ingredient_id:
+            query += f" AND ingredient_id = {'?' if DB_TYPE == 'sqlite' else '%s'}"
+            params.append(ingredient_id)
+
+        if supplier_id:
+            query += f" AND supplier_id = {'?' if DB_TYPE == 'sqlite' else '%s'}"
+            params.append(supplier_id)
+
+        if date_from:
+            query += f" AND date >= {'?' if DB_TYPE == 'sqlite' else '%s'}"
+            params.append(date_from)
+
+        if date_to:
+            query += f" AND date <= {'?' if DB_TYPE == 'sqlite' else '%s'}"
+            params.append(date_to)
+
+        query += " ORDER BY date DESC"
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    def bulk_add_price_history(self, telegram_user_id: int, records: list) -> int:
+        """
+        Bulk add multiple price history records
+
+        Args:
+            telegram_user_id: User ID
+            records: List of dicts with keys: ingredient_id, ingredient_name,
+                    supplier_id, supplier_name, date, price, quantity, unit, supply_id
+
+        Returns:
+            Number of records added
+        """
+        count = 0
+        for record in records:
+            if self.add_price_history(
+                telegram_user_id=telegram_user_id,
+                ingredient_id=record['ingredient_id'],
+                ingredient_name=record['ingredient_name'],
+                supplier_id=record['supplier_id'],
+                supplier_name=record['supplier_name'],
+                date=record['date'],
+                price=record['price'],
+                quantity=record['quantity'],
+                unit=record['unit'],
+                supply_id=record.get('supply_id')
+            ):
+                count += 1
+
+        logger.info(f"✅ Bulk import: {count}/{len(records)} price history records added")
+        return count
 
     # === Shipment Templates Methods ===
 
