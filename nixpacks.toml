@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["python310", "nodejs-18_x", "npm-9_x"]
+
+[phases.install]
+cmds = [
+  "pip install -r requirements.txt",
+  "npm run build:miniapp"
+]
+
+[start]
+cmd = "python start_server.py"
