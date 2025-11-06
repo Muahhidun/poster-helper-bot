@@ -29,6 +29,20 @@ from daily_transactions import DailyTransactionScheduler, is_daily_transactions_
 from alias_generator import AliasGenerator
 from sync_ingredients import sync_ingredients
 from sync_products import sync_products
+from shipment_templates import (
+    templates_command,
+    edit_template_command,
+    delete_template_command,
+    try_parse_quick_template,
+    create_shipment_from_template,
+    save_draft_as_template,
+    handle_template_name_input,
+    handle_edit_template_callback,
+    handle_delete_template_callback,
+    handle_confirm_delete_template_callback,
+    handle_edit_template_prices_callback,
+    handle_template_price_update
+)
 import re
 
 # APScheduler для автоматических задач
@@ -532,6 +546,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '  "Перевод 50000 с Касипай в Кассу"\n\n'
         "📦 **Поставки:**\n"
         '  "Поставщик Метро. Айсберг 2.2 кг по 1600"\n\n'
+        "⚡ **Быстрые поставки (шаблоны):**\n"
+        "  Для часто повторяющихся поставок:\n"
+        '  "Лаваш 400" - создаст поставку по шаблону\n'
+        "  /templates - Просмотр шаблонов\n"
+        "  /edit_template - Изменить цены в шаблоне\n"
+        "  /delete_template - Удалить шаблон\n\n"
         "📁 **Основные категории:**\n"
         "  Зарплата: донерщик, повара, кассиры, курьер\n"
         "  Расходы: логистика, аренда, коммуналка\n"
@@ -1254,7 +1274,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_price_change_input(update, context)
         return
 
+    # Check if waiting for template name input
+    if context.user_data.get('waiting_for_template_name'):
+        handled = await handle_template_name_input(update, context, update.message.text.strip())
+        if handled:
+            return
+
+    # Check if waiting for template price update
+    if context.user_data.get('waiting_for_template_prices'):
+        handled = await handle_template_price_update(update, context, update.message.text.strip())
+        if handled:
+            return
+
     text = update.message.text
+
+    # Try to parse quick template syntax (e.g., "лаваш 400")
+    template_match = try_parse_quick_template(text)
+    if template_match:
+        template_name, quantity = template_match
+        success = await create_shipment_from_template(update, context, template_name, quantity)
+        if success:
+            return
+        # If template not found, continue to regular processing
+
     await process_transaction_text(update, context, text)
 
 
@@ -1751,10 +1793,17 @@ async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         [
             InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
             InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
-        ],
-        [
-            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
         ]
+    ])
+
+    # Add "Save as template" button only if not already from template
+    if not draft.get('from_template'):
+        keyboard.append([
+            InlineKeyboardButton("💾 Сохранить как шаблон", callback_data="save_as_template")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("❌ Отмена", callback_data="cancel")
     ])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1821,10 +1870,17 @@ async def show_supply_draft_edit(query, context: ContextTypes.DEFAULT_TYPE, draf
         [
             InlineKeyboardButton("🏪 Изменить поставщика", callback_data="change_supplier"),
             InlineKeyboardButton("💰 Изменить счёт", callback_data="change_account")
-        ],
-        [
-            InlineKeyboardButton("❌ Отмена", callback_data="cancel")
         ]
+    ])
+
+    # Add "Save as template" button only if not already from template
+    if not draft.get('from_template'):
+        keyboard.append([
+            InlineKeyboardButton("💾 Сохранить как шаблон", callback_data="save_as_template")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("❌ Отмена", callback_data="cancel")
     ])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -3506,6 +3562,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         supply_id = int(parts[1])
         supplier_id = int(parts[2])
         await handle_select_supplier_callback(update, context, supply_id, supplier_id)
+    # Shipment template callbacks
+    elif query.data == "save_as_template":
+        # Save current draft as template
+        message_id = context.user_data.get('current_message_id')
+        drafts = context.user_data.get('drafts', {})
+        draft = drafts.get(message_id)
+        if draft and draft.get('type') == 'supply':
+            await save_draft_as_template(update, context, draft)
+        else:
+            await query.answer("❌ Черновик не найден", show_alert=True)
+    elif query.data.startswith("edit_template:"):
+        template_name = query.data.split(":", 1)[1]
+        await handle_edit_template_callback(update, context, template_name)
+    elif query.data.startswith("delete_template:"):
+        template_name = query.data.split(":", 1)[1]
+        await handle_delete_template_callback(update, context, template_name)
+    elif query.data.startswith("confirm_delete_template:"):
+        template_name = query.data.split(":", 1)[1]
+        await handle_confirm_delete_template_callback(update, context, template_name)
+    elif query.data.startswith("edit_template_prices:"):
+        template_name = query.data.split(":", 1)[1]
+        await handle_edit_template_prices_callback(update, context, template_name)
 
 
 async def show_item_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, item_index: int):
@@ -4704,6 +4782,11 @@ def main():
         app.add_handler(CommandHandler("test_daily", test_daily_command))
         app.add_handler(CommandHandler("test_report", test_report_command))
         app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
+
+        # Shipment template commands
+        app.add_handler(CommandHandler("templates", templates_command))
+        app.add_handler(CommandHandler("edit_template", edit_template_command))
+        app.add_handler(CommandHandler("delete_template", delete_template_command))
 
         app.add_handler(MessageHandler(filters.VOICE, handle_voice))
         app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
