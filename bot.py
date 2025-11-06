@@ -757,6 +757,71 @@ async def test_monthly_report_command(update: Update, context: ContextTypes.DEFA
 
 
 @admin_only
+async def price_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /price_check command - ручная проверка трендов цен"""
+    telegram_user_id = update.effective_user.id
+
+    await update.message.reply_text("⏳ Анализирую изменения цен за последние 6 месяцев...")
+
+    try:
+        from price_monitoring import PriceMonitor, format_price_alert_message
+
+        monitor = PriceMonitor(telegram_user_id)
+
+        # Step 1: ABC analysis
+        abc_groups, abc_results = await monitor.calculate_abc_analysis(period_months=3)
+        category_a_ids = abc_groups['A']
+
+        if not category_a_ids:
+            await update.message.reply_text(
+                "ℹ️ Недостаточно данных для анализа.\n\n"
+                "Для работы системы мониторинга цен необходимо:\n"
+                "1. Создать хотя бы несколько поставок\n"
+                "2. Подождать накопления истории цен за несколько месяцев\n\n"
+                "Система автоматически начнёт анализ, когда данных будет достаточно."
+            )
+            return
+
+        await update.message.reply_text(
+            f"📊 ABC-анализ завершён\n"
+            f"Категория A (ключевые): {len(abc_groups['A'])} ингредиентов\n"
+            f"Категория B: {len(abc_groups['B'])} ингредиентов\n"
+            f"Категория C: {len(abc_groups['C'])} ингредиентов\n\n"
+            f"Проверяю тренды цен..."
+        )
+
+        # Step 2: Analyze price trends (6 months, 30% threshold)
+        alerts = await monitor.analyze_price_trends(
+            ingredient_ids=category_a_ids,
+            months=6,
+            threshold=30.0
+        )
+
+        if not alerts:
+            await update.message.reply_text(
+                "✅ Проверка завершена!\n\n"
+                f"Проверено: {len(category_a_ids)} ключевых ингредиентов (категория A)\n"
+                "Значительных изменений цен (≥30%) не обнаружено.\n\n"
+                "🔔 Автоматическая проверка выполняется каждый понедельник в 9:00"
+            )
+            return
+
+        # Step 3: Format and send notification
+        message = format_price_alert_message(alerts, abc_results, telegram_user_id)
+
+        await update.message.reply_text(
+            message,
+            parse_mode='HTML'
+        )
+
+    except Exception as e:
+        logger.error(f"Price check failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка проверки цен:\n{str(e)[:300]}"
+        )
+
+
+@admin_only
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /menu command - показать меню с кнопками"""
     keyboard = [
@@ -4525,6 +4590,20 @@ async def run_monthly_report_for_user(telegram_user_id: int, bot_application):
         logger.error(f"❌ Ошибка отправки ежемесячного отчёта пользователю {telegram_user_id}: {e}", exc_info=True)
 
 
+async def run_weekly_price_check_for_user(telegram_user_id: int, bot_application):
+    """
+    Выполнить еженедельную проверку цен для пользователя
+    Вызывается scheduler'ом по понедельникам в 9:00
+    """
+    try:
+        logger.info(f"⏰ Запуск еженедельной проверки цен для пользователя {telegram_user_id}")
+        from price_monitoring import perform_weekly_price_check
+        await perform_weekly_price_check(telegram_user_id, bot_application.bot)
+        logger.info(f"✅ Проверка цен завершена для пользователя {telegram_user_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки цен для пользователя {telegram_user_id}: {e}", exc_info=True)
+
+
 async def check_and_notify_missed_transactions(app: Application):
     """
     Проверить, были ли созданы ежедневные транзакции сегодня
@@ -4641,6 +4720,27 @@ def setup_scheduler(app: Application):
         )
 
         logger.info(f"✅ Запланированы ежемесячные отчёты для пользователя {telegram_user_id} 1 числа в 12:00 (Asia/Almaty)")
+
+    # Еженедельная проверка цен для всех активных пользователей по понедельникам в 9:00
+    for telegram_user_id in ALLOWED_USER_IDS:
+        # Триггер: каждый понедельник в 9:00
+        price_check_trigger = CronTrigger(
+            day_of_week='mon',  # Понедельник
+            hour=9,
+            minute=0,
+            timezone=astana_tz
+        )
+
+        scheduler.add_job(
+            run_weekly_price_check_for_user,
+            trigger=price_check_trigger,
+            args=[telegram_user_id, app],
+            id=f'weekly_price_check_{telegram_user_id}',
+            name=f'Еженедельная проверка цен для пользователя {telegram_user_id}',
+            replace_existing=True
+        )
+
+        logger.info(f"✅ Запланирована еженедельная проверка цен для пользователя {telegram_user_id} в Пн 9:00 (Asia/Almaty)")
 
     # Запустить scheduler
     scheduler.start()
@@ -4782,6 +4882,7 @@ def main():
         app.add_handler(CommandHandler("test_daily", test_daily_command))
         app.add_handler(CommandHandler("test_report", test_report_command))
         app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
+        app.add_handler(CommandHandler("price_check", price_check_command))
 
         # Shipment template commands
         app.add_handler(CommandHandler("templates", templates_command))
