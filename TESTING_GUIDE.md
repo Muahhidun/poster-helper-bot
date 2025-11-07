@@ -104,6 +104,12 @@
 
 **Результат:** Бот теперь запускается без ошибок импорта
 
+### Коммит 3: Add system libraries for gRPC/Google Cloud Document AI (f6f1278)
+- Добавлены системные библиотеки: gcc, glibc, libcxx в nixpacks.toml
+- Исправлена ошибка: `ImportError: libstdc++.so.6: cannot open shared object file`
+
+**Результат:** Распознавание накладных через Google Cloud Document AI теперь работает
+
 ## Контакты для диагностики
 
 Если проблемы продолжаются, скиньте:

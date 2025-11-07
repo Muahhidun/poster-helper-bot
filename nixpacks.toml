@@ -1,8 +1,9 @@
 # Nixpacks configuration for Railway deployment
 # This app requires both Python and Node.js
+# gRPC/Google Cloud requires additional system libraries
 
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "python311Packages.virtualenv", "nodejs-18_x", "npm-9_x"]
+nixPkgs = ["python311", "python311Packages.pip", "python311Packages.virtualenv", "nodejs-18_x", "npm-9_x", "gcc", "glibc", "libcxx"]
 
 [phases.install]
 cmds = [
