@@ -1,12 +1,13 @@
-# Fix bot error handling and invoice OCR support
+# Fix bot error handling, beverage matching, and restore Document AI OCR
 
 ## 📋 Summary
-This PR fixes critical issues preventing the bot from responding to messages and implements reliable invoice OCR using GPT-4 Vision instead of Google Cloud Document AI.
+This PR fixes critical issues preventing the bot from responding to messages, improves beverage matching logic in supplies, and restores Google Document AI for better invoice recognition quality.
 
 ## 🔧 Problem Solved
 1. **Bot не реагировал на сообщения** - отсутствовал глобальный обработчик ошибок
 2. **Bot не запускался** - ImportError в shipment_templates.py
-3. **Распознавание накладных падало** - зависимость от системных библиотек C++ (libstdc++6)
+3. **Напитки определялись как ингредиенты** - логика нечеткого поиска не учитывала специфику напитков
+4. **GPT-4 Vision плохо распознает накладные** - вернули Document AI с предкомпилированными gRPC wheels
 
 ## ✅ Changes
 
@@ -95,7 +96,21 @@ This PR fixes critical issues preventing the bot from responding to messages and
 2. Запустит бот без ImportError
 3. Обработает фото накладных через GPT-4 Vision
 
-### 4. Fix beverage matching logic (7222a66)
+### 4. Restore Document AI with precompiled gRPC (5090214)
+**requirements.txt:**
+- Добавлены явные версии `grpcio==1.62.1` и `grpcio-status==1.62.1`
+- Используются предкомпилированные wheel пакеты (без компиляции C++)
+
+**bot.py:**
+- Вернули использование `invoice_ocr.py` (Document AI + GPT-4 гибрид)
+- Обновлено сообщение: "Document AI OCR + GPT-4"
+
+**Результат:**
+- ✅ Лучшее качество распознавания накладных
+- ✅ Нет компиляции C++ при установке
+- ✅ Работает с apt пакетами в nixpacks.toml
+
+### 5. Fix beverage matching logic (7222a66)
 **bot.py (lines 1707-1739):**
 - Добавлена детекция напитков по ключевым словам (кола, спрайт, фанта, квас, сок, и т.д.)
 - Для напитков: приоритет отдается товарам (products) при равных/близких оценках
@@ -110,8 +125,11 @@ This PR fixes critical issues preventing the bot from responding to messages and
 ## 📝 Commits
 
 ```
+5090214 Restore Google Document AI with precompiled gRPC wheels
+7551c61 Update PR description with beverage matching fix
 7222a66 Fix beverage matching to prioritize products over ingredients
-eafcea7 Switch to GPT-4 Vision only for invoice OCR
+05a63d7 Add PR description file
+eafcea7 Switch to GPT-4 Vision only for invoice OCR (later reverted)
 e136b11 Use apt packages for C++ libraries instead of nix
 86bfb32 Update testing guide with gRPC library fix
 f6f1278 Add system libraries for gRPC/Google Cloud Document AI
