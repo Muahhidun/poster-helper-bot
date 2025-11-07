@@ -19,7 +19,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_database
-from poster_client import create_poster_client
+from poster_client import get_poster_client
 
 logger = logging.getLogger(__name__)
 
