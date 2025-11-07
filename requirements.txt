@@ -43,5 +43,8 @@ tzlocal==5.3.1
 urllib3==2.5.0
 yarl==1.22.0
 psycopg2-binary==2.9.9
+# Use precompiled wheel for gRPC to avoid C++ compilation issues on Railway
+grpcio==1.62.1
+grpcio-status==1.62.1
 google-cloud-documentai==2.30.0
 Flask==3.0.0
