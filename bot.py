@@ -1191,14 +1191,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
             return
 
-        # Not in receipt mode - process as invoice (гибридный подход: Document AI OCR + GPT-4)
-        logger.info("📸 Processing photo as invoice (hybrid: Document AI OCR + GPT-4)...")
+        # Not in receipt mode - process as invoice (GPT-4 Vision only)
+        logger.info("📸 Processing photo as invoice (GPT-4 Vision only)...")
 
-        import invoice_ocr
+        import invoice_ocr_gpt4_only
         import json
 
         # Send initial processing message
-        step_msg = await update.message.reply_text("🤖 Распознаю накладную (Document AI OCR + GPT-4)...")
+        step_msg = await update.message.reply_text("🤖 Распознаю накладную (GPT-4 Vision)...")
 
         try:
             # 1. Получить URL изображения из Telegram
@@ -1212,8 +1212,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     file_path = data['result']['file_path']
                 file_url = f"https://api.telegram.org/file/bot{context.bot.token}/{file_path}"
 
-            # 2. Распознать через GPT-4 Vision
-            ocr_result = await invoice_ocr.recognize_invoice_from_url(file_url)
+            # 2. Распознать через GPT-4 Vision (без Document AI)
+            ocr_result = await invoice_ocr_gpt4_only.recognize_invoice_from_url(file_url)
 
             # Clean up photo file
             photo_path.unlink()
@@ -1250,7 +1250,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Показать распознанный текст
             await step_msg.edit_text(
-                f"✅ Накладная распознана (OCR + AI)!\n\n"
+                f"✅ Накладная распознана (GPT-4 Vision)!\n\n"
                 f"📦 Поставщик: {supplier_name or 'Не распознан'}\n"
                 f"📊 Товаров: {len(items)}\n\n"
                 f"Текст для обработки:\n```\n{supply_text[:1000]}\n```",

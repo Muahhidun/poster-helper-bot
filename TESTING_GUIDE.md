@@ -108,7 +108,14 @@
 - Добавлены системные библиотеки: gcc, glibc, libcxx в nixpacks.toml
 - Исправлена ошибка: `ImportError: libstdc++.so.6: cannot open shared object file`
 
-**Результат:** Распознавание накладных через Google Cloud Document AI теперь работает
+**Результат:** Первая попытка исправления (не помогло)
+
+### Коммит 4: Use apt packages for C++ libraries (e136b11)
+- Переключились с nixPkgs на aptPkgs для установки системных библиотек
+- Установка libstdc++6, g++, gcc через apt вместо nix
+- apt пакеты более надежны для системных библиотек на Railway
+
+**Результат:** Распознавание накладных через Google Cloud Document AI должно работать
 
 ## Контакты для диагностики
 
