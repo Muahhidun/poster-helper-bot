@@ -377,6 +377,11 @@ def authorized_only(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from database import get_database
 
+        # Check if update has message
+        if not update.message:
+            logger.error(f"authorized_only: update.message is None in {func.__name__}")
+            return
+
         user_id = update.effective_user.id
         db = get_database()
 
@@ -385,23 +390,29 @@ def authorized_only(func):
 
         if not user_data:
             # User not registered - ask them to use /start
-            logger.warning(f"Unregistered user attempt by user_id={user_id}")
-            await update.message.reply_text(
-                f"👋 Привет!\n\n"
-                f"Вы еще не зарегистрированы.\n"
-                f"Отправьте команду /start для регистрации и получения 14-дневного триала!"
-            )
+            logger.warning(f"Unregistered user attempt by user_id={user_id} in {func.__name__}")
+            try:
+                await update.message.reply_text(
+                    f"👋 Привет!\n\n"
+                    f"Вы еще не зарегистрированы.\n"
+                    f"Отправьте команду /start для регистрации и получения 14-дневного триала!"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send unregistered message: {e}")
             return
 
         # Check if subscription is active
         if not db.is_subscription_active(user_id):
             # Subscription expired
-            logger.warning(f"Expired subscription attempt by user_id={user_id}")
-            await update.message.reply_text(
-                f"⛔ Ваша подписка истекла.\n\n"
-                f"Для продолжения работы необходимо продлить подписку.\n"
-                f"Используйте /subscription для подробностей."
-            )
+            logger.warning(f"Expired subscription attempt by user_id={user_id} in {func.__name__}")
+            try:
+                await update.message.reply_text(
+                    f"⛔ Ваша подписка истекла.\n\n"
+                    f"Для продолжения работы необходимо продлить подписку.\n"
+                    f"Используйте /subscription для подробностей."
+                )
+            except Exception as e:
+                logger.error(f"Failed to send expired subscription message: {e}")
             return
 
         return await func(update, context)
@@ -1094,6 +1105,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo message (receipt OCR for order deletion OR invoice recognition)"""
     try:
         telegram_user_id = update.effective_user.id
+        logger.info(f"📸 Photo message received from user {telegram_user_id}")
 
         await update.message.reply_text("📸 Распознаю фото...")
 
@@ -4842,6 +4854,37 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
                     logger.error(f"Failed to send error notification to admin {admin_id}: {notify_error}")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global error handler for all bot errors"""
+    try:
+        logger.error("Exception while handling an update:", exc_info=context.error)
+
+        # Try to get user info
+        if isinstance(update, Update):
+            user_id = update.effective_user.id if update.effective_user else "Unknown"
+            chat_id = update.effective_chat.id if update.effective_chat else None
+
+            # Log detailed error info
+            error_msg = f"Error for user {user_id}: {context.error}"
+            logger.error(error_msg)
+
+            # Notify user about the error
+            if chat_id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"❌ Произошла ошибка при обработке вашего сообщения.\n\n"
+                             f"Пожалуйста, попробуйте еще раз или обратитесь в поддержку.\n\n"
+                             f"Ошибка: {str(context.error)[:200]}"
+                    )
+                except Exception as send_error:
+                    logger.error(f"Failed to send error message to user: {send_error}")
+        else:
+            logger.error(f"Update type: {type(update)}, Error: {context.error}")
+    except Exception as e:
+        logger.error(f"Error in error_handler: {e}", exc_info=True)
+
+
 def main():
     """Run the bot"""
     try:
@@ -4897,6 +4940,9 @@ def main():
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         app.add_handler(CallbackQueryHandler(handle_callback))
+
+        # Register global error handler
+        app.add_error_handler(error_handler)
 
         # Зарегистрировать фоновую задачу автосинхронизации
         from datetime import timedelta
