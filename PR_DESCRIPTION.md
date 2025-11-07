@@ -1,0 +1,121 @@
+# Fix bot error handling and invoice OCR support
+
+## 📋 Summary
+This PR fixes critical issues preventing the bot from responding to messages and implements reliable invoice OCR using GPT-4 Vision instead of Google Cloud Document AI.
+
+## 🔧 Problem Solved
+1. **Bot не реагировал на сообщения** - отсутствовал глобальный обработчик ошибок
+2. **Bot не запускался** - ImportError в shipment_templates.py
+3. **Распознавание накладных падало** - зависимость от системных библиотек C++ (libstdc++6)
+
+## ✅ Changes
+
+### 1. Add global error handler (cb74ec0)
+**bot.py:**
+- Добавлен глобальный `error_handler()` для логирования всех ошибок
+- Улучшен декоратор `authorized_only` с проверками на None
+- Добавлено детальное логирование во всех обработчиках
+- Пользователи теперь получают уведомления об ошибках
+
+**Результат:** Бот больше не молчит при ошибках ✅
+
+### 2. Fix import error in shipment_templates (8658b6b)
+**shipment_templates.py:**
+- Исправлен импорт: `create_poster_client` → `get_poster_client`
+- Устранен ImportError при старте бота
+
+**Результат:** Бот запускается без ошибок ✅
+
+### 3. Switch to GPT-4 Vision for invoice OCR (eafcea7)
+**Новые файлы:**
+- `invoice_ocr_gpt4_only.py` - новый модуль распознавания без Document AI
+- `RAILWAY_GRPC_FIX.md` - документация по troubleshooting
+
+**bot.py:**
+- Использует `invoice_ocr_gpt4_only` вместо `invoice_ocr`
+- Убрана зависимость от grpc и Document AI
+
+**nixpacks.toml:**
+- Добавлены apt пакеты (на случай если вернемся к Document AI)
+
+**Результат:**
+- ✅ Работает на любой платформе без системных зависимостей
+- ✅ Надежный деплой на Railway/Heroku
+- ✅ Простая установка
+
+### 4. Add documentation (da78579, 86bfb32)
+**Новые файлы:**
+- `TESTING_GUIDE.md` - инструкции по тестированию
+- `RAILWAY_GRPC_FIX.md` - решение проблем с gRPC
+
+## 🧪 Testing
+
+Протестировано на Railway:
+- ✅ Bot starts without errors
+- ✅ Bot responds to text messages
+- ✅ Bot responds to photo messages
+- ✅ Error handler shows errors to users
+- ✅ Invoice OCR works with GPT-4 Vision
+- ✅ Text-based supply creation works
+
+## 📊 Technical Details
+
+### Before (Document AI + GPT-4):
+```python
+# Two-step process
+1. Document AI OCR читает текст (требует grpc + libstdc++6) ❌
+2. GPT-4 парсит текст в JSON
+```
+
+### After (GPT-4 Vision only):
+```python
+# One-step process
+1. GPT-4 Vision читает изображение и парсит данные ✅
+   - No system dependencies
+   - Works everywhere
+```
+
+## 💰 Trade-offs
+
+**Преимущества:**
+- 🎯 Не требует системных библиотек C++
+- 🚀 Проще deployment
+- 📦 Меньше зависимостей
+- 🌍 Работает на любой платформе
+
+**Компромиссы:**
+- 💵 Немного дороже (GPT-4 Vision вместо бесплатного OCR)
+- 📊 Может быть менее точным для очень сложных накладных
+- 🤖 Одна модель делает OCR и парсинг
+
+## 🚀 Deployment
+
+После merge Railway автоматически:
+1. Установит зависимости без проблем с grpc
+2. Запустит бот без ImportError
+3. Обработает фото накладных через GPT-4 Vision
+
+## 📝 Commits
+
+```
+eafcea7 Switch to GPT-4 Vision only for invoice OCR
+e136b11 Use apt packages for C++ libraries instead of nix
+86bfb32 Update testing guide with gRPC library fix
+f6f1278 Add system libraries for gRPC/Google Cloud Document AI
+da78579 Add testing guide for bot deployment
+8658b6b Fix import error in shipment_templates.py
+cb74ec0 Add global error handler and improve bot error handling
+```
+
+## ✔️ Checklist
+
+- [x] Код протестирован на Railway
+- [x] Синтаксис Python проверен
+- [x] Документация обновлена
+- [x] Обработка ошибок добавлена
+- [x] Логирование улучшено
+- [x] Обратная совместимость сохранена
+
+---
+
+**Ready to merge!** 🎉
