@@ -1706,9 +1706,33 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
 
             # Use best match
             best_match = None
+
+            # Определить является ли товар напитком
+            item_is_beverage = any(keyword in item['name'].lower() for keyword in [
+                'кола', 'cola', 'кока', 'coca',
+                'спрайт', 'sprite',
+                'фанта', 'fanta',
+                'пико', 'piko', 'pulpy',
+                'фьюз', 'fuze',
+                'бонаква', 'bonaqua',
+                'швепс', 'schweppes',
+                'нести', 'nestea',
+                'квас', 'сок', 'juice',
+                'лимонад', 'чай', 'tea',
+                'вода', 'water', 'напиток',
+                'пэт', 'pet',  # упаковка
+            ])
+
             if ingredient_match and product_match:
-                # Both found, use higher score
-                best_match = ingredient_match if ingredient_match[3] >= product_match[3] else product_match
+                # Оба найдены - выбор зависит от типа товара
+                if item_is_beverage:
+                    # Напиток: приоритет товарам при равном или близком score
+                    logger.info(f"   🥤 Beverage detected: prioritizing product over ingredient")
+                    # Используем product если score >= ingredient_score - 5 (допускаем небольшую погрешность)
+                    best_match = product_match if product_match[3] >= ingredient_match[3] - 5 else ingredient_match
+                else:
+                    # Не напиток: приоритет ингредиентам
+                    best_match = ingredient_match if ingredient_match[3] >= product_match[3] else product_match
             elif ingredient_match:
                 best_match = ingredient_match
             elif product_match:
