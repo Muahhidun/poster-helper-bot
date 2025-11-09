@@ -7,7 +7,7 @@ from src.db.models import Project, ProjectStatus
 def get_main_menu() -> ReplyKeyboardMarkup:
     """Главное меню"""
     kb = ReplyKeyboardBuilder()
-    kb.button(text="➕ Создать проект")
+    kb.button(text="🚗 Купить авто")
     kb.button(text="💸 Добавить расходы")
     kb.button(text="💰 Продать авто")
     kb.button(text="📊 Баланс капитала")

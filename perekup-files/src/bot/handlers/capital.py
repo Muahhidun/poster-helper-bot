@@ -86,8 +86,6 @@ async def view_project_report(callback: CallbackQuery):
         # Формируем отчет
         report_text = f"📊 <b>Отчёт по проекту</b>\n\n"
         report_text += f"🚗 {project.title}\n"
-        if project.vin:
-            report_text += f"🔢 VIN: {project.vin}\n"
         report_text += f"\n<b>ПОКУПКА:</b>\n"
         report_text += f"📅 Дата: {project.buy_date.strftime('%d.%m.%Y')}\n"
         report_text += f"💰 Сумма: {format_money(project.buy_price)}\n"
@@ -152,6 +150,61 @@ async def report_all_projects(callback: CallbackQuery):
 
         if not active_projects and not sold_projects:
             report_text += "Нет проектов\n"
+
+        await callback.message.edit_text(report_text, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "report:capital_history")
+async def report_capital_history(callback: CallbackQuery):
+    """История капитала (из меню Отчеты)"""
+    await show_capital_history(callback)
+
+
+@router.callback_query(F.data == "capital:history")
+async def capital_history(callback: CallbackQuery):
+    """История операций (из меню Настройки)"""
+    await show_capital_history(callback)
+
+
+async def show_capital_history(callback: CallbackQuery):
+    """Показать историю операций с капиталом"""
+    async with get_db_session() as session:
+        # Получаем все операции с капиталом
+        query = select(CapitalOperation).order_by(CapitalOperation.date.desc(), CapitalOperation.created_at.desc())
+        result = await session.execute(query)
+        operations = result.scalars().all()
+
+        if not operations:
+            await callback.message.edit_text(
+                "📊 <b>История капитала</b>\n\n"
+                "Нет операций",
+                parse_mode="HTML"
+            )
+            return
+
+        report_text = "📊 <b>История операций с капиталом</b>\n\n"
+
+        type_names = {
+            CapitalOperationType.initial: "🏁 Начальный капитал",
+            CapitalOperationType.deposit: "➕ Пополнение",
+            CapitalOperationType.withdrawal: "💸 Инкассация"
+        }
+
+        who_names = {"author": "Жандос", "serik": "Серик"}
+
+        for op in operations:
+            type_name = type_names.get(op.type, op.type.value)
+            report_text += f"{type_name}\n"
+            report_text += f"📅 {op.date.strftime('%d.%m.%Y')}\n"
+            report_text += f"💰 {format_money(op.amount)}\n"
+
+            if op.who:
+                report_text += f"👤 {who_names.get(op.who, op.who)}\n"
+
+            if op.notes:
+                report_text += f"📝 {op.notes}\n"
+
+            report_text += "\n"
 
         await callback.message.edit_text(report_text, parse_mode="HTML")
 

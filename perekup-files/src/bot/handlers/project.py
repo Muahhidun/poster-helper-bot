@@ -23,12 +23,12 @@ router = Router()
 
 # ============ СОЗДАНИЕ ПРОЕКТА ============
 
-@router.message(F.text == "➕ Создать проект")
+@router.message(F.text == "🚗 Купить авто")
 async def create_project_start(message: Message, state: FSMContext):
-    """Начало создания проекта"""
+    """Начало покупки авто"""
     await state.set_state(ProjectCreation.title)
     await message.answer(
-        "🚗 <b>Создание нового проекта</b>\n\n"
+        "🚗 <b>Покупка авто</b>\n\n"
         "Введите название автомобиля:\n"
         "<i>Например: Toyota Camry, Nissan Maxima</i>",
         reply_markup=get_cancel_keyboard(),
@@ -92,7 +92,7 @@ async def project_buy_price(message: Message, state: FSMContext):
         await state.update_data(buy_price=buy_price)
         await state.set_state(ProjectCreation.vin)
         await message.answer(
-            "🔢 VIN или примечание?\n\n"
+            "📝 Примечание?\n\n"
             "<i>Можно пропустить, отправив '-'</i>",
             parse_mode="HTML"
         )
@@ -105,22 +105,22 @@ async def project_buy_price(message: Message, state: FSMContext):
 
 @router.message(ProjectCreation.vin)
 async def project_vin(message: Message, state: FSMContext):
-    """Ввод VIN / примечания"""
-    vin = None if message.text == "-" else message.text
-    await state.update_data(vin=vin, notes=vin)
+    """Ввод примечания"""
+    notes = None if message.text == "-" else message.text
+    await state.update_data(notes=notes, vin=None)
 
     # Показываем подтверждение
     data = await state.get_data()
     await state.set_state(ProjectCreation.confirm)
 
     confirm_text = (
-        "📋 <b>Подтверждение создания проекта</b>\n\n"
+        "📋 <b>Подтверждение покупки</b>\n\n"
         f"🚗 Название: {data['title']}\n"
         f"📅 Дата покупки: {format_date(data['buy_date'])}\n"
         f"💰 Сумма покупки: {format_money(data['buy_price'])}\n"
     )
-    if vin:
-        confirm_text += f"🔢 VIN: {vin}\n"
+    if notes:
+        confirm_text += f"📝 Примечание: {notes}\n"
 
     await message.answer(
         confirm_text,
