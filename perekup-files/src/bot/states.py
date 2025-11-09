@@ -11,14 +11,10 @@ class ProjectCreation(StatesGroup):
 
 
 class ExpenseCreation(StatesGroup):
-    """Состояния добавления расхода"""
-    amount = State()
-    category = State()
-    project = State()
-    payer = State()
-    date = State()
-    description = State()
-    confirm = State()
+    """Состояния добавления расходов"""
+    expenses_text = State()  # Ввод списка расходов
+    project = State()        # Выбор проекта
+    confirm = State()        # Подтверждение
 
 
 class ProjectSale(StatesGroup):

@@ -4,63 +4,110 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 from datetime import date
 from decimal import Decimal
+import re
+from typing import List, Dict
 
 from src.bot.states import ExpenseCreation
 from src.bot.keyboards import (
     get_main_menu,
     get_cancel_keyboard,
-    get_expense_categories,
-    get_payer_keyboard,
     get_projects_keyboard,
-    get_date_keyboard,
     get_confirmation_keyboard
 )
 from src.db.database import get_db_session
 from src.db.models import Project, ProjectStatus, Expense, Payer
-from src.utils.formatters import format_money, format_date, parse_money, parse_date
-from src.config import get_partner_label
+from src.utils.formatters import format_money
+from src.config import PARTNER_AUTHOR_ID, PARTNER_SERIK_ID
 
 router = Router()
 
 
-@router.message(F.text == "💸 Добавить расход")
-async def add_expense_start(message: Message, state: FSMContext):
-    """Начало добавления расхода"""
-    await state.set_state(ExpenseCreation.amount)
+def parse_expenses(text: str) -> List[Dict]:
+    """
+    Парсит список расходов из текста
+
+    Формат:
+    3000 Индрайвер
+    15000 Заправка кондей
+
+    Returns:
+        List[Dict]: Список словарей с amount и description
+    """
+    expenses = []
+    lines = text.strip().split('\n')
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Ищем первое число в строке
+        match = re.match(r'^(\d+[\s\d]*?)\s+(.+)$', line)
+        if match:
+            amount_str = match.group(1).replace(' ', '').replace('\t', '')
+            description = match.group(2).strip()
+
+            try:
+                amount = Decimal(amount_str)
+                expenses.append({
+                    'amount': amount,
+                    'description': description
+                })
+            except (ValueError, Exception):
+                continue
+
+    return expenses
+
+
+@router.message(F.text == "💸 Добавить расходы")
+async def add_expenses_start(message: Message, state: FSMContext):
+    """Начало добавления расходов"""
+    await state.set_state(ExpenseCreation.expenses_text)
     await message.answer(
-        "💸 <b>Добавление расхода</b>\n\n"
-        "Введите сумму (в KZT):\n"
-        "<i>Например: 50000, 50 000, 50k</i>",
+        "💸 <b>Добавление расходов</b>\n\n"
+        "Введите список расходов в формате:\n"
+        "<code>3000 Индрайвер\n"
+        "15000 Заправка кондей\n"
+        "3330 Магазин</code>\n\n"
+        "<i>Каждая строка: сумма и описание</i>",
         reply_markup=get_cancel_keyboard(),
         parse_mode="HTML"
     )
 
 
-@router.message(ExpenseCreation.amount)
-async def expense_amount(message: Message, state: FSMContext):
-    """Ввод суммы расхода"""
-    try:
-        amount = parse_money(message.text)
-        await state.update_data(amount=amount)
-        await state.set_state(ExpenseCreation.category)
+@router.message(ExpenseCreation.expenses_text)
+async def expenses_text_handler(message: Message, state: FSMContext):
+    """Обработка списка расходов"""
+    expenses = parse_expenses(message.text)
+
+    if not expenses:
         await message.answer(
-            "📁 Выберите категорию расхода:",
-            reply_markup=get_expense_categories()
+            "❌ Не удалось распознать расходы\n\n"
+            "Используйте формат:\n"
+            "<code>3000 Индрайвер\n"
+            "15000 Заправка</code>\n\n"
+            "Каждая строка: сумма пробел описание",
+            parse_mode="HTML"
         )
-    except Exception:
-        await message.answer(
-            "❌ Не удалось распознать сумму. Введите число:\n"
-            "Например: 50000 или 50 000"
-        )
+        return
 
+    # Сохраняем распарсенные расходы
+    await state.update_data(expenses=expenses)
 
-@router.callback_query(F.data.startswith("expense_cat:"), ExpenseCreation.category)
-async def expense_category(callback: CallbackQuery, state: FSMContext):
-    """Выбор категории расхода"""
-    category = callback.data.split(":")[1]
-    await state.update_data(category=category)
+    # Показываем что распознали
+    expenses_preview = "\n".join([
+        f"• {format_money(e['amount'])} — {e['description']}"
+        for e in expenses
+    ])
 
-    await callback.message.edit_text(f"✅ Категория: {category}")
+    total = sum(e['amount'] for e in expenses)
+
+    await message.answer(
+        f"✅ Распознано расходов: {len(expenses)}\n\n"
+        f"{expenses_preview}\n\n"
+        f"<b>Итого: {format_money(total)}</b>",
+        parse_mode="HTML"
+    )
 
     # Получаем активные проекты
     async with get_db_session() as session:
@@ -69,15 +116,15 @@ async def expense_category(callback: CallbackQuery, state: FSMContext):
         projects = result.scalars().all()
 
         await state.set_state(ExpenseCreation.project)
-        await callback.message.answer(
-            "🚗 Куда отнести расход?",
+        await message.answer(
+            "🚗 Куда отнести эти расходы?",
             reply_markup=get_projects_keyboard(projects, "expense_project", add_common=True)
         )
 
 
 @router.callback_query(F.data.startswith("expense_project:"), ExpenseCreation.project)
-async def expense_project(callback: CallbackQuery, state: FSMContext):
-    """Выбор проекта для расхода"""
+async def expense_project_handler(callback: CallbackQuery, state: FSMContext):
+    """Выбор проекта для расходов"""
     project_value = callback.data.split(":")[1]
 
     if project_value == "common":
@@ -92,113 +139,85 @@ async def expense_project(callback: CallbackQuery, state: FSMContext):
             await state.update_data(project_id=project_id, project_name=project.title)
             await callback.message.edit_text(f"✅ Выбран проект: {project.title}")
 
-    await state.set_state(ExpenseCreation.payer)
-    await callback.message.answer(
-        "👤 Кто оплатил?",
-        reply_markup=get_payer_keyboard()
-    )
-
-
-@router.callback_query(F.data.startswith("payer:"), ExpenseCreation.payer)
-async def expense_payer(callback: CallbackQuery, state: FSMContext):
-    """Выбор плательщика"""
-    payer = callback.data.split(":")[1]
-    await state.update_data(payer=payer)
-
-    payer_names = {"author": "Жандос", "serik": "Серик", "common": "Общие"}
-    await callback.message.edit_text(f"✅ Плательщик: {payer_names[payer]}")
-
-    await state.set_state(ExpenseCreation.date)
-    await callback.message.answer(
-        "📅 Дата расхода?",
-        reply_markup=get_date_keyboard()
-    )
-
-
-@router.callback_query(F.data == "date:today", ExpenseCreation.date)
-async def expense_date_today(callback: CallbackQuery, state: FSMContext):
-    """Выбор сегодняшней даты"""
-    await state.update_data(date=date.today())
-    await callback.message.edit_text(f"✅ Дата: {format_date(date.today())}")
-
-    await state.set_state(ExpenseCreation.description)
-    await callback.message.answer(
-        "📝 Описание расхода?\n\n"
-        "<i>Кратко опишите на что потрачено</i>",
-        parse_mode="HTML"
-    )
-
-
-@router.message(ExpenseCreation.date)
-async def expense_date_custom(message: Message, state: FSMContext):
-    """Ввод пользовательской даты"""
-    try:
-        expense_date = parse_date(message.text)
-        await state.update_data(date=expense_date)
-        await state.set_state(ExpenseCreation.description)
-        await message.answer(
-            "📝 Описание расхода?\n\n"
-            "<i>Кратко опишите на что потрачено</i>",
-            parse_mode="HTML"
-        )
-    except ValueError:
-        await message.answer(
-            "❌ Не удалось распознать дату\n\n"
-            "Используйте формат: ДД.ММ.ГГГГ",
-            reply_markup=get_date_keyboard()
-        )
-
-
-@router.message(ExpenseCreation.description)
-async def expense_description(message: Message, state: FSMContext):
-    """Ввод описания расхода"""
-    await state.update_data(description=message.text)
-
     # Показываем подтверждение
     data = await state.get_data()
-    await state.set_state(ExpenseCreation.confirm)
+    expenses = data['expenses']
 
-    payer_names = {"author": "Жандос", "serik": "Серик", "common": "Общие"}
+    expenses_list = "\n".join([
+        f"• {format_money(e['amount'])} — {e['description']}"
+        for e in expenses
+    ])
+
+    total = sum(e['amount'] for e in expenses)
+
+    # Определяем плательщика по user_id
+    user_id = callback.from_user.id
+    if user_id == PARTNER_AUTHOR_ID:
+        payer_name = "Жандос"
+    elif user_id == PARTNER_SERIK_ID:
+        payer_name = "Серик"
+    else:
+        payer_name = "Неизвестный"
 
     confirm_text = (
-        "📋 <b>Подтверждение расхода</b>\n\n"
-        f"💰 Сумма: {format_money(data['amount'])}\n"
-        f"📁 Категория: {data['category']}\n"
+        "📋 <b>Подтверждение расходов</b>\n\n"
         f"🚗 Проект: {data['project_name']}\n"
-        f"👤 Плательщик: {payer_names[data['payer']]}\n"
-        f"📅 Дата: {format_date(data['date'])}\n"
-        f"📝 Описание: {data['description']}\n"
+        f"👤 Плательщик: {payer_name}\n"
+        f"📅 Дата: сегодня\n\n"
+        f"<b>Расходы ({len(expenses)} шт):</b>\n"
+        f"{expenses_list}\n\n"
+        f"<b>💰 Итого: {format_money(total)}</b>"
     )
 
-    await message.answer(
+    await state.set_state(ExpenseCreation.confirm)
+    await callback.message.answer(
         confirm_text,
-        reply_markup=get_confirmation_keyboard("add_expense"),
+        reply_markup=get_confirmation_keyboard("add_expenses"),
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data == "confirm:add_expense", ExpenseCreation.confirm)
-async def expense_confirm(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение добавления расхода"""
+@router.callback_query(F.data == "confirm:add_expenses", ExpenseCreation.confirm)
+async def expenses_confirm(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение добавления расходов"""
     data = await state.get_data()
+    expenses = data['expenses']
+    project_id = data.get('project_id')
 
+    # Определяем плательщика по user_id
+    user_id = callback.from_user.id
+    if user_id == PARTNER_AUTHOR_ID:
+        payer = Payer.author
+    elif user_id == PARTNER_SERIK_ID:
+        payer = Payer.serik
+    else:
+        payer = Payer.common
+
+    # Сохраняем все расходы
     async with get_db_session() as session:
-        expense = Expense(
-            date=data['date'],
-            amount=data['amount'],
-            category=data['category'],
-            description=data['description'],
-            project_id=data.get('project_id'),
-            payer=Payer[data['payer']],
-            created_by=callback.from_user.id
-        )
-        session.add(expense)
+        today = date.today()
+        saved_count = 0
+
+        for expense_data in expenses:
+            expense = Expense(
+                date=today,
+                amount=expense_data['amount'],
+                category="Расход",  # Фиксированная категория
+                description=expense_data['description'],
+                project_id=project_id,
+                payer=payer,
+                created_by=user_id
+            )
+            session.add(expense)
+            saved_count += 1
+
         await session.commit()
 
+        total = sum(e['amount'] for e in expenses)
+
         await callback.message.edit_text(
-            f"✅ Расход добавлен!\n\n"
-            f"💸 {format_money(expense.amount)}\n"
-            f"📁 {expense.category}\n"
+            f"✅ Добавлено расходов: {saved_count}\n\n"
+            f"💰 На сумму: {format_money(total)}\n"
             f"🚗 {data['project_name']}"
         )
 

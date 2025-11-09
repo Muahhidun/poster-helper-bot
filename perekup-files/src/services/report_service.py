@@ -194,7 +194,11 @@ class ReportService:
         today = datetime.now().strftime("%d.%m.%Y")
 
         report = f"📊 Ежедневный отчет — {today}\n\n"
-        report += f"💰 БАЛАНС КАПИТАЛА: {format_money(balance_data['balance'])}\n\n"
+
+        # Выделенный баланс с эмодзи
+        report += "═══════════════════════════\n"
+        report += f"💰 <b>БАЛАНС: {format_money(balance_data['balance'])}</b> 💰\n"
+        report += "═══════════════════════════\n\n"
 
         # Активные проекты
         if balance_data['active_projects']:
@@ -218,5 +222,8 @@ class ReportService:
         if sold_stats['sold_count'] > 0:
             report += f"\n📊 Проданных проектов: {sold_stats['sold_count']}\n"
             report += f"💵 Общая прибыль: {format_money(sold_stats['total_profit'])}\n"
+
+        # Напоминание в конце
+        report += "\n❓ Все ли расходы были учтены?"
 
         return report
