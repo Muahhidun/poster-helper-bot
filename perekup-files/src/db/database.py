@@ -5,9 +5,16 @@ from typing import AsyncGenerator
 from src.config import DATABASE_URL
 from src.db.models import Base
 
+# Конвертируем DATABASE_URL для asyncpg
+db_url = DATABASE_URL
+if db_url and db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+
 # Создаем движок
 engine = create_async_engine(
-    DATABASE_URL,
+    db_url,
     echo=False,  # Установите True для отладки SQL запросов
     pool_pre_ping=True,
     pool_size=10,
