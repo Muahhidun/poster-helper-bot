@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Dict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -59,6 +59,16 @@ logger = logging.getLogger(__name__)
 
 
 # === Helper Functions ===
+
+def get_main_menu_keyboard():
+    """Создать постоянную клавиатуру с кнопкой меню"""
+    keyboard = [[KeyboardButton("📋 Меню")]]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
 
 def fix_user_poster_urls():
     """
@@ -482,12 +492,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📝 Просто отправьте:\n"
             f"   • Голосовое сообщение для транзакций\n"
             f"   • Фото накладной для поставок\n\n"
-            f"Команды:\n"
-            f"/settings - настройки аккаунта\n"
-            f"/subscription - статус подписки\n"
-            f"/help - помощь\n"
-            f"/cancel - отменить действие",
-            reply_markup=ReplyKeyboardRemove()
+            f"Нажмите кнопку 📋 Меню для просмотра всех команд",
+            reply_markup=get_main_menu_keyboard()
         )
     else:
         # New user - start onboarding
@@ -1301,6 +1307,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = update.message.chat.type
     user_id = update.effective_user.id
     logger.info(f"Text message from user {user_id} in chat type: {chat_type}")
+
+    # Check if user pressed the menu button
+    if update.message.text == "📋 Меню":
+        await menu_command(update, context)
+        return
 
     # Check if user is in onboarding flow (BEFORE authorization check)
     onboarding_step = context.user_data.get('onboarding_step')

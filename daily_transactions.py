@@ -36,13 +36,13 @@ class DailyTransactionScheduler:
             await poster_client.close()
 
             # Проверить наличие характерных транзакций
-            # Для первого аккаунта ищем "Мадира" или "Нургуль"
+            # Для первого аккаунта ищем "Мадира Т" или "Нургуль Т"
             # Для второго аккаунта ищем "Сушист"
             if self.telegram_user_id == 167084307:
-                # Ищем транзакции с комментариями "Мадира" или "Нургуль"
+                # Ищем транзакции с комментариями "Мадира Т" или "Нургуль Т"
                 for tx in transactions:
                     comment = tx.get('comment', '')
-                    if comment in ['Мадира', 'Нургуль', 'Заготовка']:
+                    if comment in ['Мадира Т', 'Нургуль Т', 'Заготовка']:
                         logger.info(f"✅ Найдены ежедневные транзакции для пользователя {self.telegram_user_id}")
                         return True
             elif self.telegram_user_id == 8010984368:
@@ -123,27 +123,27 @@ class DailyTransactionScheduler:
         )
         transactions_created.append(f"Повара: {tx_id}")
 
-        # 1× Повара (ID=17) - 1₸, комментарий "Мадира"
+        # 1× Повара (ID=17) - 1₸, комментарий "Мадира Т"
         tx_id = await poster_client.create_transaction(
             transaction_type=0,
             category_id=17,  # Повара
             account_from_id=4,
             amount=1,
             date=current_time,
-            comment="Мадира"
+            comment="Мадира Т"
         )
-        transactions_created.append(f"Повара (Мадира): {tx_id}")
+        transactions_created.append(f"Повара (Мадира Т): {tx_id}")
 
-        # 1× Повара (ID=17) - 1₸, комментарий "Нургуль"
+        # 1× Повара (ID=17) - 1₸, комментарий "Нургуль Т"
         tx_id = await poster_client.create_transaction(
             transaction_type=0,
             category_id=17,  # Повара
             account_from_id=4,
             amount=1,
             date=current_time,
-            comment="Нургуль"
+            comment="Нургуль Т"
         )
-        transactions_created.append(f"Повара (Нургуль): {tx_id}")
+        transactions_created.append(f"Повара (Нургуль Т): {tx_id}")
 
         # 1× Кухрабочая (ID=18) - 1₸
         tx_id = await poster_client.create_transaction(
@@ -168,17 +168,21 @@ class DailyTransactionScheduler:
         transactions_created.append(f"Курьер: {tx_id}")
 
         # 3× Логистика - Доставка продуктов (ID=24) с разными комментариями
-        logistics_comments = ["Караганда", "Фарш", "Кюрдамир"]
-        for comment in logistics_comments:
+        logistics_configs = [
+            {"comment": "Караганда", "amount": 1},
+            {"comment": "Фарш", "amount": 600},
+            {"comment": "Кюрдамир", "amount": 600}
+        ]
+        for config in logistics_configs:
             tx_id = await poster_client.create_transaction(
                 transaction_type=0,
                 category_id=24,  # Логистика - Доставка продуктов
                 account_from_id=4,
-                amount=1,
+                amount=config["amount"],
                 date=current_time,
-                comment=comment
+                comment=config["comment"]
             )
-            transactions_created.append(f"Логистика ({comment}): {tx_id}")
+            transactions_created.append(f"Логистика ({config['comment']}): {tx_id}")
 
         # === СЧЕТ "Kaspi Pay" (ID=1) ===
 
