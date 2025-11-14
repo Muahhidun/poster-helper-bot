@@ -401,7 +401,12 @@ def authorized_only(func):
                 logger.error(f"Failed to send unregistered message: {e}")
             return
 
-        # Check if subscription is active
+        # Admins bypass subscription check
+        if user_id in ADMIN_USER_IDS:
+            logger.info(f"Admin user {user_id} bypassing subscription check in {func.__name__}")
+            return await func(update, context)
+
+        # Check if subscription is active (only for non-admins)
         if not db.is_subscription_active(user_id):
             # Subscription expired
             logger.warning(f"Expired subscription attempt by user_id={user_id} in {func.__name__}")
