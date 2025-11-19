@@ -1333,14 +1333,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check if subscription is active
-    if not db.is_subscription_active(user_id):
-        await update.message.reply_text(
-            f"⛔ Ваша подписка истекла.\n\n"
-            f"Для продолжения работы необходимо продлить подписку.\n"
-            f"Используйте /subscription для подробностей."
-        )
-        return
+    # Admins bypass subscription check
+    if user_id not in ADMIN_USER_IDS:
+        # Check if subscription is active (only for non-admins)
+        if not db.is_subscription_active(user_id):
+            await update.message.reply_text(
+                f"⛔ Ваша подписка истекла.\n\n"
+                f"Для продолжения работы необходимо продлить подписку.\n"
+                f"Используйте /subscription для подробностей."
+            )
+            return
 
     # Check if in cash closing flow
     if 'cash_closing_data' in context.user_data:
