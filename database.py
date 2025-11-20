@@ -70,6 +70,28 @@ class UserDatabase:
                 )
             """)
 
+            # Table for poster accounts (multi-account support)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS poster_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    account_name TEXT NOT NULL,
+                    poster_token TEXT NOT NULL,
+                    poster_user_id TEXT NOT NULL,
+                    poster_base_url TEXT NOT NULL,
+                    is_primary INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(telegram_user_id, account_name),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_accounts_user
+                ON poster_accounts(telegram_user_id)
+            """)
+
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_settings (
                     telegram_user_id INTEGER PRIMARY KEY,
@@ -171,6 +193,28 @@ class UserDatabase:
                 )
             """)
 
+            # Table for poster accounts (multi-account support)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS poster_accounts (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    account_name TEXT NOT NULL,
+                    poster_token TEXT NOT NULL,
+                    poster_user_id TEXT NOT NULL,
+                    poster_base_url TEXT NOT NULL,
+                    is_primary BOOLEAN DEFAULT false,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL,
+                    UNIQUE(telegram_user_id, account_name),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_accounts_user
+                ON poster_accounts(telegram_user_id)
+            """)
+
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_settings (
                     telegram_user_id BIGINT PRIMARY KEY,
@@ -265,6 +309,85 @@ class UserDatabase:
             logger.info(f"✅ SQLite database initialized: {self.db_path}")
         else:
             logger.info(f"✅ PostgreSQL database initialized")
+
+        # Run migration to multi-account structure
+        self._migrate_to_multi_account()
+
+    def _migrate_to_multi_account(self):
+        """
+        Migrate existing users from single-account to multi-account structure.
+        This runs once to move poster credentials from users table to poster_accounts table.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Check if migration is needed (poster_accounts is empty)
+            if DB_TYPE == "sqlite":
+                cursor.execute("SELECT COUNT(*) as count FROM poster_accounts")
+                count = cursor.fetchone()[0]
+            else:
+                cursor.execute("SELECT COUNT(*) as count FROM poster_accounts")
+                count = cursor.fetchone()[0]
+
+            if count > 0:
+                # Migration already done
+                conn.close()
+                logger.info("✅ Multi-account migration: already completed")
+                return
+
+            # Get all users with poster credentials
+            cursor.execute("""
+                SELECT telegram_user_id, poster_token, poster_user_id, poster_base_url, created_at, updated_at
+                FROM users
+                WHERE poster_token IS NOT NULL AND poster_token != ''
+            """)
+            users = cursor.fetchall()
+
+            migrated_count = 0
+            for user in users:
+                telegram_user_id = user[0]
+                poster_token = user[1]
+                poster_user_id = user[2]
+                poster_base_url = user[3]
+                created_at = user[4]
+                updated_at = user[5]
+
+                # Insert into poster_accounts as primary account
+                if DB_TYPE == "sqlite":
+                    cursor.execute("""
+                        INSERT INTO poster_accounts (
+                            telegram_user_id, account_name, poster_token, poster_user_id,
+                            poster_base_url, is_primary, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        telegram_user_id, "Pizzburg", poster_token, poster_user_id,
+                        poster_base_url, 1, created_at, updated_at
+                    ))
+                else:
+                    cursor.execute("""
+                        INSERT INTO poster_accounts (
+                            telegram_user_id, account_name, poster_token, poster_user_id,
+                            poster_base_url, is_primary, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        telegram_user_id, "Pizzburg", poster_token, poster_user_id,
+                        poster_base_url, True, created_at, updated_at
+                    ))
+
+                migrated_count += 1
+
+            conn.commit()
+            conn.close()
+
+            if migrated_count > 0:
+                logger.info(f"✅ Multi-account migration: moved {migrated_count} users to poster_accounts")
+            else:
+                logger.info("✅ Multi-account migration: no users to migrate")
+
+        except Exception as e:
+            logger.error(f"❌ Multi-account migration failed: {e}")
+            # Don't crash the app if migration fails
 
     def get_user(self, telegram_user_id: int) -> Optional[Dict]:
         """Get user by Telegram ID"""
@@ -465,6 +588,144 @@ class UserDatabase:
                 return False
 
         return True
+
+    # === Poster Accounts Methods ===
+
+    def get_accounts(self, telegram_user_id: int) -> list:
+        """Get all Poster accounts for a user"""
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, account_name, poster_token, poster_user_id, poster_base_url,
+                       is_primary, created_at, updated_at
+                FROM poster_accounts
+                WHERE telegram_user_id = ?
+                ORDER BY is_primary DESC, account_name
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id, account_name, poster_token, poster_user_id, poster_base_url,
+                       is_primary, created_at, updated_at
+                FROM poster_accounts
+                WHERE telegram_user_id = %s
+                ORDER BY is_primary DESC, account_name
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_primary_account(self, telegram_user_id: int) -> Optional[Dict]:
+        """Get primary Poster account for a user"""
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, account_name, poster_token, poster_user_id, poster_base_url,
+                       is_primary, created_at, updated_at
+                FROM poster_accounts
+                WHERE telegram_user_id = ? AND is_primary = 1
+                LIMIT 1
+            """, (telegram_user_id,))
+            row = cursor.fetchone()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id, account_name, poster_token, poster_user_id, poster_base_url,
+                       is_primary, created_at, updated_at
+                FROM poster_accounts
+                WHERE telegram_user_id = %s AND is_primary = true
+                LIMIT 1
+            """, (telegram_user_id,))
+            row = cursor.fetchone()
+
+        conn.close()
+
+        if row:
+            return dict(row)
+        return None
+
+    def get_account_by_name(self, telegram_user_id: int, account_name: str) -> Optional[Dict]:
+        """Get Poster account by name"""
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, account_name, poster_token, poster_user_id, poster_base_url,
+                       is_primary, created_at, updated_at
+                FROM poster_accounts
+                WHERE telegram_user_id = ? AND account_name = ?
+                LIMIT 1
+            """, (telegram_user_id, account_name))
+            row = cursor.fetchone()
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id, account_name, poster_token, poster_user_id, poster_base_url,
+                       is_primary, created_at, updated_at
+                FROM poster_accounts
+                WHERE telegram_user_id = %s AND account_name = %s
+                LIMIT 1
+            """, (telegram_user_id, account_name))
+            row = cursor.fetchone()
+
+        conn.close()
+
+        if row:
+            return dict(row)
+        return None
+
+    def add_account(
+        self,
+        telegram_user_id: int,
+        account_name: str,
+        poster_token: str,
+        poster_user_id: str,
+        poster_base_url: str,
+        is_primary: bool = False
+    ) -> bool:
+        """Add a new Poster account for a user"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            now = datetime.now()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO poster_accounts (
+                        telegram_user_id, account_name, poster_token, poster_user_id,
+                        poster_base_url, is_primary, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    telegram_user_id, account_name, poster_token, poster_user_id,
+                    poster_base_url, 1 if is_primary else 0, now.isoformat(), now.isoformat()
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO poster_accounts (
+                        telegram_user_id, account_name, poster_token, poster_user_id,
+                        poster_base_url, is_primary, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    telegram_user_id, account_name, poster_token, poster_user_id,
+                    poster_base_url, is_primary, now, now
+                ))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Poster account added: {account_name} for telegram_id={telegram_user_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add poster account: {e}")
+            return False
 
     # === Ingredient Aliases Methods ===
 
