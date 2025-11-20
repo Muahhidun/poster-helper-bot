@@ -29,6 +29,7 @@ from daily_transactions import DailyTransactionScheduler, is_daily_transactions_
 from alias_generator import AliasGenerator
 from sync_ingredients import sync_ingredients
 from sync_products import sync_products
+from add_account_command import add_second_account_command
 from shipment_templates import (
     templates_command,
     edit_template_command,
@@ -4968,6 +4969,7 @@ def main():
         app.add_handler(CommandHandler("test_report", test_report_command))
         app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
         app.add_handler(CommandHandler("price_check", price_check_command))
+        app.add_handler(CommandHandler("add_cafe", add_second_account_command))
 
         # Shipment template commands
         app.add_handler(CommandHandler("templates", templates_command))
