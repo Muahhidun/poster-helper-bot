@@ -667,11 +667,27 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @authorized_only
 async def force_sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Принудительная синхронизация всех данных из Poster"""
-    await update.message.reply_text("🔄 Запускаю принудительную синхронизацию...")
+    telegram_user_id = update.effective_user.id
+
+    # Check if user has poster accounts
+    db = get_database()
+    accounts = db.get_accounts(telegram_user_id)
+
+    if not accounts:
+        await update.message.reply_text(
+            "❌ У вас нет подключенных Poster аккаунтов.\n\n"
+            "Используйте /start для регистрации."
+        )
+        return
+
+    await update.message.reply_text(
+        f"🔄 Запускаю синхронизацию из {len(accounts)} аккаунта(ов)...\n\n"
+        + "\n".join([f"  • {acc['account_name']}" for acc in accounts])
+    )
 
     try:
-        # Запустить синхронизацию
-        await auto_sync_poster_data(context)
+        # Запустить синхронизацию для этого пользователя
+        await auto_sync_poster_data(context, telegram_user_id=telegram_user_id)
 
         await update.message.reply_text(
             "✅ Синхронизация завершена!\n\n"
@@ -4810,8 +4826,14 @@ def setup_scheduler(app: Application):
     return scheduler
 
 
-async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
-    """Автоматическая синхронизация данных из Poster API"""
+async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE, telegram_user_id: int = None):
+    """
+    Автоматическая синхронизация данных из Poster API
+
+    Args:
+        context: Telegram context
+        telegram_user_id: Optional user ID to sync for. If None, syncs for all users with accounts.
+    """
     logger.info("🔄 Starting automatic sync from Poster API...")
 
     try:
@@ -4821,38 +4843,57 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE):
         from sync_suppliers import sync_suppliers
         from sync_accounts import sync_accounts
 
-        # 1. Синхронизировать ингредиенты
-        ingredients_result = await sync_ingredients()
-        if isinstance(ingredients_result, tuple):
-            ingredients_count, ingredient_ids = ingredients_result
+        # Determine which users to sync
+        if telegram_user_id:
+            # Sync for specific user
+            user_ids = [telegram_user_id]
         else:
-            # Backward compatibility: если старая версия возвращает только count
-            ingredients_count = ingredients_result
-            ingredient_ids = []
+            # Sync for all users with poster accounts
+            db = get_database()
+            # Get all users from ALLOWED_USER_IDS who have accounts
+            user_ids = []
+            for user_id in ALLOWED_USER_IDS:
+                accounts = db.get_accounts(user_id)
+                if accounts:
+                    user_ids.append(user_id)
 
-        # 2. Синхронизировать продукты
-        products_count = await sync_products()
+            if not user_ids:
+                logger.warning("No users with poster accounts found for sync")
+                return
 
-        # 3. Синхронизировать поставщиков
+        logger.info(f"📋 Syncing for {len(user_ids)} user(s)...")
+
+        # Sync for each user
+        total_ingredients = 0
+        total_products = 0
+
+        for user_id in user_ids:
+            logger.info(f"  👤 Syncing for user {user_id}...")
+
+            # 1. Синхронизировать ингредиенты
+            ingredients_result = await sync_ingredients(telegram_user_id=user_id)
+            if isinstance(ingredients_result, tuple):
+                ingredients_count, ingredient_map = ingredients_result
+                total_ingredients += ingredients_count
+            else:
+                # Backward compatibility
+                ingredients_count = ingredients_result
+                total_ingredients += ingredients_count
+
+            # 2. Синхронизировать продукты
+            products_result = await sync_products(telegram_user_id=user_id)
+            if isinstance(products_result, tuple):
+                products_count, product_map = products_result
+                total_products += products_count
+            else:
+                products_count = products_result
+                total_products += products_count
+
+        # 3. Синхронизировать поставщиков (пока по старому - без multi-account)
         suppliers_count = await sync_suppliers()
 
-        # 4. Синхронизировать счета
+        # 4. Синхронизировать счета (пока по старому - без multi-account)
         accounts_count = await sync_accounts()
-
-        # 5. Очистить "мертвые" алиасы для ингредиентов (для всех пользователей)
-        cleaned_aliases_count = 0
-        if ingredient_ids:
-            try:
-                db = get_database()
-                # Очистить для каждого пользователя из ALLOWED_USER_IDS
-                for user_id in ALLOWED_USER_IDS:
-                    cleaned = db.clean_orphaned_ingredient_aliases(user_id, ingredient_ids)
-                    cleaned_aliases_count += cleaned
-
-                if cleaned_aliases_count > 0:
-                    logger.info(f"🧹 Cleaned {cleaned_aliases_count} orphaned ingredient aliases")
-            except Exception as e:
-                logger.error(f"Failed to clean orphaned aliases: {e}")
 
         # 6. Перезагрузить matchers (чтобы подхватили новые данные)
         from matchers import _ingredient_matchers, _product_matchers, _category_matchers, _account_matchers, _supplier_matchers
