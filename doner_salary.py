@@ -93,18 +93,21 @@ class DonerSalaryCalculator:
                 product_name = product.get('product_name', '')
                 category_id = product.get('category_id', '')
                 count = float(product.get('count', 0))
+                product_name_lower = product_name.lower()
 
-                # Категория "Донер"
-                if category_id == str(self.DONER_CATEGORY_ID):
-                    category_count += count
+                # Сначала проверяем специальные товары (ВАЖНО: до проверки категории!)
+
+                # Донерная пицца (ищем "донер" И "пицц" в любом порядке)
+                if 'донер' in product_name_lower and 'пицц' in product_name_lower:
+                    pizza_count += count
                     details.append({
                         'name': product_name,
                         'count': count,
-                        'source': 'category'
+                        'source': 'pizza'
                     })
 
-                # Комбо Донер (может быть в другой категории)
-                elif self.COMBO_DONER_NAME.lower() in product_name.lower():
+                # Комбо Донер (ищем "комбо" И "донер")
+                elif 'комбо' in product_name_lower and 'донер' in product_name_lower:
                     combo_count += count
                     details.append({
                         'name': product_name,
@@ -112,13 +115,13 @@ class DonerSalaryCalculator:
                         'source': 'combo'
                     })
 
-                # Донерная пицца
-                elif self.PIZZA_DONER_NAME.lower() in product_name.lower():
-                    pizza_count += count
+                # Категория "Донер" - все остальное из категории 6
+                elif category_id == str(self.DONER_CATEGORY_ID):
+                    category_count += count
                     details.append({
                         'name': product_name,
                         'count': count,
-                        'source': 'pizza'
+                        'source': 'category'
                     })
 
             total_count = category_count + combo_count + pizza_count
