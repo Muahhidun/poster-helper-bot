@@ -4987,14 +4987,12 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE, telegram_use
         if ADMIN_USER_IDS:
             message = (
                 "✅ Автосинхронизация завершена:\n\n"
-                f"📦 Ингредиенты: {ingredients_count}\n"
-                f"🍕 Продукты: {products_count}\n"
+                f"📦 Ингредиенты: {total_ingredients}\n"
+                f"🍕 Продукты: {total_products}\n"
                 f"🏢 Поставщики: {suppliers_count}\n"
                 f"💰 Счета: {accounts_count}\n"
+                "\nВсе справочники обновлены."
             )
-            if cleaned_aliases_count > 0:
-                message += f"🧹 Очищено устаревших алиасов: {cleaned_aliases_count}\n"
-            message += "\nВсе справочники обновлены."
 
             for admin_id in ADMIN_USER_IDS:
                 try:
