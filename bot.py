@@ -796,6 +796,79 @@ async def test_monthly_report_command(update: Update, context: ContextTypes.DEFA
 
 
 @admin_only
+async def check_doner_sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /check_doner_sales [YYYYMMDD] - проверка продаж донеров за дату"""
+    telegram_user_id = update.effective_user.id
+
+    # Получить дату из аргументов или использовать вчерашний день
+    from datetime import datetime, timedelta
+
+    if context.args and len(context.args) > 0:
+        date_str = context.args[0]
+    else:
+        # По умолчанию - вчера
+        yesterday = datetime.now() - timedelta(days=1)
+        date_str = yesterday.strftime("%Y%m%d")
+
+    await update.message.reply_text(f"⏳ Получаю данные о продажах донеров за {date_str}...")
+
+    try:
+        from doner_salary import DonerSalaryCalculator
+
+        calculator = DonerSalaryCalculator(telegram_user_id)
+        sales = await calculator.get_doner_sales_count(date_str)
+
+        # Форматируем красивый отчёт
+        message = "📊 <b>ПРОДАЖИ ДОНЕРОВ</b>\n"
+        message += f"📅 Дата: {date_str}\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        message += f"📦 Категория \"Донер\" (ID=6): <b>{sales['category_count']:.0f}</b> шт\n"
+        message += f"🎁 Комбо Донер: <b>{sales['combo_count']:.0f}</b> шт\n"
+        message += f"🍕 Донерная пицца: <b>{sales['pizza_count']:.0f}</b> шт\n"
+        message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        message += f"📊 <b>ВСЕГО для зарплаты: {sales['total_count']:.0f} шт</b>\n\n"
+
+        # Рассчитать зарплату
+        salary = calculator.calculate_salary(int(sales['total_count']))
+        message += f"💰 Зарплата донерщика: <b>{salary:,}₸</b>\n\n"
+
+        # Детали по товарам
+        if sales['details']:
+            message += "📝 <b>Детали по товарам:</b>\n\n"
+
+            # Группировка
+            category_items = [x for x in sales['details'] if x['source'] == 'category']
+            combo_items = [x for x in sales['details'] if x['source'] == 'combo']
+            pizza_items = [x for x in sales['details'] if x['source'] == 'pizza']
+
+            if category_items:
+                message += "<i>Категория \"Донер\":</i>\n"
+                for item in sorted(category_items, key=lambda x: x['count'], reverse=True):
+                    message += f"  • {item['name']}: {item['count']:.0f} шт\n"
+                message += "\n"
+
+            if combo_items:
+                message += "<i>Комбо:</i>\n"
+                for item in combo_items:
+                    message += f"  • {item['name']}: {item['count']:.0f} шт\n"
+                message += "\n"
+
+            if pizza_items:
+                message += "<i>Донерная пицца:</i>\n"
+                for item in pizza_items:
+                    message += f"  • {item['name']}: {item['count']:.0f} шт\n"
+
+        await update.message.reply_text(message, parse_mode='HTML')
+
+    except Exception as e:
+        logger.error(f"Check doner sales failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка получения данных:\n{str(e)[:300]}"
+        )
+
+
+@admin_only
 async def price_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /price_check command - ручная проверка трендов цен"""
     telegram_user_id = update.effective_user.id
@@ -5009,6 +5082,7 @@ def main():
         app.add_handler(CommandHandler("test_daily", test_daily_command))
         app.add_handler(CommandHandler("test_report", test_report_command))
         app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
+        app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
         app.add_handler(CommandHandler("price_check", price_check_command))
         app.add_handler(CommandHandler("add_cafe", add_second_account_command))
 
