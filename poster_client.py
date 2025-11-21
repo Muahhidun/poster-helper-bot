@@ -11,16 +11,35 @@ logger = logging.getLogger(__name__)
 class PosterClient:
     """Client for interacting with Poster API"""
 
-    def __init__(self, telegram_user_id: Optional[int] = None):
+    def __init__(
+        self,
+        telegram_user_id: Optional[int] = None,
+        poster_token: Optional[str] = None,
+        poster_user_id: Optional[str] = None,
+        poster_base_url: Optional[str] = None
+    ):
         """
-        Initialize Poster client for a specific user
+        Initialize Poster client for a specific user or with explicit credentials
 
         Args:
-            telegram_user_id: Telegram user ID for multi-tenant support.
-                             If None, uses config values (legacy mode)
+            telegram_user_id: Telegram user ID for multi-tenant support
+            poster_token: Explicit token (for multi-account mode)
+            poster_user_id: Explicit user ID (for multi-account mode)
+            poster_base_url: Explicit base URL (for multi-account mode)
+
+        Priority:
+            1. If explicit credentials provided, use them (multi-account mode)
+            2. Else if telegram_user_id provided, load from database
+            3. Else use config values (legacy mode)
         """
-        if telegram_user_id:
-            # Multi-tenant mode: load from database
+        # Multi-account mode with explicit credentials
+        if poster_token and poster_user_id and poster_base_url:
+            self.base_url = poster_base_url
+            self.token = poster_token
+            self.user_id = poster_user_id
+            self.telegram_user_id = telegram_user_id
+        elif telegram_user_id:
+            # Load from database (users table)
             from database import get_database
             db = get_database()
             user_data = db.get_user(telegram_user_id)
