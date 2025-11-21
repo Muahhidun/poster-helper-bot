@@ -97,8 +97,11 @@ class DonerSalaryCalculator:
 
                 # Сначала проверяем специальные товары (ВАЖНО: до проверки категории!)
 
-                # Донерная пицца (ищем "донер" И "пицц" в любом порядке)
-                if 'донер' in product_name_lower and 'пицц' in product_name_lower:
+                # Донерная пицца:
+                # 1. Название "Донерная" (точное совпадение или с пробелами)
+                # 2. ИЛИ есть "донер" И "пицц" в любом порядке
+                if (product_name_lower.strip() == 'донерная' or
+                    ('донер' in product_name_lower and 'пицц' in product_name_lower)):
                     pizza_count += count
                     details.append({
                         'name': product_name,
