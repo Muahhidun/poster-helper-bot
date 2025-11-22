@@ -360,7 +360,7 @@ class IngredientMatcher:
         self.load_aliases()
 
     def load_ingredients(self):
-        """Load ingredients from CSV"""
+        """Load ingredients from CSV (with account_name for multi-account support)"""
         if not self.ingredients_csv.exists():
             logger.warning(f"Ingredients file not found: {self.ingredients_csv}")
             return
@@ -373,11 +373,13 @@ class IngredientMatcher:
                 ingredient_id = int(row['ingredient_id'])
                 name = row['ingredient_name'].strip()
                 unit = row.get('unit', '').strip()
+                account_name = row.get('account_name', 'Unknown').strip()
 
                 self.ingredients[ingredient_id] = {
                     'id': ingredient_id,
                     'name': name,
-                    'unit': unit
+                    'unit': unit,
+                    'account_name': account_name
                 }
 
                 # Add name for matching
@@ -458,7 +460,7 @@ class IngredientMatcher:
 
         logger.info(f"Loaded {len(self.aliases)} ingredient aliases from CSV for user {self.telegram_user_id}")
 
-    def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int]]:
+    def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match ingredient by text (aliases, exact, or fuzzy)
 
@@ -467,7 +469,7 @@ class IngredientMatcher:
             score_cutoff: Minimum fuzzy match score
 
         Returns:
-            Tuple of (ingredient_id, name, unit, score) or None
+            Tuple of (ingredient_id, name, unit, score, account_name) or None
             Score is 100 for exact/alias matches, lower for fuzzy
         """
         if not text:
@@ -481,14 +483,14 @@ class IngredientMatcher:
             ingredient_id = self.aliases[text_lower]
             ingredient = self.ingredients[ingredient_id]
             logger.debug(f"Ingredient alias match: '{text}' -> {ingredient}")
-            return (ingredient_id, ingredient['name'], ingredient['unit'], 100)
+            return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
 
         # 2. Exact name match
         if text_lower in self.names:
             ingredient_id = self.names[text_lower]
             ingredient = self.ingredients[ingredient_id]
             logger.debug(f"Ingredient exact match: '{text}' -> {ingredient}")
-            return (ingredient_id, ingredient['name'], ingredient['unit'], 100)
+            return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
 
         # 3. Fuzzy match on aliases first (higher confidence)
         if self.aliases:
@@ -550,7 +552,7 @@ class IngredientMatcher:
                     ingredient_id = self.aliases[matched_alias]
                     ingredient = self.ingredients[ingredient_id]
                     logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
-                    return (ingredient_id, ingredient['name'], ingredient['unit'], score)
+                    return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
 
         # 4. Fuzzy match on ingredient names
         names_list = list(self.names.keys())
@@ -572,9 +574,97 @@ class IngredientMatcher:
             ingredient_id = self.names[matched_name]
             ingredient = self.ingredients[ingredient_id]
             logger.debug(f"Ingredient fuzzy match: '{text}' -> {ingredient} (score={score})")
-            return (ingredient_id, ingredient['name'], ingredient['unit'], score)
+            return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
 
         logger.warning(f"Ingredient not matched: '{text}'")
+        return None
+
+    def match_with_priority(self, text: str, score_cutoff: int = 75, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
+        """
+        Match ingredient with priority: search in primary account first, then secondary accounts
+
+        Logic: "Всё общее идет автоматически в Pizzburg, а то что нет в Pizzburg - поставляется в Pizzburg-cafe"
+
+        Args:
+            text: Ingredient text to match
+            score_cutoff: Minimum fuzzy match score
+            primary_account: Name of primary account (default: "Pizzburg")
+
+        Returns:
+            Tuple of (ingredient_id, name, unit, score, account_name) or None
+        """
+        if not text:
+            return None
+
+        # Normalize text for better matching
+        text_lower = normalize_text_for_matching(text)
+
+        # Get all possible matches across all accounts
+        all_matches = []
+
+        # 1. Check aliases first
+        if text_lower in self.aliases:
+            ingredient_id = self.aliases[text_lower]
+            ingredient = self.ingredients[ingredient_id]
+            all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
+
+        # 2. Check exact name matches
+        if text_lower in self.names and not all_matches:
+            ingredient_id = self.names[text_lower]
+            ingredient = self.ingredients[ingredient_id]
+            all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
+
+        # 3. Fuzzy matching - search in aliases first
+        if not all_matches and self.aliases:
+            aliases_list = list(self.aliases.keys())
+            alias_matches = process.extract(
+                text_lower,
+                aliases_list,
+                scorer=fuzz.token_set_ratio,
+                score_cutoff=score_cutoff,
+                limit=10  # Get top 10 to find best across accounts
+            )
+
+            for matched_alias, score, _ in alias_matches:
+                ingredient_id = self.aliases[matched_alias]
+                ingredient = self.ingredients[ingredient_id]
+                all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
+
+        # 4. Fuzzy matching - search in names
+        if not all_matches:
+            names_list = list(self.names.keys())
+            name_matches = process.extract(
+                text_lower,
+                names_list,
+                scorer=fuzz.WRatio,
+                score_cutoff=score_cutoff,
+                limit=10
+            )
+
+            for matched_name, score, _ in name_matches:
+                ingredient_id = self.names[matched_name]
+                ingredient = self.ingredients[ingredient_id]
+                all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
+
+        if not all_matches:
+            logger.warning(f"Ingredient not matched (priority search): '{text}'")
+            return None
+
+        # Priority logic: prefer primary account (Pizzburg), then others
+        primary_matches = [m for m in all_matches if m[4] == primary_account]
+        secondary_matches = [m for m in all_matches if m[4] != primary_account]
+
+        if primary_matches:
+            # Return best match from primary account
+            best_match = max(primary_matches, key=lambda x: x[3])  # Sort by score
+            logger.info(f"✅ Found in PRIMARY account ({primary_account}): '{text}' -> {best_match[1]} (score={best_match[3]})")
+            return best_match
+        elif secondary_matches:
+            # Return best match from secondary accounts
+            best_match = max(secondary_matches, key=lambda x: x[3])
+            logger.info(f"✅ Found in SECONDARY account ({best_match[4]}): '{text}' -> {best_match[1]} (score={best_match[3]})")
+            return best_match
+
         return None
 
     def get_ingredient_info(self, ingredient_id: int) -> Optional[Dict]:
@@ -725,7 +815,7 @@ class ProductMatcher:
         self.load_aliases()
 
     def load_products(self):
-        """Load products from CSV"""
+        """Load products from CSV (with account_name for multi-account support)"""
         if not self.products_csv.exists():
             logger.warning(f"Products file not found: {self.products_csv}")
             return
@@ -738,6 +828,7 @@ class ProductMatcher:
                 product_id = int(row['product_id'])
                 name = row['product_name'].strip()
                 category = row.get('category_name', '').strip()
+                account_name = row.get('account_name', 'Unknown').strip()
 
                 # Только товары категории "Напитки" могут быть в поставках
                 # Остальные категории (Бургеры, Пиццы и т.д.) - это техкарты, они не закупаются
@@ -748,7 +839,8 @@ class ProductMatcher:
                     'id': product_id,
                     'name': name,
                     'category': category,
-                    'unit': 'шт'  # Products are usually counted in pieces
+                    'unit': 'шт',  # Products are usually counted in pieces
+                    'account_name': account_name
                 }
 
                 # Add name for matching
@@ -832,7 +924,7 @@ class ProductMatcher:
 
         logger.info(f"Loaded {len(self.aliases)} product aliases from CSV for user {self.telegram_user_id}")
 
-    def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int]]:
+    def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match product by text (aliases, exact, or fuzzy)
 
@@ -841,7 +933,7 @@ class ProductMatcher:
             score_cutoff: Minimum fuzzy match score
 
         Returns:
-            Tuple of (product_id, name, unit, score) or None
+            Tuple of (product_id, name, unit, score, account_name) or None
             Score is 100 for exact/alias matches, lower for fuzzy
         """
         if not text:
@@ -855,14 +947,14 @@ class ProductMatcher:
             product_id = self.aliases[text_lower]
             product = self.products[product_id]
             logger.debug(f"Product alias match: '{text}' -> {product}")
-            return (product_id, product['name'], product['unit'], 100)
+            return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
 
         # 2. Exact name match
         if text_lower in self.names:
             product_id = self.names[text_lower]
             product = self.products[product_id]
             logger.debug(f"Product exact match: '{text}' -> {product}")
-            return (product_id, product['name'], product['unit'], 100)
+            return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
 
         # 3. Fuzzy match on aliases first (higher confidence)
         if self.aliases:
@@ -886,7 +978,7 @@ class ProductMatcher:
                 product_id = self.aliases[matched_alias]
                 product = self.products[product_id]
                 logger.info(f"✅ Product fuzzy alias match: '{text}' -> {product['name']} (score={score})")
-                return (product_id, product['name'], product['unit'], score)
+                return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
 
         # 4. Fuzzy match on product names
         names_list = list(self.names.keys())
@@ -908,9 +1000,97 @@ class ProductMatcher:
             product_id = self.names[matched_name]
             product = self.products[product_id]
             logger.debug(f"Product fuzzy match: '{text}' -> {product} (score={score})")
-            return (product_id, product['name'], product['unit'], score)
+            return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
 
         logger.warning(f"Product not matched: '{text}'")
+        return None
+
+    def match_with_priority(self, text: str, score_cutoff: int = 75, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
+        """
+        Match product with priority: search in primary account first, then secondary accounts
+
+        Logic: "Всё общее идет автоматически в Pizzburg, а то что нет в Pizzburg - поставляется в Pizzburg-cafe"
+
+        Args:
+            text: Product text to match
+            score_cutoff: Minimum fuzzy match score
+            primary_account: Name of primary account (default: "Pizzburg")
+
+        Returns:
+            Tuple of (product_id, name, unit, score, account_name) or None
+        """
+        if not text:
+            return None
+
+        # Normalize text for better matching
+        text_lower = normalize_text_for_matching(text)
+
+        # Get all possible matches across all accounts
+        all_matches = []
+
+        # 1. Check aliases first
+        if text_lower in self.aliases:
+            product_id = self.aliases[text_lower]
+            product = self.products[product_id]
+            all_matches.append((product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
+
+        # 2. Check exact name matches
+        if text_lower in self.names and not all_matches:
+            product_id = self.names[text_lower]
+            product = self.products[product_id]
+            all_matches.append((product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
+
+        # 3. Fuzzy matching - search in aliases first
+        if not all_matches and self.aliases:
+            aliases_list = list(self.aliases.keys())
+            alias_matches = process.extract(
+                text_lower,
+                aliases_list,
+                scorer=fuzz.token_set_ratio,
+                score_cutoff=score_cutoff,
+                limit=10  # Get top 10 to find best across accounts
+            )
+
+            for matched_alias, score, _ in alias_matches:
+                product_id = self.aliases[matched_alias]
+                product = self.products[product_id]
+                all_matches.append((product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
+
+        # 4. Fuzzy matching - search in names
+        if not all_matches:
+            names_list = list(self.names.keys())
+            name_matches = process.extract(
+                text_lower,
+                names_list,
+                scorer=fuzz.WRatio,
+                score_cutoff=score_cutoff,
+                limit=10
+            )
+
+            for matched_name, score, _ in name_matches:
+                product_id = self.names[matched_name]
+                product = self.products[product_id]
+                all_matches.append((product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
+
+        if not all_matches:
+            logger.warning(f"Product not matched (priority search): '{text}'")
+            return None
+
+        # Priority logic: prefer primary account (Pizzburg), then others
+        primary_matches = [m for m in all_matches if m[4] == primary_account]
+        secondary_matches = [m for m in all_matches if m[4] != primary_account]
+
+        if primary_matches:
+            # Return best match from primary account
+            best_match = max(primary_matches, key=lambda x: x[3])  # Sort by score
+            logger.info(f"✅ Found in PRIMARY account ({primary_account}): '{text}' -> {best_match[1]} (score={best_match[3]})")
+            return best_match
+        elif secondary_matches:
+            # Return best match from secondary accounts
+            best_match = max(secondary_matches, key=lambda x: x[3])
+            logger.info(f"✅ Found in SECONDARY account ({best_match[4]}): '{text}' -> {best_match[1]} (score={best_match[3]})")
+            return best_match
+
         return None
 
     def get_product_info(self, product_id: int) -> Optional[Dict]:

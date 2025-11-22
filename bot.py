@@ -1796,19 +1796,19 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
             # Log original item name from OCR
             logger.info(f"🔍 Matching item: \"{item['name']}\"")
 
-            # Try ingredient match first
-            ingredient_match = ingredient_matcher.match(item['name'])
+            # Try ingredient match first (with priority: Pizzburg → Pizzburg-cafe)
+            ingredient_match = ingredient_matcher.match_with_priority(item['name'])
             if ingredient_match:
-                logger.info(f"   Ingredient match: {ingredient_match[1]} (ID: {ingredient_match[0]}, score: {ingredient_match[3]:.1f})")
+                logger.info(f"   Ingredient match: {ingredient_match[1]} (ID: {ingredient_match[0]}, account: {ingredient_match[4]}, score: {ingredient_match[3]:.1f})")
             else:
                 logger.info(f"   Ingredient match: None")
 
             # Try product match if ingredient not found or score too low
             product_match = None
             if not ingredient_match or ingredient_match[3] < 75:
-                product_match = product_matcher.match(item['name'])
+                product_match = product_matcher.match_with_priority(item['name'])
                 if product_match:
-                    logger.info(f"   Product match: {product_match[1]} (ID: {product_match[0]}, score: {product_match[3]:.1f})")
+                    logger.info(f"   Product match: {product_match[1]} (ID: {product_match[0]}, account: {product_match[4]}, score: {product_match[3]:.1f})")
                 else:
                     logger.info(f"   Product match: None")
 
@@ -1852,7 +1852,7 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 unmatched_items.append(item)
                 continue
 
-            item_id, item_name, unit, match_score = best_match
+            item_id, item_name, unit, match_score, account_name = best_match
             qty = item['qty']
             price = item.get('price')
 
@@ -1876,7 +1876,8 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 'sum': item_sum,
                 'match_score': match_score,
                 'original_name': item['name'],
-                'packing_size': packing_size
+                'packing_size': packing_size,
+                'account_name': account_name  # Добавляем информацию об аккаунте
             })
 
             total_amount += item_sum
@@ -1899,19 +1900,13 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
             await show_ingredient_selection(update, context)
             return
 
-        # Build supply draft
-        draft = {
-            'type': 'supply',
-            'supplier_id': supplier_id,
-            'supplier_name': supplier_name,
-            'account_id': account_id,
-            'account_name': account_name,
-            'storage_id': 1,  # Default: Продукты
-            'storage_name': 'Продукты',
-            'items': matched_items,
-            'total_amount': total_amount,
-            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        # Group items by account (Pizzburg or Pizzburg-cafe)
+        items_by_account = {}
+        for item in matched_items:
+            acc_name = item.get('account_name', 'Unknown')
+            if acc_name not in items_by_account:
+                items_by_account[acc_name] = []
+            items_by_account[acc_name].append(item)
 
         # Notify about skipped items without prices
         skipped_count = len(items) - len(matched_items) - len(unmatched_items)
@@ -1921,16 +1916,58 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 f"Добавьте цены в накладную или введите их вручную."
             )
 
-        # Show supply draft
-        message = await show_supply_draft(update, context, draft)
+        # Create separate drafts for each account
+        if len(items_by_account) > 1:
+            # Multi-account: show summary first
+            summary_lines = ["📦 Создано несколько черновиков для разных аккаунтов:\n"]
+            for acc_name, acc_items in items_by_account.items():
+                acc_total = sum(it['sum'] for it in acc_items)
+                summary_lines.append(f"• {acc_name}: {len(acc_items)} товаров, {acc_total:,} {CURRENCY}")
 
-        # Store draft with message_id as key
-        if message:
-            if 'drafts' not in context.user_data:
-                context.user_data['drafts'] = {}
-            context.user_data['drafts'][message.message_id] = draft
-            context.user_data['current_message_id'] = message.message_id
-            logger.info(f"✅ Draft saved: message_id={message.message_id}, available drafts={list(context.user_data['drafts'].keys())}")
+            await update.message.reply_text("\n".join(summary_lines))
+
+        # Build and show draft for each account
+        for acc_name, acc_items in items_by_account.items():
+            acc_total = sum(it['sum'] for it in acc_items)
+
+            draft = {
+                'type': 'supply',
+                'supplier_id': supplier_id,
+                'supplier_name': supplier_name,
+                'account_id': account_id,
+                'account_name': account_name,
+                'storage_id': 1,  # Default: Продукты
+                'storage_name': 'Продукты',
+                'items': acc_items,
+                'total_amount': acc_total,
+                'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'poster_account_name': acc_name  # Для отправки в правильный аккаунт Poster
+            }
+
+            # Show supply draft with account name in title
+            message = await show_supply_draft(update, context, draft, account_label=acc_name if len(items_by_account) > 1 else None)
+
+            # Store draft with message_id as key
+            if message:
+                if 'drafts' not in context.user_data:
+                    context.user_data['drafts'] = {}
+                context.user_data['drafts'][message.message_id] = draft
+                context.user_data['current_message_id'] = message.message_id
+                logger.info(f"✅ Draft saved for {acc_name}: message_id={message.message_id}, available drafts={list(context.user_data['drafts'].keys())}")
+
+        # Если есть пропущенные товары с кандидатами - показать UI выбора
+        skipped_with_candidates = parsed.get('skipped_items_with_candidates', [])
+        skipped_no_candidates = parsed.get('skipped_items', [])
+
+        if skipped_with_candidates or skipped_no_candidates:
+            from invoice_manual_selection import show_skipped_items_ui
+            await show_skipped_items_ui(
+                update,
+                context,
+                skipped_with_candidates,
+                skipped_no_candidates,
+                supply_draft_result={'drafts': []}  # Placeholder
+            )
 
     except Exception as e:
         logger.error(f"Supply processing failed: {e}", exc_info=True)
@@ -1947,7 +1984,7 @@ def get_confidence_indicator(score):
         return "❌"
 
 
-async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict):
+async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, draft: Dict, account_label: str = None):
     """Show supply draft with confirmation buttons"""
     items_lines = []
     for idx, item in enumerate(draft['items']):
@@ -1969,8 +2006,11 @@ async def show_supply_draft(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     if low_confidence_count > 0:
         low_confidence_hint = f"\n💡 ⚠️ {low_confidence_count} поз. с низкой уверенностью - проверьте\n"
 
+    # Add account label if multi-account
+    account_label_text = f" [{account_label}]" if account_label else ""
+
     message_text = (
-        "📦 Черновик поставки:\n\n"
+        f"📦 Черновик поставки{account_label_text}:\n\n"
         f"Поставщик: {draft['supplier_name']}\n"
         f"Счёт: {draft['account_name']}\n"
         f"Склад: {draft['storage_name']}\n\n"
@@ -3564,6 +3604,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
+
+    # Обработка ручного выбора товаров из накладной
+    if query.data.startswith("invoice_select:"):
+        from invoice_manual_selection import handle_candidate_selection
+        await handle_candidate_selection(update, context)
+        return
+    elif query.data.startswith("invoice_skip:"):
+        from invoice_manual_selection import handle_skip_item
+        await handle_skip_item(update, context)
+        return
+    elif query.data == "invoice_finish":
+        from invoice_manual_selection import finalize_manual_selection
+        await finalize_manual_selection(update, context)
+        return
 
     # Обработка пропущенных ежедневных транзакций
     if query.data.startswith("create_missed_daily_"):
