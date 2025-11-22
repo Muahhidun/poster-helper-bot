@@ -63,37 +63,62 @@ class DailyTransactionScheduler:
     async def create_daily_transactions(self):
         """
         Создать все ежедневные транзакции в 12:00
-        Выбирает конфигурацию в зависимости от пользователя
+        Создает транзакции для всех аккаунтов пользователя (Pizzburg и Pizzburg-cafe)
         """
         try:
-            poster_client = PosterClient(self.telegram_user_id)
+            from database import get_database
+
+            db = get_database()
+            accounts = db.get_accounts(self.telegram_user_id)
+
+            if not accounts:
+                logger.warning(f"Нет аккаунтов для пользователя {self.telegram_user_id}")
+                return {
+                    'success': False,
+                    'error': 'No accounts found'
+                }
 
             # Дата и время для всех транзакций
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            transactions_created = []
+            all_transactions = []
 
-            # Выбрать конфигурацию в зависимости от пользователя
-            if self.telegram_user_id == 167084307:
-                # Первый аккаунт (основной)
-                transactions_created = await self._create_transactions_account_1(poster_client, current_time)
-            elif self.telegram_user_id == 8010984368:
-                # Второй аккаунт
-                transactions_created = await self._create_transactions_account_2(poster_client, current_time)
-            else:
-                logger.warning(f"Нет конфигурации для пользователя {self.telegram_user_id}")
+            # Создать транзакции для каждого аккаунта
+            for account in accounts:
+                account_name = account['account_name']
+                logger.info(f"📦 Создаю ежедневные транзакции для аккаунта '{account_name}'...")
 
-            # Закрыть клиент
-            await poster_client.close()
+                # Создать PosterClient для этого аккаунта
+                poster_client = PosterClient(
+                    telegram_user_id=self.telegram_user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
 
-            logger.info(f"✅ Создано {len(transactions_created)} ежедневных транзакций для пользователя {self.telegram_user_id}")
-            for tx in transactions_created:
+                try:
+                    # Выбрать конфигурацию в зависимости от аккаунта
+                    if account_name == 'Pizzburg':
+                        transactions = await self._create_transactions_pizzburg(poster_client, current_time)
+                    elif account_name == 'Pizzburg-cafe':
+                        transactions = await self._create_transactions_pizzburg_cafe(poster_client, current_time)
+                    else:
+                        logger.warning(f"Нет конфигурации для аккаунта '{account_name}'")
+                        transactions = []
+
+                    all_transactions.extend([f"[{account_name}] {tx}" for tx in transactions])
+
+                finally:
+                    await poster_client.close()
+
+            logger.info(f"✅ Создано {len(all_transactions)} ежедневных транзакций для пользователя {self.telegram_user_id}")
+            for tx in all_transactions:
                 logger.info(f"  - {tx}")
 
             return {
                 'success': True,
-                'count': len(transactions_created),
-                'transactions': transactions_created
+                'count': len(all_transactions),
+                'transactions': all_transactions
             }
 
         except Exception as e:
@@ -103,8 +128,8 @@ class DailyTransactionScheduler:
                 'error': str(e)
             }
 
-    async def _create_transactions_account_1(self, poster_client: PosterClient, current_time: str) -> List[str]:
-        """Транзакции для первого аккаунта (167084307)"""
+    async def _create_transactions_pizzburg(self, poster_client: PosterClient, current_time: str) -> List[str]:
+        """Транзакции для аккаунта Pizzburg (основной)"""
         transactions_created = []
 
         # === СЧЕТ "Оставил в кассе" (ID=4) ===
@@ -335,6 +360,74 @@ class DailyTransactionScheduler:
             comment=""
         )
         transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
+
+        return transactions_created
+
+    async def _create_transactions_pizzburg_cafe(self, poster_client: PosterClient, current_time: str) -> List[str]:
+        """Транзакции для аккаунта Pizzburg-cafe"""
+        transactions_created = []
+
+        # === СЧЕТ "Оставил в кассе" ===
+        # Примечание: ID счетов и категорий могут отличаться от Pizzburg
+
+        # 1. Кассир - 1₸
+        tx_id = await poster_client.create_transaction(
+            transaction_type=0,  # expense
+            category_id=16,  # Кассир (нужно уточнить ID для Pizzburg-cafe)
+            account_from_id=5,  # Оставил в кассе (нужно уточнить ID)
+            amount=1,
+            date=current_time,
+            comment=""
+        )
+        transactions_created.append(f"Кассир: {tx_id}")
+
+        # 2. Сушист - 1₸
+        tx_id = await poster_client.create_transaction(
+            transaction_type=0,  # expense
+            category_id=17,  # Сушист (нужно уточнить ID)
+            account_from_id=5,  # Оставил в кассе
+            amount=1,
+            date=current_time,
+            comment=""
+        )
+        transactions_created.append(f"Сушист: {tx_id}")
+
+        # 3. Повар Сандей - 1₸
+        tx_id = await poster_client.create_transaction(
+            transaction_type=0,  # expense
+            category_id=28,  # Повар Сандей (нужно уточнить ID)
+            account_from_id=5,  # Оставил в кассе
+            amount=1,
+            date=current_time,
+            comment=""
+        )
+        transactions_created.append(f"Повар Сандей: {tx_id}")
+
+        # === ПЕРЕВОДЫ ===
+
+        # 4. Инкассация → Оставил в кассе - 1₸
+        tx_id = await poster_client.create_transaction(
+            transaction_type=2,  # transfer
+            category_id=0,  # не используется для переводов
+            account_from_id=2,  # Инкассация (нужно уточнить ID)
+            account_to_id=5,  # Оставил в кассе
+            amount=1,
+            date=current_time,
+            comment=""
+        )
+        transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
+
+        # 5. Kaspi Pay → Wolt доставка - 1₸
+        tx_id = await poster_client.create_transaction(
+            transaction_type=2,  # transfer
+            category_id=0,  # не используется для переводов
+            account_from_id=1,  # Kaspi Pay (нужно уточнить ID)
+            account_to_id=7,  # Wolt доставка (нужно уточнить ID)
+            amount=1,
+            date=current_time,
+            comment=""
+        )
+        transactions_created.append(f"Перевод Kaspi Pay → Wolt: {tx_id}")
 
         return transactions_created
 
