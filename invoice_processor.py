@@ -156,9 +156,13 @@ class InvoiceProcessor:
             if match_result:
                 ingredient_id = match_result[0]
                 account_name = match_result[4]
+                candidates = None
             else:
                 ingredient_id = None
                 account_name = None
+                # Товар не найден - ищем похожие для ручного выбора (score 60-75)
+                candidates = self.ingredient_matcher.get_top_matches(item['name'], limit=5, score_cutoff=60)
+                logger.debug(f"  ℹ️ Found {len(candidates)} candidates for '{item['name']}'")
 
             processed_item = {
                 'name': item['name'],
@@ -167,7 +171,8 @@ class InvoiceProcessor:
                 'quantity': item['quantity'],
                 'unit': item['unit'],
                 'price': item['price'],
-                'total': item.get('total', item['quantity'] * item['price'])
+                'total': item.get('total', item['quantity'] * item['price']),
+                'candidates': candidates  # Список похожих товаров для выбора
             }
             items.append(processed_item)
 
@@ -222,11 +227,23 @@ class InvoiceProcessor:
         # Разделить товары по аккаунтам
         items_by_account = {}
         skipped_items = []
+        skipped_items_with_candidates = []  # Товары с кандидатами для выбора
 
         for item in items:
             if not item.get('ingredient_id'):
                 logger.warning(f"⚠️ Пропускаю '{item['name']}' - ингредиент не найден в Poster")
-                skipped_items.append(item['name'])
+
+                # Проверяем есть ли кандидаты для выбора
+                if item.get('candidates') and len(item['candidates']) > 0:
+                    skipped_items_with_candidates.append({
+                        'name': item['name'],
+                        'quantity': item['quantity'],
+                        'unit': item['unit'],
+                        'price': item['price'],
+                        'candidates': item['candidates']
+                    })
+                else:
+                    skipped_items.append(item['name'])
                 continue
 
             account_name = item.get('account_name', 'Unknown')
@@ -348,6 +365,7 @@ class InvoiceProcessor:
             'supplier_not_found': supplier_not_found,
             'date': supply_date,
             'skipped_items': skipped_items,
+            'skipped_items_with_candidates': skipped_items_with_candidates,
             'total_items': sum(d['items_count'] for d in drafts),
             'total_sum': sum(d['total_sum'] for d in drafts)
         }

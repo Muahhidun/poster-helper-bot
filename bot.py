@@ -1955,6 +1955,20 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 context.user_data['current_message_id'] = message.message_id
                 logger.info(f"✅ Draft saved for {acc_name}: message_id={message.message_id}, available drafts={list(context.user_data['drafts'].keys())}")
 
+        # Если есть пропущенные товары с кандидатами - показать UI выбора
+        skipped_with_candidates = parsed.get('skipped_items_with_candidates', [])
+        skipped_no_candidates = parsed.get('skipped_items', [])
+
+        if skipped_with_candidates or skipped_no_candidates:
+            from invoice_manual_selection import show_skipped_items_ui
+            await show_skipped_items_ui(
+                update,
+                context,
+                skipped_with_candidates,
+                skipped_no_candidates,
+                supply_draft_result={'drafts': []}  # Placeholder
+            )
+
     except Exception as e:
         logger.error(f"Supply processing failed: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Ошибка обработки поставки: {e}")
@@ -3590,6 +3604,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
+
+    # Обработка ручного выбора товаров из накладной
+    if query.data.startswith("invoice_select:"):
+        from invoice_manual_selection import handle_candidate_selection
+        await handle_candidate_selection(update, context)
+        return
+    elif query.data.startswith("invoice_skip:"):
+        from invoice_manual_selection import handle_skip_item
+        await handle_skip_item(update, context)
+        return
+    elif query.data == "invoice_finish":
+        from invoice_manual_selection import finalize_manual_selection
+        await finalize_manual_selection(update, context)
+        return
 
     # Обработка пропущенных ежедневных транзакций
     if query.data.startswith("create_missed_daily_"):
