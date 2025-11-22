@@ -146,18 +146,24 @@ class InvoiceProcessor:
         # Общая сумма
         total_sum = ocr_result.get('total_sum')
 
-        # Обрабатываем товары
+        # Обрабатываем товары с приоритетом аккаунтов
         items = []
         for item in ocr_result.get('items', []):
-            # Ищем ингредиент в Poster по названию
-            match_result = self.ingredient_matcher.match(item['name'])
+            # Ищем ингредиент в Poster по названию с приоритетом (Pizzburg → Pizzburg-cafe)
+            match_result = self.ingredient_matcher.match_with_priority(item['name'])
 
-            # Извлекаем только ID из кортежа (ingredient_id, name, unit, score)
-            ingredient_id = match_result[0] if match_result else None
+            # Извлекаем данные из кортежа (ingredient_id, name, unit, score, account_name)
+            if match_result:
+                ingredient_id = match_result[0]
+                account_name = match_result[4]
+            else:
+                ingredient_id = None
+                account_name = None
 
             processed_item = {
                 'name': item['name'],
                 'ingredient_id': ingredient_id,
+                'account_name': account_name,
                 'quantity': item['quantity'],
                 'unit': item['unit'],
                 'price': item['price'],
@@ -166,7 +172,7 @@ class InvoiceProcessor:
             items.append(processed_item)
 
             if ingredient_id:
-                logger.debug(f"  ✓ Товар сопоставлен: {item['name']} -> ingredient_id={ingredient_id}")
+                logger.debug(f"  ✓ Товар сопоставлен: {item['name']} -> ingredient_id={ingredient_id} (аккаунт: {account_name})")
             else:
                 logger.debug(f"  ✗ Товар не найден в Poster: {item['name']}")
 
@@ -180,16 +186,17 @@ class InvoiceProcessor:
 
     async def _create_supply_draft(self, parsed_data: Dict) -> Dict:
         """
-        Создать черновик поставки в Poster
+        Создать черновики поставки в Poster (один или два, в зависимости от аккаунтов)
 
         Args:
             parsed_data: Распарсованные данные накладной
 
         Returns:
-            Данные созданного черновика
+            Данные созданных черновиков
         """
         from datetime import datetime
         from config import DEFAULT_WAREHOUSE_ID, DEFAULT_ACCOUNT_FROM_ID
+        from database import get_database
 
         supplier_id = parsed_data.get('supplier_id')
         supplier_not_found = False
@@ -212,10 +219,8 @@ class InvoiceProcessor:
         if not items:
             raise Exception("Не найдено ни одного товара в накладной")
 
-        # Подготовить ингредиенты для Poster API
-        # НЕ объединяем дубликаты - каждая позиция из накладной отдельная!
-        ingredients_for_poster = []
-        added_items = []
+        # Разделить товары по аккаунтам
+        items_by_account = {}
         skipped_items = []
 
         for item in items:
@@ -224,103 +229,125 @@ class InvoiceProcessor:
                 skipped_items.append(item['name'])
                 continue
 
-            # Добавляем каждую позицию отдельно (без объединения)
-            ingredients_for_poster.append({
-                'id': item['ingredient_id'],
-                'num': item['quantity'],
-                'price': item['price']
-            })
+            account_name = item.get('account_name', 'Unknown')
+            if account_name not in items_by_account:
+                items_by_account[account_name] = []
 
-            added_items.append({
-                'name': item['name'],
-                'quantity': item['quantity'],
-                'unit': item['unit'],
-                'price': item['price'],
-                'total': item['quantity'] * item['price']
-            })
+            items_by_account[account_name].append(item)
 
-            logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")
-
-        if not ingredients_for_poster:
+        if not items_by_account:
             raise Exception("Ни один товар не был сопоставлен с ингредиентами в Poster")
 
         # Дата поставки - ВСЕГДА текущая (фактическая)
         supply_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Создаём поставку через правильный метод API
-        logger.info(f"📦 Создаю поставку: поставщик={supplier_id}, товаров={len(ingredients_for_poster)}")
+        # Получить все аккаунты пользователя
+        db = get_database()
+        accounts = db.get_accounts(self.telegram_user_id)
+        accounts_dict = {acc['account_name']: acc for acc in accounts}
 
-        supply_id = await self.poster_client.create_supply(
-            supplier_id=supplier_id,
-            storage_id=DEFAULT_WAREHOUSE_ID,
-            date=supply_date,
-            ingredients=ingredients_for_poster,
-            account_id=DEFAULT_ACCOUNT_FROM_ID,
-            comment=f"Накладная от {parsed_data.get('supplier_name', 'Неизвестно')}"
-        )
+        # Создать черновики для каждого аккаунта
+        drafts = []
 
-        logger.info(f"✅ Создана поставка #{supply_id}")
+        for account_name, account_items in items_by_account.items():
+            logger.info(f"\n📦 Создаю черновик для аккаунта '{account_name}' ({len(account_items)} товаров)...")
 
-        # Save price history for smart monitoring
-        try:
-            from database import get_database
-            db = get_database()
+            # Найти аккаунт в базе данных
+            if account_name not in accounts_dict:
+                logger.error(f"❌ Аккаунт '{account_name}' не найден в базе данных!")
+                continue
 
-            # Get supplier name
-            supplier_name = parsed_data.get('supplier_name', 'Неизвестно')
+            account = accounts_dict[account_name]
 
-            # Prepare price history records
-            price_records = []
-            for item in added_items:
-                # Find ingredient_id for this item
-                ingredient_id = None
-                for ing in ingredients_for_poster:
-                    # Match by checking if the item name corresponds to this ingredient
-                    # We need to find the original item to get ingredient_id
-                    pass
+            # Создать PosterClient для этого аккаунта
+            from poster_client import PosterClient
+            account_client = PosterClient(
+                telegram_user_id=self.telegram_user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
 
-                # Actually, we need to iterate through original items with ingredient_id
-                for original_item in items:
-                    if (original_item.get('ingredient_id') and
-                        original_item['name'] == item['name'] and
-                        original_item['quantity'] == item['quantity'] and
-                        original_item['price'] == item['price']):
+            try:
+                # Подготовить ингредиенты для Poster API
+                ingredients_for_poster = []
+                added_items = []
 
+                for item in account_items:
+                    ingredients_for_poster.append({
+                        'id': item['ingredient_id'],
+                        'num': item['quantity'],
+                        'price': item['price']
+                    })
+
+                    added_items.append({
+                        'name': item['name'],
+                        'quantity': item['quantity'],
+                        'unit': item['unit'],
+                        'price': item['price'],
+                        'total': item['quantity'] * item['price']
+                    })
+
+                    logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")
+
+                # Создать поставку через API
+                supply_id = await account_client.create_supply(
+                    supplier_id=supplier_id,
+                    storage_id=DEFAULT_WAREHOUSE_ID,
+                    date=supply_date,
+                    ingredients=ingredients_for_poster,
+                    account_id=DEFAULT_ACCOUNT_FROM_ID,
+                    comment=f"Накладная от {parsed_data.get('supplier_name', 'Неизвестно')} [{account_name}]"
+                )
+
+                logger.info(f"✅ Создана поставка #{supply_id} в аккаунте '{account_name}'")
+
+                # Сохранить историю цен
+                try:
+                    supplier_name = parsed_data.get('supplier_name', 'Неизвестно')
+                    price_records = []
+
+                    for item in account_items:
                         price_records.append({
-                            'ingredient_id': original_item['ingredient_id'],
-                            'ingredient_name': original_item['name'],
+                            'ingredient_id': item['ingredient_id'],
+                            'ingredient_name': item['name'],
                             'supplier_id': supplier_id,
                             'supplier_name': supplier_name,
-                            'date': supply_date.split()[0],  # Extract date part only
-                            'price': original_item['price'],
-                            'quantity': original_item['quantity'],
-                            'unit': original_item.get('unit', ''),
+                            'date': supply_date.split()[0],
+                            'price': item['price'],
+                            'quantity': item['quantity'],
+                            'unit': item.get('unit', ''),
                             'supply_id': supply_id
                         })
-                        break
 
-            # Bulk save price history
-            if price_records:
-                saved_count = db.bulk_add_price_history(self.telegram_user_id, price_records)
-                logger.info(f"💾 Saved {saved_count} price records to history")
+                    if price_records:
+                        saved_count = db.bulk_add_price_history(self.telegram_user_id, price_records)
+                        logger.info(f"💾 Saved {saved_count} price records to history for {account_name}")
 
-        except Exception as e:
-            # Don't fail the supply creation if price history fails
-            logger.error(f"⚠️ Failed to save price history: {e}")
+                except Exception as e:
+                    logger.error(f"⚠️ Failed to save price history for {account_name}: {e}")
 
+                # Добавить информацию о черновике
+                drafts.append({
+                    'account_name': account_name,
+                    'supply_id': supply_id,
+                    'items_count': len(added_items),
+                    'items': added_items,
+                    'total_sum': sum(item.get('total', 0) for item in added_items)
+                })
+
+            finally:
+                await account_client.close()
+
+        # Вернуть сводную информацию
         return {
-            'supply_id': supply_id,
+            'success': True,
+            'drafts': drafts,
             'supplier_name': parsed_data.get('supplier_name'),
             'supplier_id': supplier_id,
             'supplier_not_found': supplier_not_found,
             'date': supply_date,
-            'items_count': len(added_items),
-            'items': added_items,
             'skipped_items': skipped_items,
-            'total_sum': sum(item.get('total', 0) for item in added_items),
-            # Данные для активации через update_supply
-            'storage_id': DEFAULT_WAREHOUSE_ID,
-            'account_id': DEFAULT_ACCOUNT_FROM_ID,
-            'ingredients_for_api': ingredients_for_poster,
-            'comment': f"Накладная от {parsed_data.get('supplier_name', 'Неизвестно')}"
+            'total_items': sum(d['items_count'] for d in drafts),
+            'total_sum': sum(d['total_sum'] for d in drafts)
         }
