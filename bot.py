@@ -736,6 +736,63 @@ async def test_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 @admin_only
+async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /check_ids command - показать ID счетов и категорий для всех аккаунтов"""
+    telegram_user_id = update.effective_user.id
+
+    await update.message.reply_text("🔍 Получаю ID счетов и категорий...")
+
+    try:
+        from database import get_database
+        from poster_client import PosterClient
+
+        db = get_database()
+        accounts = db.get_accounts(telegram_user_id)
+
+        if not accounts:
+            await update.message.reply_text("❌ Аккаунты не найдены!")
+            return
+
+        for account in accounts:
+            account_name = account['account_name']
+
+            # Создать клиент для этого аккаунта
+            client = PosterClient(
+                telegram_user_id=telegram_user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                # Получить счета
+                accounts_list = await client.get_accounts()
+
+                # Получить категории
+                categories_list = await client.get_categories()
+
+                # Форматировать сообщение
+                message = f"📊 **{account_name}**\n\n"
+                message += "**Счета:**\n"
+                for acc in accounts_list:
+                    message += f"  • ID={acc.get('account_id')} - {acc.get('account_name')}\n"
+
+                message += "\n**Категории расходов:**\n"
+                for cat in categories_list:
+                    if cat.get('category_type') == 0:  # Только расходы
+                        message += f"  • ID={cat.get('finance_category_id')} - {cat.get('finance_category_name')}\n"
+
+                await update.message.reply_text(message, parse_mode='Markdown')
+
+            finally:
+                await client.close()
+
+    except Exception as e:
+        logger.error(f"Check IDs failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {str(e)[:300]}")
+
+
+@admin_only
 async def test_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /test_report command - ручная генерация еженедельного отчёта (только для админа)"""
     telegram_user_id = update.effective_user.id
@@ -5136,6 +5193,7 @@ def main():
         app.add_handler(CommandHandler("force_sync", force_sync_command))
         app.add_handler(CommandHandler("cancel", cancel_command))
         app.add_handler(CommandHandler("test_daily", test_daily_command))
+        app.add_handler(CommandHandler("check_ids", check_ids_command))
         app.add_handler(CommandHandler("test_report", test_report_command))
         app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
         app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
