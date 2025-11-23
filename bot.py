@@ -772,15 +772,15 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Получить категории
                 categories_list = await client.get_categories()
 
-                # Форматировать сообщение с правильными ключами
-                message = f"📊 **{account_name}**\n\n"
-                message += "**Счета:**\n"
+                # Форматировать сообщение с правильными ключами (БЕЗ Markdown)
+                message = f"📊 {account_name}\n\n"
+                message += "Счета:\n"
                 for acc in accounts_list:
                     acc_id = acc.get('accountid')
                     acc_name = acc.get('name', 'Unknown')
                     message += f"  • ID={acc_id} - {acc_name}\n"
 
-                message += "\n**Категории расходов:**\n"
+                message += "\nКатегории расходов:\n"
                 for cat in categories_list:
                     # Пропускаем системные категории
                     if cat.get('operations') != '2':  # Только расходы
@@ -789,7 +789,8 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cat_name = cat.get('name', 'Unknown')
                     message += f"  • ID={cat_id} - {cat_name}\n"
 
-                await update.message.reply_text(message, parse_mode='Markdown')
+                # Отправляем БЕЗ parse_mode чтобы избежать ошибок Markdown
+                await update.message.reply_text(message)
 
             finally:
                 await client.close()
