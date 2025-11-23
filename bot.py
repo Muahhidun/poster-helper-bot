@@ -745,6 +745,7 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         from database import get_database
         from poster_client import PosterClient
+        import json
 
         db = get_database()
         accounts = db.get_accounts(telegram_user_id)
@@ -771,16 +772,24 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Получить категории
                 categories_list = await client.get_categories()
 
+                # DEBUG: показать структуру первого элемента
+                if accounts_list:
+                    logger.info(f"Account structure: {json.dumps(accounts_list[0], ensure_ascii=False)}")
+                if categories_list:
+                    logger.info(f"Category structure: {json.dumps(categories_list[0], ensure_ascii=False)}")
+
                 # Форматировать сообщение
                 message = f"📊 **{account_name}**\n\n"
                 message += "**Счета:**\n"
-                for acc in accounts_list:
-                    message += f"  • ID={acc.get('account_id')} - {acc.get('account_name')}\n"
+                for acc in accounts_list[:10]:  # Показать первые 10
+                    # Попробуем найти правильные ключи
+                    acc_str = str(acc)
+                    message += f"  • {acc_str[:100]}\n"
 
                 message += "\n**Категории расходов:**\n"
-                for cat in categories_list:
-                    if cat.get('category_type') == 0:  # Только расходы
-                        message += f"  • ID={cat.get('finance_category_id')} - {cat.get('finance_category_name')}\n"
+                for cat in categories_list[:15]:  # Показать первые 15
+                    cat_str = str(cat)
+                    message += f"  • {cat_str[:100]}\n"
 
                 await update.message.reply_text(message, parse_mode='Markdown')
 
