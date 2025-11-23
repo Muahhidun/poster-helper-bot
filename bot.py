@@ -780,25 +780,26 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     acc_name = acc.get('name', 'Unknown')
                     message += f"  • ID={acc_id} - {acc_name}\n"
 
-                message += "\nКатегории расходов (с иерархией):\n"
+                message += "\nВсе категории (по ID):\n"
+                message += "Легенда: operations 1=доход, 2=расход, 3=оба\n\n"
 
-                # Сначала показываем родительские категории
-                parent_categories = [cat for cat in categories_list
-                                    if cat.get('operations') == '2' and cat.get('parent_id') == '0']
+                # Сортируем по category_id
+                sorted_categories = sorted(categories_list, key=lambda x: int(x.get('category_id', 0)))
 
-                for parent in parent_categories:
-                    parent_id = parent.get('category_id')
-                    parent_name = parent.get('name', 'Unknown')
-                    message += f"\n📂 ID={parent_id} - {parent_name}\n"
+                for cat in sorted_categories:
+                    cat_id = cat.get('category_id')
+                    cat_name = cat.get('name', 'Unknown')
+                    parent_id = cat.get('parent_id', '0')
+                    operations = cat.get('operations', '?')
 
-                    # Показываем подкатегории
-                    subcategories = [cat for cat in categories_list
-                                    if cat.get('operations') == '2' and cat.get('parent_id') == parent_id]
+                    # Определяем тип операции
+                    op_label = {'1': '💰доход', '2': '💸расход', '3': '💱оба'}.get(operations, f'?{operations}')
 
-                    for subcat in subcategories:
-                        subcat_id = subcat.get('category_id')
-                        subcat_name = subcat.get('name', 'Unknown')
-                        message += f"  ├─ ID={subcat_id} - {subcat_name}\n"
+                    # Показываем с отступом если это подкатегория
+                    if parent_id != '0':
+                        message += f"  ├─ ID={cat_id} - {cat_name} [{op_label}, parent={parent_id}]\n"
+                    else:
+                        message += f"📂 ID={cat_id} - {cat_name} [{op_label}]\n"
 
                 # Отправляем БЕЗ parse_mode чтобы избежать ошибок Markdown
                 await update.message.reply_text(message)
