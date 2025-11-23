@@ -772,12 +772,26 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Получить категории
                 categories_list = await client.get_categories()
 
+                # DEBUG: Логируем структуру первого элемента для отладки
+                if accounts_list:
+                    logger.info(f"[DEBUG] First account structure: {accounts_list[0]}")
+                if categories_list:
+                    logger.info(f"[DEBUG] First category structure: {categories_list[0]}")
+
                 # Форматировать сообщение с правильными ключами (БЕЗ Markdown)
                 message = f"📊 {account_name}\n\n"
+
+                # DEBUG: Показываем структуру пользователю
+                if accounts_list:
+                    message += f"DEBUG - Account keys: {list(accounts_list[0].keys())}\n\n"
+                if categories_list:
+                    message += f"DEBUG - Category keys: {list(categories_list[0].keys())}\n\n"
+
                 message += "Счета:\n"
                 for acc in accounts_list:
-                    acc_id = acc.get('accountid')
-                    acc_name = acc.get('name', 'Unknown')
+                    # Пробуем разные варианты полей
+                    acc_id = acc.get('account_id') or acc.get('accountid') or acc.get('id')
+                    acc_name = acc.get('account_name') or acc.get('name', 'Unknown')
                     message += f"  • ID={acc_id} - {acc_name}\n"
 
                 message += "\nКатегории расходов:\n"
@@ -785,8 +799,9 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Пропускаем системные категории
                     if cat.get('operations') != '2':  # Только расходы
                         continue
-                    cat_id = cat.get('categoryid')
-                    cat_name = cat.get('name', 'Unknown')
+                    # Пробуем разные варианты полей
+                    cat_id = cat.get('finance_category_id') or cat.get('categoryid') or cat.get('id')
+                    cat_name = cat.get('finance_category_name') or cat.get('name', 'Unknown')
                     message += f"  • ID={cat_id} - {cat_name}\n"
 
                 # Отправляем БЕЗ parse_mode чтобы избежать ошибок Markdown
