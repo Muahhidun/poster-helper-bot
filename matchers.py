@@ -731,7 +731,7 @@ class IngredientMatcher:
             logger.error(f"Failed to save alias to CSV: {e}")
             return False
 
-    def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int]]:
+    def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int, str]]:
         """
         Get top N matching ingredients for manual selection
 
@@ -741,7 +741,7 @@ class IngredientMatcher:
             score_cutoff: Minimum score threshold
 
         Returns:
-            List of tuples: (ingredient_id, name, unit, score)
+            List of tuples: (ingredient_id, name, unit, score, account_name)
         """
         text_lower = text.strip().lower()
         results = []
@@ -769,14 +769,15 @@ class IngredientMatcher:
                 ingredient_id,
                 ingredient['name'],
                 ingredient['unit'],
-                score
+                score,
+                ingredient.get('account_name', 'Unknown')  # Добавляем account_name
             ))
 
         # Remove duplicates (same ingredient_id) keeping highest score
         seen = {}
-        for ing_id, name, unit, score in results:
+        for ing_id, name, unit, score, account_name in results:
             if ing_id not in seen or seen[ing_id][3] < score:
-                seen[ing_id] = (ing_id, name, unit, score)
+                seen[ing_id] = (ing_id, name, unit, score, account_name)
 
         # Sort by score descending
         final_results = sorted(seen.values(), key=lambda x: x[3], reverse=True)
@@ -1157,7 +1158,7 @@ class ProductMatcher:
             logger.error(f"Failed to save alias to CSV: {e}")
             return False
 
-    def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int]]:
+    def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int, str]]:
         """
         Get top N matching products for manual selection
 
@@ -1167,7 +1168,7 @@ class ProductMatcher:
             score_cutoff: Minimum score threshold
 
         Returns:
-            List of tuples: (product_id, name, unit, score)
+            List of tuples: (product_id, name, unit, score, account_name)
         """
         text_lower = text.strip().lower()
         results = []
@@ -1195,14 +1196,15 @@ class ProductMatcher:
                 product_id,
                 product['name'],
                 product['unit'],
-                score
+                score,
+                product.get('account_name', 'Unknown')  # Добавляем account_name
             ))
 
         # Remove duplicates (same product_id) keeping highest score
         seen = {}
-        for prod_id, name, unit, score in results:
+        for prod_id, name, unit, score, account_name in results:
             if prod_id not in seen or seen[prod_id][3] < score:
-                seen[prod_id] = (prod_id, name, unit, score)
+                seen[prod_id] = (prod_id, name, unit, score, account_name)
 
         # Sort by score descending
         final_results = sorted(seen.values(), key=lambda x: x[3], reverse=True)
