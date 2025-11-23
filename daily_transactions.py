@@ -392,18 +392,15 @@ class DailyTransactionScheduler:
         transactions_created.append(f"Сушист: {tx_id}")
 
         # 3. Повар Сандей - 1₸
-        # ПРИМЕЧАНИЕ: Категории "Повар Сандей" нет в Pizzburg-cafe
-        # Доступные категории: ID=18 (Бариста), ID=19 (КухРабочая)
-        # Закомментировано до выяснения правильной категории
-        # tx_id = await poster_client.create_transaction(
-        #     transaction_type=0,  # expense
-        #     category_id=???,  # Повар Сандей - КАТЕГОРИЯ НЕ НАЙДЕНА
-        #     account_from_id=5,  # Оставил в кассе (на закупы)
-        #     amount=1,
-        #     date=current_time,
-        #     comment=""
-        # )
-        # transactions_created.append(f"Повар Сандей: {tx_id}")
+        tx_id = await poster_client.create_transaction(
+            transaction_type=0,  # expense
+            category_id=28,  # Повар Сандей
+            account_from_id=5,  # Оставил в кассе (на закупы)
+            amount=1,
+            date=current_time,
+            comment=""
+        )
+        transactions_created.append(f"Повар Сандей: {tx_id}")
 
         # === ПЕРЕВОДЫ ===
 
