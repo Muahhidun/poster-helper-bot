@@ -772,24 +772,22 @@ async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Получить категории
                 categories_list = await client.get_categories()
 
-                # DEBUG: показать структуру первого элемента
-                if accounts_list:
-                    logger.info(f"Account structure: {json.dumps(accounts_list[0], ensure_ascii=False)}")
-                if categories_list:
-                    logger.info(f"Category structure: {json.dumps(categories_list[0], ensure_ascii=False)}")
-
-                # Форматировать сообщение
+                # Форматировать сообщение с правильными ключами
                 message = f"📊 **{account_name}**\n\n"
                 message += "**Счета:**\n"
-                for acc in accounts_list[:10]:  # Показать первые 10
-                    # Попробуем найти правильные ключи
-                    acc_str = str(acc)
-                    message += f"  • {acc_str[:100]}\n"
+                for acc in accounts_list:
+                    acc_id = acc.get('accountid')
+                    acc_name = acc.get('name', 'Unknown')
+                    message += f"  • ID={acc_id} - {acc_name}\n"
 
                 message += "\n**Категории расходов:**\n"
-                for cat in categories_list[:15]:  # Показать первые 15
-                    cat_str = str(cat)
-                    message += f"  • {cat_str[:100]}\n"
+                for cat in categories_list:
+                    # Пропускаем системные категории
+                    if cat.get('operations') != '2':  # Только расходы
+                        continue
+                    cat_id = cat.get('categoryid')
+                    cat_name = cat.get('name', 'Unknown')
+                    message += f"  • ID={cat_id} - {cat_name}\n"
 
                 await update.message.reply_text(message, parse_mode='Markdown')
 
