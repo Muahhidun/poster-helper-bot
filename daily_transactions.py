@@ -367,14 +367,13 @@ class DailyTransactionScheduler:
         """Транзакции для аккаунта Pizzburg-cafe"""
         transactions_created = []
 
-        # === СЧЕТ "Оставил в кассе" ===
-        # Примечание: ID счетов и категорий могут отличаться от Pizzburg
+        # === СЧЕТ "Оставил в кассе (на закупы)" (ID=5) ===
 
         # 1. Кассир - 1₸
         tx_id = await poster_client.create_transaction(
             transaction_type=0,  # expense
-            category_id=16,  # Кассир (нужно уточнить ID для Pizzburg-cafe)
-            account_from_id=5,  # Оставил в кассе (нужно уточнить ID)
+            category_id=16,  # Кассир
+            account_from_id=5,  # Оставил в кассе (на закупы)
             amount=1,
             date=current_time,
             comment=""
@@ -384,8 +383,8 @@ class DailyTransactionScheduler:
         # 2. Сушист - 1₸
         tx_id = await poster_client.create_transaction(
             transaction_type=0,  # expense
-            category_id=17,  # Сушист (нужно уточнить ID)
-            account_from_id=5,  # Оставил в кассе
+            category_id=17,  # Сушист
+            account_from_id=5,  # Оставил в кассе (на закупы)
             amount=1,
             date=current_time,
             comment=""
@@ -393,15 +392,18 @@ class DailyTransactionScheduler:
         transactions_created.append(f"Сушист: {tx_id}")
 
         # 3. Повар Сандей - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,  # expense
-            category_id=28,  # Повар Сандей (нужно уточнить ID)
-            account_from_id=5,  # Оставил в кассе
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Повар Сандей: {tx_id}")
+        # ПРИМЕЧАНИЕ: Категории "Повар Сандей" нет в Pizzburg-cafe
+        # Доступные категории: ID=18 (Бариста), ID=19 (КухРабочая)
+        # Закомментировано до выяснения правильной категории
+        # tx_id = await poster_client.create_transaction(
+        #     transaction_type=0,  # expense
+        #     category_id=???,  # Повар Сандей - КАТЕГОРИЯ НЕ НАЙДЕНА
+        #     account_from_id=5,  # Оставил в кассе (на закупы)
+        #     amount=1,
+        #     date=current_time,
+        #     comment=""
+        # )
+        # transactions_created.append(f"Повар Сандей: {tx_id}")
 
         # === ПЕРЕВОДЫ ===
 
@@ -409,8 +411,8 @@ class DailyTransactionScheduler:
         tx_id = await poster_client.create_transaction(
             transaction_type=2,  # transfer
             category_id=0,  # не используется для переводов
-            account_from_id=2,  # Инкассация (нужно уточнить ID)
-            account_to_id=5,  # Оставил в кассе
+            account_from_id=2,  # Инкассация (вечером)
+            account_to_id=5,  # Оставил в кассе (на закупы)
             amount=1,
             date=current_time,
             comment=""
@@ -421,8 +423,8 @@ class DailyTransactionScheduler:
         tx_id = await poster_client.create_transaction(
             transaction_type=2,  # transfer
             category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay (нужно уточнить ID)
-            account_to_id=7,  # Wolt доставка (нужно уточнить ID)
+            account_from_id=1,  # Kaspi Pay
+            account_to_id=7,  # Wolt доставка
             amount=1,
             date=current_time,
             comment=""
