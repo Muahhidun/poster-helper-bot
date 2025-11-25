@@ -2450,13 +2450,13 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
     total_amount = 0
 
     for item in items:
-        # Try ingredient match first
-        ingredient_match = ingredient_matcher.match(item['name'])
+        # Try ingredient match first (with priority: Pizzburg → Pizzburg-cafe)
+        ingredient_match = ingredient_matcher.match_with_priority(item['name'])
 
         # Try product match if ingredient not found or score too low
         product_match = None
         if not ingredient_match or ingredient_match[3] < 75:
-            product_match = product_matcher.match(item['name'])
+            product_match = product_matcher.match_with_priority(item['name'])
 
         # Use best match
         best_match = None
@@ -2471,7 +2471,7 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
             unmatched_items.append(item)
             continue
 
-        item_id, item_name, unit, match_score = best_match
+        item_id, item_name, unit, match_score, account_name = best_match
         qty = item['qty']
         price = item.get('price')
 
@@ -2495,7 +2495,8 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
             'sum': item_sum,
             'match_score': match_score,
             'original_name': item['name'],
-            'packing_size': packing_size
+            'packing_size': packing_size,
+            'account_name': account_name  # Добавляем информацию об аккаунте
         })
 
         total_amount += item_sum
