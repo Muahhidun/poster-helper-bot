@@ -167,22 +167,18 @@ class DailyTransactionScheduler:
         )
         transactions_created.append(f"Курьер: {tx_id}")
 
-        # 3× Логистика - Доставка продуктов (ID=24) с разными комментариями и суммами
-        logistics_transactions = [
-            {"comment": "Караганда", "amount": 1},
-            {"comment": "Фарш", "amount": 1},
-            {"comment": "Кюрдамир", "amount": 700}  # Изменено с 600₸ на 700₸
-        ]
-        for logistics in logistics_transactions:
+        # 3× Логистика - Доставка продуктов (ID=24) с разными комментариями
+        logistics_comments = ["Караганда", "Фарш", "Кюрдамир"]
+        for comment in logistics_comments:
             tx_id = await poster_client.create_transaction(
                 transaction_type=0,
                 category_id=24,  # Логистика - Доставка продуктов
                 account_from_id=4,
-                amount=logistics["amount"],
+                amount=1,
                 date=current_time,
-                comment=logistics["comment"]
+                comment=comment
             )
-            transactions_created.append(f"Логистика ({logistics['comment']}): {tx_id}")
+            transactions_created.append(f"Логистика ({comment}): {tx_id}")
 
         # === СЧЕТ "Kaspi Pay" (ID=1) ===
 
