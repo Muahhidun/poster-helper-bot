@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 from urllib.parse import parse_qsl
+from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g
 from database import get_database
 import config
@@ -444,6 +445,192 @@ def search_items():
     items = items[:50]
 
     return jsonify(items)
+
+
+@app.route('/api/suppliers')
+def api_suppliers():
+    """Get list of suppliers"""
+    suppliers_csv = config.DATA_DIR / "poster_suppliers.csv"
+    suppliers = []
+
+    if suppliers_csv.exists():
+        try:
+            with open(suppliers_csv, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    suppliers.append({
+                        'id': int(row['supplier_id']),
+                        'name': row['name'],
+                        'aliases': row.get('aliases', '').split('|') if row.get('aliases') else []
+                    })
+        except Exception as e:
+            return jsonify({'error': f'Failed to load suppliers: {str(e)}'}), 500
+
+    return jsonify({'suppliers': suppliers})
+
+
+@app.route('/api/accounts')
+def api_accounts():
+    """Get list of accounts"""
+    accounts_csv = config.DATA_DIR / "poster_accounts.csv"
+    accounts = []
+
+    if accounts_csv.exists():
+        try:
+            with open(accounts_csv, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    accounts.append({
+                        'id': int(row['account_id']),
+                        'name': row['name'],
+                        'type': row['type'],
+                        'aliases': row.get('aliases', '').split('|') if row.get('aliases') else []
+                    })
+        except Exception as e:
+            return jsonify({'error': f'Failed to load accounts: {str(e)}'}), 500
+
+    return jsonify({'accounts': accounts})
+
+
+@app.route('/api/supplies/last/<int:supplier_id>')
+def api_last_supply(supplier_id):
+    """Get last supply items from a specific supplier"""
+    db = get_database()
+
+    # Get recent price history from this supplier
+    try:
+        recent_items = db.get_price_history(
+            telegram_user_id=g.user_id,
+            supplier_id=supplier_id
+        )
+
+        # Group by item and get most recent for each (limit to last 50 unique items)
+        items_dict = {}
+        for record in recent_items:
+            item_id = record['ingredient_id']
+            if item_id not in items_dict and len(items_dict) < 50:
+                items_dict[item_id] = {
+                    'id': item_id,
+                    'name': record['ingredient_name'],
+                    'price': float(record['price']),
+                    'quantity': float(record['quantity']) if record.get('quantity') else 1.0,
+                    'unit': record.get('unit', 'шт'),
+                    'date': record['date']
+                }
+
+        items = list(items_dict.values())
+
+        return jsonify({
+            'supplier_id': supplier_id,
+            'items': items
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to get last supply: {str(e)}'}), 500
+
+
+@app.route('/api/items/price-history/<int:item_id>')
+def api_item_price_history(item_id):
+    """Get price history for a specific item"""
+    db = get_database()
+    supplier_id = request.args.get('supplier_id', type=int)
+
+    try:
+        history = db.get_price_history(
+            telegram_user_id=g.user_id,
+            ingredient_id=item_id,
+            supplier_id=supplier_id
+        )
+
+        # Limit to last 10 records
+        history = history[:10] if len(history) > 10 else history
+
+        return jsonify({
+            'item_id': item_id,
+            'history': history
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to get price history: {str(e)}'}), 500
+
+
+@app.route('/api/supplies/create', methods=['POST'])
+async def api_create_supply():
+    """Create a new supply in Poster"""
+    data = request.json
+
+    # Validate required fields
+    required_fields = ['supplier_id', 'supplier_name', 'account_id', 'items']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({'error': f'Missing required field: {field}'}), 400
+
+    if not isinstance(data['items'], list) or len(data['items']) == 0:
+        return jsonify({'error': 'items must be a non-empty list'}), 400
+
+    # Validate each item
+    for item in data['items']:
+        if not all(k in item for k in ['id', 'quantity', 'price']):
+            return jsonify({'error': 'Each item must have id, quantity, and price'}), 400
+
+    try:
+        # Import poster_client and database
+        from poster_client import PosterClient
+
+        # Create supply via Poster API
+        poster_client = PosterClient(g.user_id)
+
+        # Prepare supply data
+        supply_data = {
+            'supplier_id': data['supplier_id'],
+            'storage_id': data.get('storage_id', 1),  # Default main storage
+            'account_id': data['account_id'],
+            'date': data.get('date'),  # Optional, defaults to now in poster_client
+            'items': []
+        }
+
+        # Format items for Poster API
+        for item in data['items']:
+            supply_data['items'].append({
+                'id': item['id'],
+                'type': item.get('type', 'ingredient'),
+                'sum': float(item['quantity']) * float(item['price']),
+                'cost': float(item['price'])
+            })
+
+        # Create supply
+        result = await poster_client.create_supply(**supply_data)
+        await poster_client.close()
+
+        if not result.get('success'):
+            return jsonify({'error': 'Failed to create supply in Poster'}), 500
+
+        # Save price history to database
+        db = get_database()
+        price_records = []
+
+        for item in data['items']:
+            price_records.append({
+                'ingredient_id': item['id'],
+                'ingredient_name': item.get('name', ''),
+                'supplier_id': data['supplier_id'],
+                'supplier_name': data['supplier_name'],
+                'price': float(item['price']),
+                'quantity': float(item['quantity']),
+                'unit': item.get('unit', 'шт'),
+                'supply_id': result.get('supply_id'),
+                'date': data.get('date', datetime.now().strftime('%Y-%m-%d'))
+            })
+
+        db.bulk_add_price_history(g.user_id, price_records)
+
+        return jsonify({
+            'success': True,
+            'supply_id': result.get('supply_id')
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to create supply: {str(e)}'}), 500
 
 
 # ========================================
