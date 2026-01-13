@@ -5,7 +5,6 @@ import { useApi } from '../hooks/useApi'
 import { getApiClient } from '../api/client'
 import { Header } from '../components/Header'
 import { Loading } from '../components/Loading'
-import { ErrorMessage } from '../components/ErrorMessage'
 import type {
   Supplier,
   Account,
@@ -36,7 +35,7 @@ function evaluateExpression(expr: string): number | null {
 
 export const CreateSupply: React.FC = () => {
   const navigate = useNavigate()
-  const { themeParams, mainButton, backButton, haptic } = useTelegram()
+  const { webApp, themeParams } = useTelegram()
 
   // Data loading
   const { data: suppliersData, loading: loadingSuppliers } = useApi(() =>
@@ -54,7 +53,6 @@ export const CreateSupply: React.FC = () => {
   const [itemSearch, setItemSearch] = useState('')
   const [searchResults, setSearchResults] = useState<PosterItem[]>([])
   const [lastSupplyItems, setLastSupplyItems] = useState<LastSupplyItem[]>([])
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Prioritize Kaspi Pay and Cash in accounts list
@@ -158,7 +156,7 @@ export const CreateSupply: React.FC = () => {
   const addItem = (posterItem: PosterItem) => {
     // Check if already exists
     if (items.some(i => i.id === posterItem.id)) {
-      haptic?.notificationOccurred('warning')
+      webApp?.HapticFeedback?.notificationOccurred('warning')
       return
     }
 
@@ -177,19 +175,19 @@ export const CreateSupply: React.FC = () => {
     setItems([...items, newItem])
     setItemSearch('')
     setSearchResults([])
-    haptic?.impactOccurred('light')
+    webApp?.HapticFeedback?.impactOccurred('light')
   }
 
   // Remove item
   const removeItem = (index: number) => {
     setItems(items.filter((_, i) => i !== index))
-    haptic?.impactOccurred('medium')
+    webApp?.HapticFeedback?.impactOccurred('medium')
   }
 
   // Load last supply
   const loadLastSupply = () => {
     if (lastSupplyItems.length === 0) {
-      haptic?.notificationOccurred('error')
+      webApp?.HapticFeedback?.notificationOccurred('error')
       return
     }
 
@@ -203,27 +201,27 @@ export const CreateSupply: React.FC = () => {
     }))
 
     setItems(newItems)
-    haptic?.notificationOccurred('success')
+    webApp?.HapticFeedback?.notificationOccurred('success')
   }
 
   // Submit form
   const handleSubmit = async () => {
     if (!selectedSupplier || !selectedAccount || items.length === 0) {
-      haptic?.notificationOccurred('error')
+      webApp?.HapticFeedback?.notificationOccurred('error')
       setError('Заполните все обязательные поля')
       return
     }
 
     // Validate all items have quantity and price
     if (items.some(item => item.quantity <= 0 || item.price <= 0)) {
-      haptic?.notificationOccurred('error')
+      webApp?.HapticFeedback?.notificationOccurred('error')
       setError('Все товары должны иметь количество и цену больше 0')
       return
     }
 
     setIsSubmitting(true)
     setError(null)
-    mainButton?.showProgress()
+    webApp?.MainButton?.showProgress()
 
     try {
       await getApiClient().createSupply({
@@ -233,50 +231,50 @@ export const CreateSupply: React.FC = () => {
         items: items,
       })
 
-      haptic?.notificationOccurred('success')
-      mainButton?.hideProgress()
+      webApp?.HapticFeedback?.notificationOccurred('success')
+      webApp?.MainButton?.hideProgress()
       navigate('/supplies')
     } catch (err) {
-      haptic?.notificationOccurred('error')
+      webApp?.HapticFeedback?.notificationOccurred('error')
       setError(err instanceof Error ? err.message : 'Ошибка создания поставки')
-      mainButton?.hideProgress()
+      webApp?.MainButton?.hideProgress()
       setIsSubmitting(false)
     }
   }
 
   // Setup main button
   useEffect(() => {
-    if (!mainButton) return
+    if (!webApp?.MainButton) return
 
     const canSubmit = selectedSupplier && selectedAccount && items.length > 0
 
     if (canSubmit) {
-      mainButton.setText('Создать поставку')
-      mainButton.show()
-      mainButton.enable()
-      mainButton.onClick(handleSubmit)
+      webApp?.MainButton.setText('Создать поставку')
+      webApp?.MainButton.show()
+      webApp?.MainButton.enable()
+      webApp?.MainButton.onClick(handleSubmit)
     } else {
-      mainButton.hide()
+      webApp?.MainButton.hide()
     }
 
     return () => {
-      mainButton.offClick(handleSubmit)
-      mainButton.hide()
+      webApp?.MainButton.offClick(handleSubmit)
+      webApp?.MainButton.hide()
     }
-  }, [mainButton, selectedSupplier, selectedAccount, items])
+  }, [webApp?.MainButton, selectedSupplier, selectedAccount, items])
 
   // Setup back button
   useEffect(() => {
-    if (!backButton) return
+    if (!webApp?.BackButton) return
 
-    backButton.show()
-    backButton.onClick(() => navigate('/'))
+    webApp?.BackButton.show()
+    webApp?.BackButton.onClick(() => navigate('/'))
 
     return () => {
-      backButton.offClick(() => navigate('/'))
-      backButton.hide()
+      webApp?.BackButton.offClick(() => navigate('/'))
+      webApp?.BackButton.hide()
     }
-  }, [backButton, navigate])
+  }, [webApp?.BackButton, navigate])
 
   if (loadingSuppliers || loadingAccounts) return <Loading />
 
@@ -321,7 +319,7 @@ export const CreateSupply: React.FC = () => {
                   onClick={() => {
                     setSelectedSupplier(supplier)
                     setSupplierSearch('')
-                    haptic?.selectionChanged()
+                    webApp?.HapticFeedback?.selectionChanged()
                   }}
                   className="w-full p-3 rounded-lg text-left"
                   style={{
@@ -348,7 +346,7 @@ export const CreateSupply: React.FC = () => {
                 onClick={() => {
                   setSelectedSupplier(null)
                   setLastSupplyItems([])
-                  haptic?.impactOccurred('light')
+                  webApp?.HapticFeedback?.impactOccurred('light')
                 }}
                 className="text-xl"
               >
@@ -373,7 +371,7 @@ export const CreateSupply: React.FC = () => {
                 key={account.id}
                 onClick={() => {
                   setSelectedAccount(account)
-                  haptic?.selectionChanged()
+                  webApp?.HapticFeedback?.selectionChanged()
                 }}
                 className="p-4 rounded-lg font-medium text-center"
                 style={{
