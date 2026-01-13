@@ -54,8 +54,10 @@ export const CreateSupply: React.FC = () => {
   const [searchResults, setSearchResults] = useState<PosterItem[]>([])
   const [lastSupplyItems, setLastSupplyItems] = useState<LastSupplyItem[]>([])
   const [error, setError] = useState<string | null>(null)
-  // Track raw input strings for quantity and price to allow partial expressions
-  const [inputValues, setInputValues] = useState<Record<number, { quantity?: string; price?: string }>>({})
+  // Track raw input strings for quantity, price and sum to allow partial expressions
+  const [inputValues, setInputValues] = useState<Record<number, { quantity?: string; price?: string; sum?: string }>>({})
+  // Track last edited field for each item to determine what to recalculate when sum changes
+  const [lastEditedField, setLastEditedField] = useState<Record<number, 'quantity' | 'price' | 'sum'>>({})
 
   // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
   const sortedAccounts = useMemo(() => {
@@ -126,7 +128,7 @@ export const CreateSupply: React.FC = () => {
   // Handle item input changes - store raw string to allow partial expressions
   const handleItemChange = (
     index: number,
-    field: 'quantity' | 'price',
+    field: 'quantity' | 'price' | 'sum',
     value: string
   ) => {
     // Store raw input string
@@ -136,10 +138,10 @@ export const CreateSupply: React.FC = () => {
     }))
   }
 
-  // Handle blur - evaluate expression and update item
+  // Handle blur - evaluate expression and update item with smart recalculation
   const handleItemBlur = (
     index: number,
-    field: 'quantity' | 'price'
+    field: 'quantity' | 'price' | 'sum'
   ) => {
     const rawValue = inputValues[index]?.[field]
     if (rawValue === undefined) return
@@ -152,11 +154,55 @@ export const CreateSupply: React.FC = () => {
 
     if (evaluated !== null && evaluated > 0) {
       newItems[index] = { ...item, [field]: evaluated }
+
+      // Smart recalculation based on which field was changed
+      if (field === 'quantity') {
+        // quantity changed → recalculate sum = quantity * price
+        newItems[index].sum = evaluated * item.price
+      } else if (field === 'price') {
+        // price changed → recalculate sum = quantity * price
+        newItems[index].sum = item.quantity * evaluated
+      } else if (field === 'sum') {
+        // sum changed → recalculate price or quantity based on previous edit
+        const previousField = lastEditedField[index]
+
+        if (previousField === 'quantity' && item.quantity > 0) {
+          // User edited quantity, then sum → recalculate price
+          newItems[index].price = evaluated / item.quantity
+        } else if (previousField === 'price' && item.price > 0) {
+          // User edited price, then sum → recalculate quantity
+          newItems[index].quantity = evaluated / item.price
+        } else {
+          // Default: recalculate price if quantity > 0
+          if (item.quantity > 0) {
+            newItems[index].price = evaluated / item.quantity
+          }
+        }
+      }
     } else {
       // Try as number
       const num = parseFloat(rawValue)
       if (!isNaN(num) && num > 0) {
         newItems[index] = { ...item, [field]: num }
+
+        // Same recalculation logic
+        if (field === 'quantity') {
+          newItems[index].sum = num * item.price
+        } else if (field === 'price') {
+          newItems[index].sum = item.quantity * num
+        } else if (field === 'sum') {
+          const previousField = lastEditedField[index]
+
+          if (previousField === 'quantity' && item.quantity > 0) {
+            newItems[index].price = num / item.quantity
+          } else if (previousField === 'price' && item.price > 0) {
+            newItems[index].quantity = num / item.price
+          } else {
+            if (item.quantity > 0) {
+              newItems[index].price = num / item.quantity
+            }
+          }
+        }
       } else {
         // Invalid input - reset to current value
         newItems[index] = { ...item, [field]: item[field] }
@@ -164,6 +210,11 @@ export const CreateSupply: React.FC = () => {
     }
 
     setItems(newItems)
+
+    // Remember what field was edited (for future sum calculations)
+    if (field !== 'sum') {
+      setLastEditedField(prev => ({ ...prev, [index]: field }))
+    }
 
     // Clear raw input so it shows the evaluated number
     setInputValues(prev => {
@@ -180,13 +231,17 @@ export const CreateSupply: React.FC = () => {
     // Find price from last supply
     const lastItem = lastSupplyItems.find(i => i.id === posterItem.id)
 
+    const quantity = lastItem?.quantity || 1
+    const price = lastItem?.price || 0
+
     const newItem: SupplyItemInput = {
       id: posterItem.id,
       name: posterItem.name,
       type: posterItem.type,
-      quantity: lastItem?.quantity || 1,
-      price: lastItem?.price || 0,
+      quantity: quantity,
+      price: price,
       unit: lastItem?.unit || 'шт',
+      sum: quantity * price,  // Initialize sum
     }
 
     setItems([...items, newItem])
@@ -215,6 +270,7 @@ export const CreateSupply: React.FC = () => {
       quantity: item.quantity,
       price: item.price,
       unit: item.unit,
+      sum: item.quantity * item.price,  // Initialize sum
     }))
 
     setItems(newItems)
@@ -491,18 +547,58 @@ export const CreateSupply: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
+                        Количество
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={inputValues[index]?.quantity ?? item.quantity}
+                        onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                        onBlur={() => handleItemBlur(index, 'quantity')}
+                        className="w-full p-3 rounded-lg border text-lg"
+                        style={{
+                          backgroundColor: themeParams.bg_color || '#ffffff',
+                          color: themeParams.text_color || '#000000',
+                          borderColor: themeParams.hint_color || '#d1d5db',
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
+                        Цена
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={inputValues[index]?.price ?? item.price}
+                        onChange={(e) => handleItemChange(index, 'price', e.target.value)}
+                        onBlur={() => handleItemBlur(index, 'price')}
+                        className="w-full p-3 rounded-lg border text-lg"
+                        style={{
+                          backgroundColor: themeParams.bg_color || '#ffffff',
+                          color: themeParams.text_color || '#000000',
+                          borderColor: themeParams.hint_color || '#d1d5db',
+                        }}
+                      />
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
-                      Количество
+                      Сумма
                     </label>
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={inputValues[index]?.quantity ?? item.quantity}
-                      onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
-                      onBlur={() => handleItemBlur(index, 'quantity')}
-                      className="w-full p-3 rounded-lg border text-lg"
+                      value={inputValues[index]?.sum ?? (item.sum || item.quantity * item.price)}
+                      onChange={(e) => handleItemChange(index, 'sum', e.target.value)}
+                      onBlur={() => handleItemBlur(index, 'sum')}
+                      className="w-full p-3 rounded-lg border text-lg font-medium"
                       style={{
                         backgroundColor: themeParams.bg_color || '#ffffff',
                         color: themeParams.text_color || '#000000',
@@ -510,34 +606,6 @@ export const CreateSupply: React.FC = () => {
                       }}
                     />
                   </div>
-
-                  <div>
-                    <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
-                      Цена
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={inputValues[index]?.price ?? item.price}
-                      onChange={(e) => handleItemChange(index, 'price', e.target.value)}
-                      onBlur={() => handleItemBlur(index, 'price')}
-                      className="w-full p-3 rounded-lg border text-lg"
-                      style={{
-                        backgroundColor: themeParams.bg_color || '#ffffff',
-                        color: themeParams.text_color || '#000000',
-                        borderColor: themeParams.hint_color || '#d1d5db',
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-2 text-right">
-                  <span
-                    className="text-sm font-medium"
-                    style={{ color: themeParams.hint_color }}
-                  >
-                    Сумма: {(item.quantity * item.price).toLocaleString('ru-RU')} ₸
-                  </span>
                 </div>
               </div>
             ))}

@@ -237,6 +237,7 @@ export interface SupplyItemInput {
   quantity: number
   price: number
   unit: string
+  sum?: number  // Optional: for UI calculations only (not sent to backend)
 }
 
 export interface CreateSupplyRequest {
