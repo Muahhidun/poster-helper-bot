@@ -5165,36 +5165,19 @@ async def auto_sync_poster_data(context: ContextTypes.DEFAULT_TYPE, telegram_use
         _account_matchers.clear()
         _supplier_matchers.clear()
 
-        logger.info("✅ Auto-sync completed successfully")
+        logger.info(
+            f"✅ Auto-sync completed successfully: "
+            f"Ingredients={total_ingredients}, Products={total_products}, "
+            f"Suppliers={suppliers_count}, Accounts={accounts_count}"
+        )
 
-        # Отправить уведомление админам
-        if ADMIN_USER_IDS:
-            message = (
-                "✅ Автосинхронизация завершена:\n\n"
-                f"📦 Ингредиенты: {total_ingredients}\n"
-                f"🍕 Продукты: {total_products}\n"
-                f"🏢 Поставщики: {suppliers_count}\n"
-                f"💰 Счета: {accounts_count}\n"
-                "\nВсе справочники обновлены."
-            )
-
-            for admin_id in ADMIN_USER_IDS:
-                try:
-                    await context.bot.send_message(chat_id=admin_id, text=message)
-                except Exception as e:
-                    logger.error(f"Failed to send notification to admin {admin_id}: {e}")
+        # Уведомление админам отключено (по запросу пользователя)
+        # Результаты синхронизации доступны в логах
 
     except Exception as e:
         logger.error(f"❌ Auto-sync failed: {e}", exc_info=True)
-
-        # Уведомить админов об ошибке
-        if ADMIN_USER_IDS:
-            error_message = f"❌ Ошибка автосинхронизации:\n\n{str(e)}"
-            for admin_id in ADMIN_USER_IDS:
-                try:
-                    await context.bot.send_message(chat_id=admin_id, text=error_message)
-                except Exception as notify_error:
-                    logger.error(f"Failed to send error notification to admin {admin_id}: {notify_error}")
+        # Уведомление об ошибке отключено (по запросу пользователя)
+        # Ошибки доступны в логах
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
