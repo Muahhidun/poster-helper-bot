@@ -54,21 +54,17 @@ export const CreateSupply: React.FC = () => {
   const [searchResults, setSearchResults] = useState<PosterItem[]>([])
   const [lastSupplyItems, setLastSupplyItems] = useState<LastSupplyItem[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Track raw input strings for quantity and price to allow partial expressions
+  const [inputValues, setInputValues] = useState<Record<number, { quantity?: string; price?: string }>>({})
 
-  // Prioritize Kaspi Pay and Cash in accounts list
+  // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
   const sortedAccounts = useMemo(() => {
     if (!accountsData?.accounts) return []
 
-    const priority = ['Kaspi Pay', 'Денежный ящик']
-    return [...accountsData.accounts].sort((a, b) => {
-      const aIndex = priority.findIndex(p => a.name.includes(p))
-      const bIndex = priority.findIndex(p => b.name.includes(p))
-
-      if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex
-      if (aIndex !== -1) return -1
-      if (bIndex !== -1) return 1
-      return a.name.localeCompare(b.name)
-    })
+    const allowedAccounts = ['Kaspi Pay', 'Оставил в кассе']
+    return accountsData.accounts.filter(account =>
+      allowedAccounts.some(allowed => account.name.includes(allowed))
+    )
   }, [accountsData])
 
   // Filter suppliers by search
@@ -127,29 +123,56 @@ export const CreateSupply: React.FC = () => {
     return items.reduce((sum, item) => sum + item.quantity * item.price, 0)
   }, [items])
 
-  // Handle item input changes with smart calculator
+  // Handle item input changes - store raw string to allow partial expressions
   const handleItemChange = (
     index: number,
     field: 'quantity' | 'price',
     value: string
   ) => {
+    // Store raw input string
+    setInputValues(prev => ({
+      ...prev,
+      [index]: { ...prev[index], [field]: value }
+    }))
+  }
+
+  // Handle blur - evaluate expression and update item
+  const handleItemBlur = (
+    index: number,
+    field: 'quantity' | 'price'
+  ) => {
+    const rawValue = inputValues[index]?.[field]
+    if (rawValue === undefined) return
+
     const newItems = [...items]
     const item = newItems[index]
 
     // Try to evaluate as expression
-    const evaluated = evaluateExpression(value)
+    const evaluated = evaluateExpression(rawValue)
 
-    if (evaluated !== null) {
+    if (evaluated !== null && evaluated > 0) {
       newItems[index] = { ...item, [field]: evaluated }
     } else {
-      // Keep as number if possible
-      const num = parseFloat(value)
-      if (!isNaN(num)) {
+      // Try as number
+      const num = parseFloat(rawValue)
+      if (!isNaN(num) && num > 0) {
         newItems[index] = { ...item, [field]: num }
+      } else {
+        // Invalid input - reset to current value
+        newItems[index] = { ...item, [field]: item[field] }
       }
     }
 
     setItems(newItems)
+
+    // Clear raw input so it shows the evaluated number
+    setInputValues(prev => {
+      const updated = { ...prev }
+      if (updated[index]) {
+        delete updated[index][field]
+      }
+      return updated
+    })
   }
 
   // Add item from search
@@ -481,8 +504,10 @@ export const CreateSupply: React.FC = () => {
                     </label>
                     <input
                       type="text"
-                      value={item.quantity}
+                      inputMode="decimal"
+                      value={inputValues[index]?.quantity ?? item.quantity}
                       onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                      onBlur={() => handleItemBlur(index, 'quantity')}
                       className="w-full p-3 rounded-lg border text-lg"
                       style={{
                         backgroundColor: themeParams.bg_color || '#ffffff',
@@ -498,8 +523,10 @@ export const CreateSupply: React.FC = () => {
                     </label>
                     <input
                       type="text"
-                      value={item.price}
+                      inputMode="decimal"
+                      value={inputValues[index]?.price ?? item.price}
                       onChange={(e) => handleItemChange(index, 'price', e.target.value)}
+                      onBlur={() => handleItemBlur(index, 'price')}
                       className="w-full p-3 rounded-lg border text-lg"
                       style={{
                         backgroundColor: themeParams.bg_color || '#ffffff',
