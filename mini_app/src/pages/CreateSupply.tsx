@@ -16,8 +16,8 @@ import type {
 // Helper function to evaluate math expressions safely
 function evaluateExpression(expr: string): number | null {
   try {
-    // Remove spaces
-    expr = expr.trim().replace(/\s/g, '')
+    // Remove spaces and replace comma with dot for decimal separator
+    expr = expr.trim().replace(/\s/g, '').replace(/,/g, '.')
 
     // Only allow numbers, decimal points, +, -, *, /
     if (!/^[\d+\-*/().]+$/.test(expr)) {
@@ -177,12 +177,6 @@ export const CreateSupply: React.FC = () => {
 
   // Add item from search
   const addItem = (posterItem: PosterItem) => {
-    // Check if already exists
-    if (items.some(i => i.id === posterItem.id)) {
-      webApp?.HapticFeedback?.notificationOccurred('warning')
-      return
-    }
-
     // Find price from last supply
     const lastItem = lastSupplyItems.find(i => i.id === posterItem.id)
 
