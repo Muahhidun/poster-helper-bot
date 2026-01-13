@@ -30,6 +30,7 @@ from alias_generator import AliasGenerator
 from sync_ingredients import sync_ingredients
 from sync_products import sync_products
 from add_account_command import add_second_account_command
+import salary_flow_handlers
 from shipment_templates import (
     templates_command,
     edit_template_command,
@@ -1509,6 +1510,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Для продолжения работы необходимо продлить подписку.\n"
                 f"Используйте /subscription для подробностей."
             )
+            return
+
+    # Check if in salary flow (расчет зарплат)
+    if 'salary_flow' in context.user_data:
+        step = context.user_data['salary_flow'].get('step')
+        text = update.message.text
+
+        if step == 'waiting_cashier_names':
+            await salary_flow_handlers.handle_cashier_names(update, context, text)
+            return
+        elif step == 'waiting_staff_names':
+            await salary_flow_handlers.handle_staff_names(update, context, text)
             return
 
     # Check if in cash closing flow
@@ -3682,6 +3695,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # Обработка диалога расчета зарплат
+    if query.data == "salary_flow_start":
+        await salary_flow_handlers.handle_salary_flow_start(update, context)
+        return
+    elif query.data == "salary_flow_cashiers_2":
+        await salary_flow_handlers.handle_salary_flow_cashiers(update, context, 2)
+        return
+    elif query.data == "salary_flow_cashiers_3":
+        await salary_flow_handlers.handle_salary_flow_cashiers(update, context, 3)
+        return
+    elif query.data == "salary_flow_assistant_10":
+        await salary_flow_handlers.handle_assistant_time(update, context, "10:00")
+        return
+    elif query.data == "salary_flow_assistant_12":
+        await salary_flow_handlers.handle_assistant_time(update, context, "12:00")
+        return
+    elif query.data == "salary_flow_assistant_14":
+        await salary_flow_handlers.handle_assistant_time(update, context, "14:00")
+        return
+
     # Обработка ручного выбора товаров из накладной
     if query.data.startswith("invoice_select:"):
         from invoice_manual_selection import handle_candidate_selection
@@ -5020,6 +5053,26 @@ def setup_scheduler(app: Application):
         )
 
         logger.info(f"✅ Запланирована еженедельная проверка цен для пользователя {telegram_user_id} в Пн 9:00 (Asia/Almaty)")
+
+    # Напоминание о расчете зарплат для всех активных пользователей в 21:30
+    for telegram_user_id in ALLOWED_USER_IDS:
+        # Триггер: каждый день в 21:30
+        salary_trigger = CronTrigger(
+            hour=21,
+            minute=30,
+            timezone=astana_tz
+        )
+
+        scheduler.add_job(
+            salary_flow_handlers.send_salary_reminder_for_user,
+            trigger=salary_trigger,
+            args=[telegram_user_id, app],
+            id=f'salary_reminder_{telegram_user_id}',
+            name=f'Напоминание о зарплатах для пользователя {telegram_user_id}',
+            replace_existing=True
+        )
+
+        logger.info(f"✅ Запланировано напоминание о зарплатах для пользователя {telegram_user_id} в 21:30 (Asia/Almaty)")
 
     # Запустить scheduler
     scheduler.start()

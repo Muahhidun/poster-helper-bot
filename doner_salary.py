@@ -172,25 +172,30 @@ class DonerSalaryCalculator:
         )
         return max_salary
 
-    async def create_salary_transaction(self, date: str = None, assistant_start_time: str = "10:00") -> Dict:
+    async def create_salary_transaction(
+        self,
+        date: str = None,
+        assistant_start_time: str = "10:00",
+        doner_name: str = None,
+        assistant_name: str = None
+    ) -> Dict:
         """
         Создать транзакцию зарплаты донерщика и помощника
 
         Args:
             date: Дата для расчёта в формате "YYYYMMDD". Если None, используется сегодня
             assistant_start_time: Время выхода помощника ("10:00", "12:00", "14:00")
+            doner_name: Имя донерщика (опционально, для комментария)
+            assistant_name: Имя помощника (опционально, для комментария)
 
         Returns:
             Dict с результатом:
             - success: bool
-            - transaction_id: int (если успех)
-            - assistant_transaction_id: int
+            - doner_name: str
             - salary: int (зарплата донерщика с бонусом)
-            - base_salary: int (базовая зарплата по таблице)
-            - bonus: int (бонус за помощника)
+            - assistant_name: str
             - assistant_salary: int (зарплата помощника)
-            - doner_count: int
-            - sales_data: Dict
+            - assistant_start_time: str
         """
         try:
             # Получить данные о продажах
@@ -239,47 +244,45 @@ class DonerSalaryCalculator:
                 account_from_id=4,  # Оставил в кассе
                 amount=salary,
                 date=transaction_date_str,
-                comment=""  # Без комментария
+                comment=doner_name or ""  # ИМЯ В КОММЕНТАРИИ
             )
 
             logger.info(
-                f"✅ Транзакция зарплаты донерщика создана: "
-                f"ID={transaction_id}, сумма={salary}₸ (базовая={base_salary}₸ + бонус={bonus}₸), "
-                f"донеров={total_count}"
+                f"✅ Транзакция зарплаты донерщика {doner_name or ''} создана: "
+                f"ID={transaction_id}, сумма={salary}₸"
             )
 
             # 2. Создать транзакцию зарплаты помощника донерщика
             # Счёт: "Оставил в кассе" (ID=4)
             # Категория: "Донерщик" (ID=19)
-            # Комментарий: "Помощник"
+            # Комментарий: "Помощник: {имя}" или просто "Помощник"
+            assistant_comment = f"Помощник: {assistant_name}" if assistant_name else "Помощник"
             assistant_transaction_id = await poster_client.create_transaction(
                 transaction_type=0,  # expense
                 category_id=19,  # Донерщик
                 account_from_id=4,  # Оставил в кассе
                 amount=assistant_salary,
                 date=transaction_date_str,
-                comment="Помощник"
+                comment=assistant_comment  # ИМЯ В КОММЕНТАРИИ
             )
 
             logger.info(
-                f"✅ Транзакция зарплаты помощника создана: "
-                f"ID={assistant_transaction_id}, сумма={assistant_salary}₸, "
-                f"вышел в {assistant_start_time}"
+                f"✅ Транзакция зарплаты помощника {assistant_name or ''} создана: "
+                f"ID={assistant_transaction_id}, сумма={assistant_salary}₸"
             )
 
             await poster_client.close()
 
+            # Вернуть МИНИМАЛЬНЫЕ данные (БЕЗ doner_count и sales_data)
             return {
                 'success': True,
-                'transaction_id': transaction_id,
-                'assistant_transaction_id': assistant_transaction_id,
+                'doner_name': doner_name or "Донерщик",
                 'salary': salary,
-                'base_salary': base_salary,
-                'bonus': bonus,
+                'assistant_name': assistant_name or "Помощник",
                 'assistant_salary': assistant_salary,
                 'assistant_start_time': assistant_start_time,
-                'doner_count': total_count,
-                'sales_data': sales_data
+                'transaction_id': transaction_id,
+                'assistant_transaction_id': assistant_transaction_id
             }
 
         except Exception as e:
@@ -290,7 +293,13 @@ class DonerSalaryCalculator:
             }
 
 
-async def calculate_and_create_doner_salary(telegram_user_id: int, date: str = None, assistant_start_time: str = "10:00") -> Dict:
+async def calculate_and_create_doner_salary(
+    telegram_user_id: int,
+    date: str = None,
+    assistant_start_time: str = "10:00",
+    doner_name: str = None,
+    assistant_name: str = None
+) -> Dict:
     """
     Рассчитать и создать транзакцию зарплаты донерщика и помощника
 
@@ -298,9 +307,11 @@ async def calculate_and_create_doner_salary(telegram_user_id: int, date: str = N
         telegram_user_id: ID пользователя Telegram
         date: Дата для расчёта в формате "YYYYMMDD". Если None, используется сегодня
         assistant_start_time: Время выхода помощника ("10:00", "12:00", "14:00")
+        doner_name: Имя донерщика (опционально, для комментария)
+        assistant_name: Имя помощника (опционально, для комментария)
 
     Returns:
         Dict с результатом операции
     """
     calculator = DonerSalaryCalculator(telegram_user_id)
-    return await calculator.create_salary_transaction(date, assistant_start_time)
+    return await calculator.create_salary_transaction(date, assistant_start_time, doner_name, assistant_name)

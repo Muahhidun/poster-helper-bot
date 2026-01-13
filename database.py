@@ -178,6 +178,25 @@ class UserDatabase:
                 CREATE INDEX IF NOT EXISTS idx_price_history_supplier
                 ON ingredient_price_history(telegram_user_id, supplier_id)
             """)
+
+            # Table for employees (for salary tracking with names)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS employees (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    employee_name TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    last_mentioned_date TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(telegram_user_id, employee_name, role),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_employees_user_role
+                ON employees(telegram_user_id, role)
+            """)
         else:
             # PostgreSQL syntax
             cursor.execute("""
@@ -300,6 +319,25 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_price_history_supplier
                 ON ingredient_price_history(telegram_user_id, supplier_id)
+            """)
+
+            # Table for employees (for salary tracking with names)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS employees (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    employee_name TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    last_mentioned_date DATE,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(telegram_user_id, employee_name, role),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_employees_user_role
+                ON employees(telegram_user_id, role)
             """)
 
         conn.commit()
@@ -1451,6 +1489,114 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to delete shipment template: {e}")
             return False
+
+    # === Employee Methods ===
+
+    def add_employee(
+        self,
+        telegram_user_id: int,
+        employee_name: str,
+        role: str,
+        date: str = None
+    ) -> bool:
+        """
+        Add or update an employee
+
+        Args:
+            telegram_user_id: User ID
+            employee_name: Name of the employee
+            role: Employee role ('cashier', 'doner_maker', 'assistant')
+            date: Date mentioned in format "YYYY-MM-DD". If None, uses current date
+
+        Returns:
+            True if successful
+        """
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO employees (telegram_user_id, employee_name, role, last_mentioned_date)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(telegram_user_id, employee_name, role)
+                    DO UPDATE SET last_mentioned_date = ?
+                """, (telegram_user_id, employee_name.strip(), role, date, date))
+            else:
+                cursor.execute("""
+                    INSERT INTO employees (telegram_user_id, employee_name, role, last_mentioned_date)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, employee_name, role)
+                    DO UPDATE SET last_mentioned_date = EXCLUDED.last_mentioned_date
+                """, (telegram_user_id, employee_name.strip(), role, date))
+
+            conn.commit()
+            conn.close()
+
+            logger.debug(f"✅ Employee added/updated: {employee_name} ({role})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add employee: {e}")
+            return False
+
+    def get_employees(self, telegram_user_id: int, role: str = None) -> list:
+        """
+        Get all employees for a user, optionally filtered by role
+
+        Args:
+            telegram_user_id: User ID
+            role: Optional role filter ('cashier', 'doner_maker', 'assistant')
+
+        Returns:
+            List of employee dictionaries
+        """
+        conn = self._get_connection()
+
+        if role:
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, employee_name, role, last_mentioned_date, created_at
+                    FROM employees
+                    WHERE telegram_user_id = ? AND role = ?
+                    ORDER BY last_mentioned_date DESC, employee_name
+                """, (telegram_user_id, role))
+                rows = cursor.fetchall()
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, employee_name, role, last_mentioned_date, created_at
+                    FROM employees
+                    WHERE telegram_user_id = %s AND role = %s
+                    ORDER BY last_mentioned_date DESC, employee_name
+                """, (telegram_user_id, role))
+                rows = cursor.fetchall()
+        else:
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, employee_name, role, last_mentioned_date, created_at
+                    FROM employees
+                    WHERE telegram_user_id = ?
+                    ORDER BY last_mentioned_date DESC, employee_name
+                """, (telegram_user_id,))
+                rows = cursor.fetchall()
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, employee_name, role, last_mentioned_date, created_at
+                    FROM employees
+                    WHERE telegram_user_id = %s
+                    ORDER BY last_mentioned_date DESC, employee_name
+                """, (telegram_user_id,))
+                rows = cursor.fetchall()
+
+        conn.close()
+        return [dict(row) for row in rows]
 
 
 # Singleton instance

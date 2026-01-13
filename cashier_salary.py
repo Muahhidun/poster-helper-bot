@@ -211,7 +211,8 @@ class CashierSalaryCalculator:
     async def create_salary_transactions(
         self,
         cashier_count: int,
-        date: str = None
+        date: str = None,
+        cashier_names: List[str] = None
     ) -> Dict:
         """
         Создать транзакции зарплаты кассиров
@@ -219,15 +220,13 @@ class CashierSalaryCalculator:
         Args:
             cashier_count: Количество кассиров (2 или 3)
             date: Дата для расчёта в формате "YYYYMMDD". Если None, используется сегодня
+            cashier_names: Список имен кассиров (опционально, для комментариев)
 
         Returns:
             Dict с результатом:
             - success: bool
-            - transaction_ids: List[int] (если успех)
-            - salary_per_cashier: int
+            - salaries: List[Dict] - список с именами и зарплатами
             - cashier_count: int
-            - total_sales: int
-            - sales_data: Dict
         """
         try:
             # Получить данные о продажах
@@ -250,8 +249,11 @@ class CashierSalaryCalculator:
                 transaction_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # Создать транзакции для каждого кассира
-            transaction_ids = []
+            salaries = []
             for i in range(cashier_count):
+                # Получить имя кассира (если не хватает имен, использовать "Кассир {i+1}")
+                cashier_name = cashier_names[i] if (cashier_names and i < len(cashier_names)) else f"Кассир {i+1}"
+
                 # Счёт: "Оставил в кассе" (ID=4)
                 # Категория: "Кассиры" (ID=16)
                 transaction_id = await poster_client.create_transaction(
@@ -260,12 +262,17 @@ class CashierSalaryCalculator:
                     account_from_id=4,  # Оставил в кассе
                     amount=salary_per_cashier,
                     date=transaction_date_str,
-                    comment=""  # Без комментария
+                    comment=cashier_name  # ИМЯ В КОММЕНТАРИИ
                 )
-                transaction_ids.append(transaction_id)
+
+                salaries.append({
+                    'name': cashier_name,
+                    'salary': salary_per_cashier,
+                    'transaction_id': transaction_id
+                })
 
                 logger.info(
-                    f"✅ Транзакция зарплаты кассира #{i+1} создана: "
+                    f"✅ Транзакция зарплаты кассира {cashier_name} создана: "
                     f"ID={transaction_id}, сумма={salary_per_cashier}₸"
                 )
 
@@ -273,17 +280,14 @@ class CashierSalaryCalculator:
 
             logger.info(
                 f"✅ Все транзакции зарплаты кассиров созданы: "
-                f"количество={cashier_count}, зарплата={salary_per_cashier}₸, "
-                f"общие продажи={total_sales/100:,.0f}₸"
+                f"количество={cashier_count}, зарплата={salary_per_cashier}₸ каждому"
             )
 
+            # Вернуть МИНИМАЛЬНЫЕ данные (БЕЗ total_sales и sales_data)
             return {
                 'success': True,
-                'transaction_ids': transaction_ids,
-                'salary_per_cashier': salary_per_cashier,
-                'cashier_count': cashier_count,
-                'total_sales': total_sales,
-                'sales_data': sales_data
+                'salaries': salaries,
+                'cashier_count': cashier_count
             }
 
         except Exception as e:
@@ -297,7 +301,8 @@ class CashierSalaryCalculator:
 async def calculate_and_create_cashier_salary(
     telegram_user_id: int,
     cashier_count: int,
-    date: str = None
+    date: str = None,
+    cashier_names: List[str] = None
 ) -> Dict:
     """
     Рассчитать и создать транзакции зарплаты кассиров
@@ -306,9 +311,10 @@ async def calculate_and_create_cashier_salary(
         telegram_user_id: ID пользователя Telegram
         cashier_count: Количество кассиров (2 или 3)
         date: Дата для расчёта в формате "YYYYMMDD". Если None, используется сегодня
+        cashier_names: Список имен кассиров (опционально, для комментариев)
 
     Returns:
         Dict с результатом операции
     """
     calculator = CashierSalaryCalculator(telegram_user_id)
-    return await calculator.create_salary_transactions(cashier_count, date)
+    return await calculator.create_salary_transactions(cashier_count, date, cashier_names)
