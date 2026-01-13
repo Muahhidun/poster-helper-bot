@@ -9,6 +9,12 @@ import type {
   TemplatesResponse,
   CreateTemplateRequest,
   UpdateTemplateRequest,
+  SuppliersResponse,
+  AccountsResponse,
+  LastSupplyResponse,
+  PriceHistoryResponse,
+  CreateSupplyRequest,
+  CreateSupplyResponse,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -128,6 +134,38 @@ class ApiClient {
   async deleteTemplate(templateName: string): Promise<{ success: boolean }> {
     return this.request(`/api/templates/${encodeURIComponent(templateName)}`, {
       method: 'DELETE',
+    })
+  }
+
+  // Supply Creation
+  async getSuppliers(): Promise<SuppliersResponse> {
+    return this.request<SuppliersResponse>('/api/suppliers')
+  }
+
+  async getAccounts(): Promise<AccountsResponse> {
+    return this.request<AccountsResponse>('/api/accounts')
+  }
+
+  async getLastSupply(supplierId: number): Promise<LastSupplyResponse> {
+    return this.request<LastSupplyResponse>(`/api/supplies/last/${supplierId}`)
+  }
+
+  async getPriceHistory(itemId: number, supplierId?: number): Promise<PriceHistoryResponse> {
+    const params = new URLSearchParams()
+    if (supplierId) params.set('supplier_id', supplierId.toString())
+
+    const queryString = params.toString()
+    const endpoint = queryString
+      ? `/api/items/price-history/${itemId}?${queryString}`
+      : `/api/items/price-history/${itemId}`
+
+    return this.request<PriceHistoryResponse>(endpoint)
+  }
+
+  async createSupply(data: CreateSupplyRequest): Promise<CreateSupplyResponse> {
+    return this.request<CreateSupplyResponse>('/api/supplies/create', {
+      method: 'POST',
+      body: JSON.stringify(data),
     })
   }
 }

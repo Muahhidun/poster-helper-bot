@@ -95,6 +95,16 @@ export const Dashboard: React.FC = () => {
 
         <div className="grid grid-cols-2 gap-3 mb-6">
           <Link
+            to="/supplies/new"
+            className="p-4 rounded-lg text-center font-medium shadow-sm col-span-2"
+            style={{
+              backgroundColor: themeParams.button_color || '#3b82f6',
+              color: themeParams.button_text_color || '#ffffff',
+            }}
+          >
+            ➕ Новая поставка
+          </Link>
+          <Link
             to="/supplies"
             className="p-4 rounded-lg text-center font-medium shadow-sm"
             style={{

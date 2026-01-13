@@ -206,3 +206,84 @@ export interface UpdateTemplateRequest {
   items?: TemplateItem[]
   storage_id?: number
 }
+
+// Suppliers and Accounts
+export interface Supplier {
+  id: number
+  name: string
+  aliases: string[]
+}
+
+export interface SuppliersResponse {
+  suppliers: Supplier[]
+}
+
+export interface Account {
+  id: number
+  name: string
+  type: 'bank' | 'cash'
+  aliases: string[]
+}
+
+export interface AccountsResponse {
+  accounts: Account[]
+}
+
+// Supply Creation
+export interface SupplyItemInput {
+  id: number
+  name: string
+  type: 'ingredient' | 'product'
+  quantity: number
+  price: number
+  unit: string
+}
+
+export interface CreateSupplyRequest {
+  supplier_id: number
+  supplier_name: string
+  account_id: number
+  items: SupplyItemInput[]
+  date?: string
+  storage_id?: number
+}
+
+export interface CreateSupplyResponse {
+  success: boolean
+  supply_id: number
+}
+
+// Last Supply
+export interface LastSupplyItem {
+  id: number
+  name: string
+  price: number
+  quantity: number
+  unit: string
+  date: string
+}
+
+export interface LastSupplyResponse {
+  supplier_id: number
+  items: LastSupplyItem[]
+}
+
+// Price History
+export interface PriceHistoryRecord {
+  id: number
+  ingredient_id: number
+  ingredient_name: string
+  supplier_id: number
+  supplier_name: string
+  date: string
+  price: number
+  quantity: number
+  unit: string
+  supply_id: number
+  created_at: string
+}
+
+export interface PriceHistoryResponse {
+  item_id: number
+  history: PriceHistoryRecord[]
+}

@@ -5,6 +5,7 @@ import { initApiClient } from './api/client'
 import { Dashboard } from './pages/Dashboard'
 import { SupplyHistory } from './pages/SupplyHistory'
 import { SupplyDetail } from './pages/SupplyDetail'
+import { CreateSupply } from './pages/CreateSupply'
 import { Aliases } from './pages/Aliases'
 import { AliasForm } from './pages/AliasForm'
 import { Templates } from './pages/Templates'
@@ -38,6 +39,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/supplies" element={<SupplyHistory />} />
+        <Route path="/supplies/new" element={<CreateSupply />} />
         <Route path="/supplies/:id" element={<SupplyDetail />} />
         <Route path="/aliases" element={<Aliases />} />
         <Route path="/aliases/new" element={<AliasForm />} />
