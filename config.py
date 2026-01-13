@@ -32,6 +32,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_IDS = [int(uid.strip()) for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") if uid.strip()]
 ADMIN_USER_IDS = [int(uid.strip()) for uid in os.getenv("ADMIN_USER_IDS", "").split(",") if uid.strip()]
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://worker-production-85f0.up.railway.app/mini-app")
 
 # Poster API
 POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "pizz-burg")

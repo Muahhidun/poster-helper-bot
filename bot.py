@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Dict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -17,7 +17,7 @@ from telegram.ext import (
 # Local imports
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
-    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR
+    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -1015,6 +1015,9 @@ async def price_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /menu command - показать меню с кнопками"""
     keyboard = [
+        [
+            InlineKeyboardButton("📱 Мобильное приложение", web_app=WebAppInfo(url=WEBAPP_URL))
+        ],
         [
             InlineKeyboardButton("🏪 Закрыть кассу", callback_data="close_cash_register")
         ],
