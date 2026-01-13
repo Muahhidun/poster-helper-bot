@@ -219,7 +219,6 @@ export const CreateSupply: React.FC = () => {
       return
     }
 
-    setIsSubmitting(true)
     setError(null)
     webApp?.MainButton?.showProgress()
 
@@ -238,7 +237,6 @@ export const CreateSupply: React.FC = () => {
       webApp?.HapticFeedback?.notificationOccurred('error')
       setError(err instanceof Error ? err.message : 'Ошибка создания поставки')
       webApp?.MainButton?.hideProgress()
-      setIsSubmitting(false)
     }
   }
 
