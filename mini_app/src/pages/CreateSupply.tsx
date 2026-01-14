@@ -58,6 +58,8 @@ export const CreateSupply: React.FC = () => {
   const [inputValues, setInputValues] = useState<Record<number, { quantity?: string; price?: string; sum?: string }>>({})
   // Track last edited field for each item to determine what to recalculate when sum changes
   const [lastEditedField, setLastEditedField] = useState<Record<number, 'quantity' | 'price' | 'sum'>>({})
+  // Track focused field for showing operator panel
+  const [focusedField, setFocusedField] = useState<{ index: number; field: 'quantity' | 'price' | 'sum' } | null>(null)
 
   // Refs for input fields (for Enter key navigation)
   const supplierSearchRef = useRef<HTMLInputElement>(null)
@@ -152,6 +154,9 @@ export const CreateSupply: React.FC = () => {
     index: number,
     field: 'quantity' | 'price' | 'sum'
   ) => {
+    // Set focused field for operator panel
+    setFocusedField({ index, field })
+
     const item = items[index]
     const currentValue = inputValues[index]?.[field]
 
@@ -170,6 +175,32 @@ export const CreateSupply: React.FC = () => {
         [index]: { ...prev[index], [field]: '' }
       }))
     }
+  }
+
+  // Insert operator into focused field
+  const insertOperator = (operator: string) => {
+    if (!focusedField) return
+
+    const { index, field } = focusedField
+    const item = items[index]
+    const currentValue = inputValues[index]?.[field]
+
+    // Get current value as string
+    let valueStr = currentValue !== undefined ? currentValue : String(item[field])
+
+    // Append operator to the end
+    valueStr += operator
+
+    // Update input value
+    setInputValues(prev => ({
+      ...prev,
+      [index]: { ...prev[index], [field]: valueStr }
+    }))
+
+    // Refocus the input field
+    setTimeout(() => {
+      itemInputRefs.current[index]?.[field]?.focus()
+    }, 0)
   }
 
   // Handle blur - evaluate expression and update item with smart recalculation
@@ -287,6 +318,11 @@ export const CreateSupply: React.FC = () => {
       }
       return updated
     })
+
+    // Clear focused field with delay to allow operator button clicks
+    setTimeout(() => {
+      setFocusedField(null)
+    }, 150)
   }
 
   // Add item from search
@@ -677,6 +713,101 @@ export const CreateSupply: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
+                  {/* Operator Panel - shows when field is focused */}
+                  {focusedField && focusedField.index === index && (
+                    <div
+                      className="flex gap-2 p-2 rounded-lg"
+                      style={{
+                        backgroundColor: themeParams.secondary_bg_color || '#f3f4f6',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          insertOperator('+')
+                        }}
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        style={{
+                          backgroundColor: themeParams.button_color || '#007AFF',
+                          color: themeParams.button_text_color || '#ffffff',
+                        }}
+                      >
+                        +
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          insertOperator('-')
+                        }}
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        style={{
+                          backgroundColor: themeParams.button_color || '#007AFF',
+                          color: themeParams.button_text_color || '#ffffff',
+                        }}
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          insertOperator('*')
+                        }}
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        style={{
+                          backgroundColor: themeParams.button_color || '#007AFF',
+                          color: themeParams.button_text_color || '#ffffff',
+                        }}
+                      >
+                        ×
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          insertOperator('/')
+                        }}
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        style={{
+                          backgroundColor: themeParams.button_color || '#007AFF',
+                          color: themeParams.button_text_color || '#ffffff',
+                        }}
+                      >
+                        ÷
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          insertOperator('(')
+                        }}
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        style={{
+                          backgroundColor: themeParams.button_color || '#007AFF',
+                          color: themeParams.button_text_color || '#ffffff',
+                        }}
+                      >
+                        (
+                      </button>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          insertOperator(')')
+                        }}
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        style={{
+                          backgroundColor: themeParams.button_color || '#007AFF',
+                          color: themeParams.button_text_color || '#ffffff',
+                        }}
+                      >
+                        )
+                      </button>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
