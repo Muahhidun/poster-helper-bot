@@ -147,13 +147,67 @@ export const CreateSupply: React.FC = () => {
     }))
   }
 
+  // Handle focus - clear field if it has default value
+  const handleItemFocus = (
+    index: number,
+    field: 'quantity' | 'price' | 'sum'
+  ) => {
+    const item = items[index]
+    const currentValue = inputValues[index]?.[field]
+
+    // If there's already a custom input value, don't clear it
+    if (currentValue !== undefined) return
+
+    // Clear field if it has default value
+    const shouldClear =
+      (field === 'quantity' && item.quantity === 1) ||
+      (field === 'price' && item.price === 0) ||
+      (field === 'sum' && (item.sum === 0 || item.sum === item.quantity * item.price))
+
+    if (shouldClear) {
+      setInputValues(prev => ({
+        ...prev,
+        [index]: { ...prev[index], [field]: '' }
+      }))
+    }
+  }
+
   // Handle blur - evaluate expression and update item with smart recalculation
   const handleItemBlur = (
     index: number,
     field: 'quantity' | 'price' | 'sum'
   ) => {
     const rawValue = inputValues[index]?.[field]
-    if (rawValue === undefined) return
+
+    // If field is empty, restore default value
+    if (rawValue === undefined || rawValue === '') {
+      const newItems = [...items]
+      const item = newItems[index]
+
+      // Restore default values
+      if (field === 'quantity' && item.quantity === 0) {
+        newItems[index].quantity = 1
+        newItems[index].sum = 1 * item.price
+      } else if (field === 'price' && item.price === 0) {
+        // Keep price as 0 if not entered
+        newItems[index].sum = item.quantity * 0
+      } else if (field === 'sum' && item.sum === 0) {
+        // Recalculate sum from quantity and price
+        newItems[index].sum = item.quantity * item.price
+      }
+
+      setItems(newItems)
+
+      // Clear the empty input value
+      setInputValues(prev => {
+        const updated = { ...prev }
+        if (updated[index]) {
+          delete updated[index][field]
+        }
+        return updated
+      })
+      return
+    }
 
     const newItems = [...items]
     const item = newItems[index]
@@ -637,6 +691,7 @@ export const CreateSupply: React.FC = () => {
                         inputMode="decimal"
                         value={inputValues[index]?.quantity ?? item.quantity}
                         onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                        onFocus={() => handleItemFocus(index, 'quantity')}
                         onBlur={() => handleItemBlur(index, 'quantity')}
                         onKeyDown={(e) => handleItemFieldEnter(e, index, 'quantity')}
                         className="w-full p-3 rounded-lg border text-lg"
@@ -661,6 +716,7 @@ export const CreateSupply: React.FC = () => {
                         inputMode="decimal"
                         value={inputValues[index]?.price ?? item.price}
                         onChange={(e) => handleItemChange(index, 'price', e.target.value)}
+                        onFocus={() => handleItemFocus(index, 'price')}
                         onBlur={() => handleItemBlur(index, 'price')}
                         onKeyDown={(e) => handleItemFieldEnter(e, index, 'price')}
                         className="w-full p-3 rounded-lg border text-lg"
@@ -686,6 +742,7 @@ export const CreateSupply: React.FC = () => {
                       inputMode="decimal"
                       value={inputValues[index]?.sum ?? (item.sum || item.quantity * item.price)}
                       onChange={(e) => handleItemChange(index, 'sum', e.target.value)}
+                      onFocus={() => handleItemFocus(index, 'sum')}
                       onBlur={() => handleItemBlur(index, 'sum')}
                       onKeyDown={(e) => handleItemFieldEnter(e, index, 'sum')}
                       className="w-full p-3 rounded-lg border text-lg font-medium"
