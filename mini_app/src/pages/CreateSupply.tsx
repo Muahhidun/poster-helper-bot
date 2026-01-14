@@ -70,6 +70,9 @@ export const CreateSupply: React.FC = () => {
     sum: HTMLInputElement | null
   }>>({})
 
+  // Ref to track if sum field should be skipped after price
+  const skipSumFieldRef = useRef<boolean>(false)
+
   // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
   const sortedAccounts = useMemo(() => {
     if (!accountsData?.accounts) return []
@@ -267,10 +270,14 @@ export const CreateSupply: React.FC = () => {
       if (field === 'quantity') {
         // quantity changed → recalculate sum = quantity * price
         newItems[index].sum = evaluated * item.price
+        skipSumFieldRef.current = false // Reset flag
       } else if (field === 'price') {
         // price changed → recalculate sum = quantity * price
         newItems[index].sum = item.quantity * evaluated
+        // Set flag to skip sum field if price is valid
+        skipSumFieldRef.current = (evaluated > 0 && item.quantity > 0)
       } else if (field === 'sum') {
+        skipSumFieldRef.current = false // Reset flag
         // sum changed → recalculate price or quantity based on previous edit
         const previousField = lastEditedField[index]
 
@@ -296,9 +303,13 @@ export const CreateSupply: React.FC = () => {
         // Same recalculation logic
         if (field === 'quantity') {
           newItems[index].sum = num * item.price
+          skipSumFieldRef.current = false // Reset flag
         } else if (field === 'price') {
           newItems[index].sum = item.quantity * num
+          // Set flag to skip sum field if price is valid
+          skipSumFieldRef.current = (num > 0 && item.quantity > 0)
         } else if (field === 'sum') {
+          skipSumFieldRef.current = false // Reset flag
           const previousField = lastEditedField[index]
 
           if (previousField === 'quantity' && item.quantity > 0) {
@@ -422,8 +433,15 @@ export const CreateSupply: React.FC = () => {
         // quantity → price
         itemInputRefs.current[index]?.price?.focus()
       } else if (field === 'price') {
-        // price → sum
-        itemInputRefs.current[index]?.sum?.focus()
+        // Smart navigation: check if sum should be skipped
+        if (skipSumFieldRef.current) {
+          // Sum is automatically calculated → skip to next item
+          itemSearchRef.current?.focus()
+          itemSearchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        } else {
+          // Sum was manually edited or needs attention → go to sum field
+          itemInputRefs.current[index]?.sum?.focus()
+        }
       } else if (field === 'sum') {
         // sum → item search (for next item)
         itemSearchRef.current?.focus()
@@ -810,10 +828,10 @@ export const CreateSupply: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <div>
                       <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
-                        Количество
+                        Кол-во
                       </label>
                       <input
                         ref={(el) => {
@@ -827,7 +845,7 @@ export const CreateSupply: React.FC = () => {
                         onFocus={() => handleItemFocus(index, 'quantity')}
                         onBlur={() => handleItemBlur(index, 'quantity')}
                         onKeyDown={(e) => handleItemFieldEnter(e, index, 'quantity')}
-                        className="w-full p-3 rounded-lg border text-lg"
+                        className="w-full p-2 rounded-lg border text-base"
                         style={{
                           backgroundColor: themeParams.bg_color || '#ffffff',
                           color: themeParams.text_color || '#000000',
@@ -852,7 +870,7 @@ export const CreateSupply: React.FC = () => {
                         onFocus={() => handleItemFocus(index, 'price')}
                         onBlur={() => handleItemBlur(index, 'price')}
                         onKeyDown={(e) => handleItemFieldEnter(e, index, 'price')}
-                        className="w-full p-3 rounded-lg border text-lg"
+                        className="w-full p-2 rounded-lg border text-base"
                         style={{
                           backgroundColor: themeParams.bg_color || '#ffffff',
                           color: themeParams.text_color || '#000000',
@@ -860,31 +878,31 @@ export const CreateSupply: React.FC = () => {
                         }}
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
-                      Сумма
-                    </label>
-                    <input
-                      ref={(el) => {
-                        if (!itemInputRefs.current[index]) itemInputRefs.current[index] = { quantity: null, price: null, sum: null }
-                        itemInputRefs.current[index].sum = el
-                      }}
-                      type="text"
-                      inputMode="decimal"
-                      value={inputValues[index]?.sum ?? (item.sum || item.quantity * item.price)}
-                      onChange={(e) => handleItemChange(index, 'sum', e.target.value)}
-                      onFocus={() => handleItemFocus(index, 'sum')}
-                      onBlur={() => handleItemBlur(index, 'sum')}
-                      onKeyDown={(e) => handleItemFieldEnter(e, index, 'sum')}
-                      className="w-full p-3 rounded-lg border text-lg font-medium"
-                      style={{
-                        backgroundColor: themeParams.bg_color || '#ffffff',
-                        color: themeParams.text_color || '#000000',
-                        borderColor: themeParams.hint_color || '#d1d5db',
-                      }}
-                    />
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: themeParams.hint_color }}>
+                        Сумма
+                      </label>
+                      <input
+                        ref={(el) => {
+                          if (!itemInputRefs.current[index]) itemInputRefs.current[index] = { quantity: null, price: null, sum: null }
+                          itemInputRefs.current[index].sum = el
+                        }}
+                        type="text"
+                        inputMode="decimal"
+                        value={inputValues[index]?.sum ?? (item.sum || item.quantity * item.price)}
+                        onChange={(e) => handleItemChange(index, 'sum', e.target.value)}
+                        onFocus={() => handleItemFocus(index, 'sum')}
+                        onBlur={() => handleItemBlur(index, 'sum')}
+                        onKeyDown={(e) => handleItemFieldEnter(e, index, 'sum')}
+                        className="w-full p-2 rounded-lg border text-base font-medium"
+                        style={{
+                          backgroundColor: themeParams.bg_color || '#ffffff',
+                          color: themeParams.text_color || '#000000',
+                          borderColor: themeParams.hint_color || '#d1d5db',
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
