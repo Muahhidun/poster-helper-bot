@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTelegram } from '../hooks/useTelegram'
 import { useApi } from '../hooks/useApi'
@@ -58,6 +58,15 @@ export const CreateSupply: React.FC = () => {
   const [inputValues, setInputValues] = useState<Record<number, { quantity?: string; price?: string; sum?: string }>>({})
   // Track last edited field for each item to determine what to recalculate when sum changes
   const [lastEditedField, setLastEditedField] = useState<Record<number, 'quantity' | 'price' | 'sum'>>({})
+
+  // Refs for input fields (for Enter key navigation)
+  const supplierSearchRef = useRef<HTMLInputElement>(null)
+  const itemSearchRef = useRef<HTMLInputElement>(null)
+  const itemInputRefs = useRef<Record<number, {
+    quantity: HTMLInputElement | null
+    price: HTMLInputElement | null
+    sum: HTMLInputElement | null
+  }>>({})
 
   // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
   const sortedAccounts = useMemo(() => {
@@ -256,6 +265,68 @@ export const CreateSupply: React.FC = () => {
     webApp?.HapticFeedback?.impactOccurred('medium')
   }
 
+  // Handle Enter key in supplier search
+  const handleSupplierSearchEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (filteredSuppliers.length > 0) {
+        setSelectedSupplier(filteredSuppliers[0])
+        setSupplierSearch('')
+        webApp?.HapticFeedback?.selectionChanged()
+        // Focus on item search field
+        setTimeout(() => itemSearchRef.current?.focus(), 0)
+      }
+    }
+  }
+
+  // Handle Enter key in item search
+  const handleItemSearchEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (searchResults.length > 0) {
+        const item = searchResults[0]
+        addItem(item)
+        // Focus on quantity field of the newly added item
+        const newIndex = items.length
+        setTimeout(() => {
+          if (itemInputRefs.current[newIndex]?.quantity) {
+            itemInputRefs.current[newIndex].quantity?.focus()
+          }
+        }, 0)
+      }
+    }
+  }
+
+  // Handle Enter key in item fields (quantity, price, sum)
+  const handleItemFieldEnter = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    index: number,
+    field: 'quantity' | 'price' | 'sum'
+  ) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+
+      // Trigger blur to save the value
+      handleItemBlur(index, field)
+
+      // Determine next field
+      setTimeout(() => {
+        if (field === 'quantity') {
+          // quantity → price
+          itemInputRefs.current[index]?.price?.focus()
+        } else if (field === 'price') {
+          // price → sum
+          itemInputRefs.current[index]?.sum?.focus()
+        } else if (field === 'sum') {
+          // sum → item search (for next item)
+          itemSearchRef.current?.focus()
+          // Scroll to item search
+          itemSearchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+      }, 0)
+    }
+  }
+
   // Load last supply
   const loadLastSupply = () => {
     if (lastSupplyItems.length === 0) {
@@ -370,10 +441,12 @@ export const CreateSupply: React.FC = () => {
           </label>
 
           <input
+            ref={supplierSearchRef}
             type="text"
             placeholder="Поиск поставщика..."
             value={supplierSearch}
             onChange={(e) => setSupplierSearch(e.target.value)}
+            onKeyDown={handleSupplierSearchEnter}
             className="w-full p-4 rounded-lg border text-lg"
             style={{
               backgroundColor: themeParams.secondary_bg_color || '#f3f4f6',
@@ -487,10 +560,12 @@ export const CreateSupply: React.FC = () => {
 
           {/* Item Search */}
           <input
+            ref={itemSearchRef}
             type="text"
             placeholder="Добавить товар..."
             value={itemSearch}
             onChange={(e) => setItemSearch(e.target.value)}
+            onKeyDown={handleItemSearchEnter}
             className="w-full p-4 rounded-lg border text-lg mb-2"
             style={{
               backgroundColor: themeParams.secondary_bg_color || '#f3f4f6',
@@ -554,11 +629,16 @@ export const CreateSupply: React.FC = () => {
                         Количество
                       </label>
                       <input
+                        ref={(el) => {
+                          if (!itemInputRefs.current[index]) itemInputRefs.current[index] = { quantity: null, price: null, sum: null }
+                          itemInputRefs.current[index].quantity = el
+                        }}
                         type="text"
                         inputMode="decimal"
                         value={inputValues[index]?.quantity ?? item.quantity}
                         onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
                         onBlur={() => handleItemBlur(index, 'quantity')}
+                        onKeyDown={(e) => handleItemFieldEnter(e, index, 'quantity')}
                         className="w-full p-3 rounded-lg border text-lg"
                         style={{
                           backgroundColor: themeParams.bg_color || '#ffffff',
@@ -573,11 +653,16 @@ export const CreateSupply: React.FC = () => {
                         Цена
                       </label>
                       <input
+                        ref={(el) => {
+                          if (!itemInputRefs.current[index]) itemInputRefs.current[index] = { quantity: null, price: null, sum: null }
+                          itemInputRefs.current[index].price = el
+                        }}
                         type="text"
                         inputMode="decimal"
                         value={inputValues[index]?.price ?? item.price}
                         onChange={(e) => handleItemChange(index, 'price', e.target.value)}
                         onBlur={() => handleItemBlur(index, 'price')}
+                        onKeyDown={(e) => handleItemFieldEnter(e, index, 'price')}
                         className="w-full p-3 rounded-lg border text-lg"
                         style={{
                           backgroundColor: themeParams.bg_color || '#ffffff',
@@ -593,11 +678,16 @@ export const CreateSupply: React.FC = () => {
                       Сумма
                     </label>
                     <input
+                      ref={(el) => {
+                        if (!itemInputRefs.current[index]) itemInputRefs.current[index] = { quantity: null, price: null, sum: null }
+                        itemInputRefs.current[index].sum = el
+                      }}
                       type="text"
                       inputMode="decimal"
                       value={inputValues[index]?.sum ?? (item.sum || item.quantity * item.price)}
                       onChange={(e) => handleItemChange(index, 'sum', e.target.value)}
                       onBlur={() => handleItemBlur(index, 'sum')}
+                      onKeyDown={(e) => handleItemFieldEnter(e, index, 'sum')}
                       className="w-full p-3 rounded-lg border text-lg font-medium"
                       style={{
                         backgroundColor: themeParams.bg_color || '#ffffff',
