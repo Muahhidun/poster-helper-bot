@@ -413,12 +413,12 @@ def authorized_only(func):
                 logger.error(f"Failed to send unregistered message: {e}")
             return
 
-        # Admins bypass subscription check
-        if user_id in ADMIN_USER_IDS:
-            logger.info(f"Admin user {user_id} bypassing subscription check in {func.__name__}")
+        # Admins and allowed users bypass subscription check
+        if user_id in ADMIN_USER_IDS or user_id in ALLOWED_USER_IDS:
+            logger.info(f"Allowed user {user_id} bypassing subscription check in {func.__name__}")
             return await func(update, context)
 
-        # Check if subscription is active (only for non-admins)
+        # Check if subscription is active (only for users not in allowed lists)
         if not db.is_subscription_active(user_id):
             # Subscription expired
             logger.warning(f"Expired subscription attempt by user_id={user_id} in {func.__name__}")
@@ -1504,9 +1504,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Admins bypass subscription check
-    if user_id not in ADMIN_USER_IDS:
-        # Check if subscription is active (only for non-admins)
+    # Admins and allowed users bypass subscription check
+    if user_id not in ADMIN_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        # Check if subscription is active (only for users not in allowed lists)
         if not db.is_subscription_active(user_id):
             await update.message.reply_text(
                 f"⛔ Ваша подписка истекла.\n\n"
