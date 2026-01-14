@@ -5,6 +5,7 @@ import secrets
 import hmac
 import hashlib
 import json
+import asyncio
 from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
@@ -553,7 +554,7 @@ def api_item_price_history(item_id):
 
 
 @app.route('/api/supplies/create', methods=['POST'])
-async def api_create_supply():
+def api_create_supply():
     """Create a new supply in Poster"""
     data = request.json
 
@@ -596,9 +597,13 @@ async def api_create_supply():
                 'cost': float(item['price'])
             })
 
-        # Create supply
-        result = await poster_client.create_supply(**supply_data)
-        await poster_client.close()
+        # Create supply using async function wrapped in asyncio.run()
+        async def create_supply_async():
+            result = await poster_client.create_supply(**supply_data)
+            await poster_client.close()
+            return result
+
+        result = asyncio.run(create_supply_async())
 
         if not result.get('success'):
             return jsonify({'error': 'Failed to create supply in Poster'}), 500
