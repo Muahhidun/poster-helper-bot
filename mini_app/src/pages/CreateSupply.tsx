@@ -102,6 +102,20 @@ export const CreateSupply: React.FC = () => {
     }
   }, [selectedSupplier])
 
+  // Hide operator panel when clicking outside input fields
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      // Check if click is outside input fields and operator panel
+      if (!target.closest('input') && !target.closest('button[type="button"]')) {
+        setFocusedField(null)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
   // Search items with debounce
   useEffect(() => {
     if (!itemSearch || itemSearch.length < 2) {
@@ -319,10 +333,8 @@ export const CreateSupply: React.FC = () => {
       return updated
     })
 
-    // Clear focused field with delay to allow operator button clicks
-    setTimeout(() => {
-      setFocusedField(null)
-    }, 150)
+    // Don't clear focusedField here - it will be updated by next focus
+    // This fixes the bug where panel doesn't show when switching between fields quickly
   }
 
   // Add item from search
@@ -395,26 +407,30 @@ export const CreateSupply: React.FC = () => {
   ) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-
-      // Trigger blur to save the value
-      handleItemBlur(index, field)
-
-      // Determine next field
-      setTimeout(() => {
-        if (field === 'quantity') {
-          // quantity → price
-          itemInputRefs.current[index]?.price?.focus()
-        } else if (field === 'price') {
-          // price → sum
-          itemInputRefs.current[index]?.sum?.focus()
-        } else if (field === 'sum') {
-          // sum → item search (for next item)
-          itemSearchRef.current?.focus()
-          // Scroll to item search
-          itemSearchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        }
-      }, 0)
+      handleDoneButton(index, field)
     }
+  }
+
+  // Handle "Done" button click - same logic as Enter key
+  const handleDoneButton = (index: number, field: 'quantity' | 'price' | 'sum') => {
+    // Trigger blur to save the value
+    handleItemBlur(index, field)
+
+    // Determine next field
+    setTimeout(() => {
+      if (field === 'quantity') {
+        // quantity → price
+        itemInputRefs.current[index]?.price?.focus()
+      } else if (field === 'price') {
+        // price → sum
+        itemInputRefs.current[index]?.sum?.focus()
+      } else if (field === 'sum') {
+        // sum → item search (for next item)
+        itemSearchRef.current?.focus()
+        // Scroll to item search
+        itemSearchRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 0)
   }
 
   // Load last supply
@@ -781,29 +797,15 @@ export const CreateSupply: React.FC = () => {
                         type="button"
                         onMouseDown={(e) => {
                           e.preventDefault()
-                          insertOperator('(')
+                          handleDoneButton(index, focusedField.field)
                         }}
-                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
+                        className="flex-1 py-2 px-4 rounded-lg font-bold text-2xl"
                         style={{
-                          backgroundColor: themeParams.button_color || '#007AFF',
-                          color: themeParams.button_text_color || '#ffffff',
+                          backgroundColor: '#34C759',
+                          color: '#ffffff',
                         }}
                       >
-                        (
-                      </button>
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          insertOperator(')')
-                        }}
-                        className="flex-1 py-2 px-4 rounded-lg font-bold text-xl"
-                        style={{
-                          backgroundColor: themeParams.button_color || '#007AFF',
-                          color: themeParams.button_text_color || '#ffffff',
-                        }}
-                      >
-                        )
+                        ✓
                       </button>
                     </div>
                   )}
