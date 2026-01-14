@@ -579,33 +579,36 @@ def api_create_supply():
         # Create supply via Poster API
         poster_client = PosterClient(g.user_id)
 
-        # Prepare supply data
-        supply_data = {
-            'supplier_id': data['supplier_id'],
-            'storage_id': data.get('storage_id', 1),  # Default main storage
-            'account_id': data['account_id'],
-            'date': data.get('date'),  # Optional, defaults to now in poster_client
-            'items': []
-        }
-
-        # Format items for Poster API
+        # Prepare ingredients list for Poster API
+        ingredients = []
         for item in data['items']:
-            supply_data['items'].append({
+            ingredients.append({
                 'id': item['id'],
-                'type': item.get('type', 'ingredient'),
-                'sum': float(item['quantity']) * float(item['price']),
-                'cost': float(item['price'])
+                'num': float(item['quantity']),
+                'price': float(item['price'])
             })
+
+        # Prepare date
+        supply_date = data.get('date')
+        if not supply_date:
+            supply_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         # Create supply using async function wrapped in asyncio.run()
         async def create_supply_async():
-            result = await poster_client.create_supply(**supply_data)
+            supply_id = await poster_client.create_supply(
+                supplier_id=data['supplier_id'],
+                storage_id=data.get('storage_id', 1),
+                date=supply_date,
+                ingredients=ingredients,
+                account_id=data['account_id'],
+                comment=data.get('comment', '')
+            )
             await poster_client.close()
-            return result
+            return supply_id
 
-        result = asyncio.run(create_supply_async())
+        supply_id = asyncio.run(create_supply_async())
 
-        if not result.get('success'):
+        if not supply_id:
             return jsonify({'error': 'Failed to create supply in Poster'}), 500
 
         # Save price history to database
@@ -621,7 +624,7 @@ def api_create_supply():
                 'price': float(item['price']),
                 'quantity': float(item['quantity']),
                 'unit': item.get('unit', 'шт'),
-                'supply_id': result.get('supply_id'),
+                'supply_id': supply_id,
                 'date': data.get('date', datetime.now().strftime('%Y-%m-%d'))
             })
 
@@ -629,7 +632,7 @@ def api_create_supply():
 
         return jsonify({
             'success': True,
-            'supply_id': result.get('supply_id')
+            'supply_id': supply_id
         })
 
     except Exception as e:
