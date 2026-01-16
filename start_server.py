@@ -5,6 +5,7 @@ Integrates Telegram webhook with Flask
 import os
 import asyncio
 import logging
+import threading
 from flask import Flask, request
 from telegram import Update
 from bot import initialize_application
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 logger.info("🔧 Initializing Telegram bot...")
 telegram_app = initialize_application()
 
+# Global variable to store the event loop
+bot_event_loop = None
+
 # Import Flask app from web_app
 from web_app import app
 
@@ -32,11 +36,15 @@ def telegram_webhook():
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, telegram_app.bot)
 
-        # Process the update asynchronously
-        async def process_update():
-            await telegram_app.process_update(update)
-
-        asyncio.run(process_update())
+        # Schedule update processing in the bot's event loop
+        if bot_event_loop:
+            asyncio.run_coroutine_threadsafe(
+                telegram_app.update_queue.put(update),
+                bot_event_loop
+            )
+        else:
+            logger.error("Bot event loop not available")
+            return 'Service Unavailable', 503
 
         return 'OK', 200
     except Exception as e:
@@ -45,7 +53,13 @@ def telegram_webhook():
 
 async def setup_webhook():
     """Setup webhook on Telegram"""
+    global bot_event_loop
+
     try:
+        # Store the current event loop
+        bot_event_loop = asyncio.get_running_loop()
+        logger.info(f"✅ Bot event loop captured")
+
         # Validate WEBHOOK_URL is set
         if not WEBHOOK_URL:
             logger.error("❌ WEBHOOK_URL is not set in environment variables!")
@@ -77,6 +91,30 @@ async def setup_webhook():
         logger.error(f"❌ Error setting up webhook: {e}", exc_info=True)
         return False
 
+def run_bot_loop():
+    """Run the bot event loop in a separate thread"""
+    global bot_event_loop
+
+    # Create and set event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    bot_event_loop = loop
+
+    try:
+        # Setup webhook
+        webhook_success = loop.run_until_complete(setup_webhook())
+
+        if not webhook_success:
+            logger.warning("⚠️  Webhook setup failed")
+            logger.warning("   Add WEBHOOK_URL environment variable to enable webhook")
+
+        # Keep the loop running to process updates
+        loop.run_forever()
+    except Exception as e:
+        logger.error(f"Error in bot event loop: {e}", exc_info=True)
+    finally:
+        loop.close()
+
 def run_server():
     """Run the Flask server with webhook"""
     port = int(os.environ.get('PORT', 5000))
@@ -86,12 +124,13 @@ def run_server():
     logger.info("=" * 60)
     logger.info(f"📡 Flask will listen on port {port}")
 
-    # Setup webhook asynchronously
-    webhook_success = asyncio.run(setup_webhook())
+    # Start bot event loop in a separate thread
+    bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+    bot_thread.start()
 
-    if not webhook_success:
-        logger.warning("⚠️  Webhook setup failed, but Flask will still start")
-        logger.warning("   Add WEBHOOK_URL environment variable to enable webhook")
+    # Wait a bit for the bot to initialize
+    import time
+    time.sleep(2)
 
     # Start Flask server
     logger.info("🎯 Starting Flask server...")
