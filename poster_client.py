@@ -358,7 +358,7 @@ class PosterClient:
             data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
 
         # Add transaction (payment)
-        data['transactions[0][transaction_id]'] = ''
+        # Note: transaction_id should be omitted for new transactions
         data['transactions[0][account_id]'] = account_id
         data['transactions[0][date]'] = date
         data['transactions[0][amount]'] = total_amount
@@ -443,7 +443,7 @@ class PosterClient:
             data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
 
         # Add transaction (payment)
-        data['transactions[0][transaction_id]'] = ''
+        # Note: transaction_id should be omitted for new transactions
         data['transactions[0][account_id]'] = account_id
         data['transactions[0][date]'] = date
         data['transactions[0][amount]'] = total_amount
