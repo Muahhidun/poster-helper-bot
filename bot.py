@@ -4846,7 +4846,7 @@ async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def post_init(application: Application) -> None:
     """Set up bot commands after initialization"""
-    from telegram import BotCommand, MenuButtonCommands
+    from telegram import BotCommand, MenuButtonWebApp, WebAppInfo
 
     commands = [
         BotCommand("menu", "🏠 Главное меню"),
@@ -4857,9 +4857,14 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(commands)
     logger.info("✅ Bot commands menu set")
 
-    # Установить кнопку меню (кнопка с 4 квадратиками справа от поля ввода)
-    await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-    logger.info("✅ Menu button (4 квадратика) set")
+    # Установить кнопку Web App (кнопка mini-app справа от поля ввода)
+    await application.bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="📱 Приложение",
+            web_app=WebAppInfo(url=WEBAPP_URL)
+        )
+    )
+    logger.info(f"✅ Web App menu button set: {WEBAPP_URL}")
 
 
 async def run_daily_transactions_for_user(telegram_user_id: int):
