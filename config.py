@@ -35,7 +35,7 @@ ADMIN_USER_IDS = [int(uid.strip()) for uid in os.getenv("ADMIN_USER_IDS", "").sp
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://worker-production-85f0.up.railway.app/mini-app")
 
 # Webhook settings
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Railway URL, например: https://your-app.railway.app
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip() or None  # Railway URL, например: https://your-app.railway.app
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "false").lower() == "true"
 WEBHOOK_PATH = "/telegram-webhook"  # Путь для webhook endpoint
 
