@@ -17,7 +17,8 @@ from telegram.ext import (
 # Local imports
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
-    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL
+    DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL,
+    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -5214,87 +5215,94 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error in error_handler: {e}", exc_info=True)
 
 
+def initialize_application():
+    """Initialize and configure the bot application (for both webhook and polling)"""
+    # Validate configuration
+    validate_config()
+    logger.info("✅ Configuration validated")
+
+    # Initialize database (creates tables if needed)
+    get_database()
+
+    # Sync ingredients from Poster API if CSV doesn't exist (for Railway)
+    sync_ingredients_if_needed()
+
+    # Sync products from Poster API if CSV doesn't exist (for Railway)
+    sync_products_if_needed()
+
+    # Fix poster_base_url for existing users (auto-migration)
+    fix_user_poster_urls()
+
+    # Migrate CSV aliases to PostgreSQL (one-time auto-migration)
+    migrate_csv_aliases_to_db()
+
+    # Create application
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+
+    # Register handlers
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("myid", myid_command))
+    app.add_handler(CommandHandler("settings", settings_command))
+    app.add_handler(CommandHandler("subscription", subscription_command))
+    app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
+    app.add_handler(CommandHandler("reload_aliases", reload_aliases_command))
+    app.add_handler(CommandHandler("sync", sync_command))
+    app.add_handler(CommandHandler("force_sync", force_sync_command))
+    app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("test_daily", test_daily_command))
+    app.add_handler(CommandHandler("check_ids", check_ids_command))
+    app.add_handler(CommandHandler("test_report", test_report_command))
+    app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
+    app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
+    app.add_handler(CommandHandler("price_check", price_check_command))
+    app.add_handler(CommandHandler("add_cafe", add_second_account_command))
+
+    # Shipment template commands
+    app.add_handler(CommandHandler("templates", templates_command))
+    app.add_handler(CommandHandler("edit_template", edit_template_command))
+    app.add_handler(CommandHandler("delete_template", delete_template_command))
+
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # Handle documents (PDF or images sent as files without compression)
+    # Document handler removed (not needed for current functionality)
+    # app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    # Register global error handler
+    app.add_error_handler(error_handler)
+
+    # Зарегистрировать фоновую задачу автосинхронизации
+    from datetime import timedelta
+    job_queue = app.job_queue
+
+    # Запуск каждые 24 часа, первый запуск через 1 час
+    job_queue.run_repeating(
+        auto_sync_poster_data,
+        interval=timedelta(hours=24),
+        first=timedelta(hours=1),
+        name='auto_sync_poster'
+    )
+
+    logger.info("✅ Auto-sync job scheduled: every 24 hours, first run in 1 hour")
+
+    # Setup scheduler для автоматических задач
+    scheduler = setup_scheduler(app)
+
+    return app
+
+
 def main():
-    """Run the bot"""
+    """Run the bot (polling mode only - for local development)"""
     try:
-        # Validate configuration
-        validate_config()
-        logger.info("✅ Configuration validated")
+        app = initialize_application()
 
-        # Initialize database (creates tables if needed)
-        get_database()
-
-        # Sync ingredients from Poster API if CSV doesn't exist (for Railway)
-        sync_ingredients_if_needed()
-
-        # Sync products from Poster API if CSV doesn't exist (for Railway)
-        sync_products_if_needed()
-
-        # Fix poster_base_url for existing users (auto-migration)
-        fix_user_poster_urls()
-
-        # Migrate CSV aliases to PostgreSQL (one-time auto-migration)
-        migrate_csv_aliases_to_db()
-
-        # Create application
-        app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
-
-        # Register handlers
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(CommandHandler("help", help_command))
-        app.add_handler(CommandHandler("menu", menu_command))
-        app.add_handler(CommandHandler("myid", myid_command))
-        app.add_handler(CommandHandler("settings", settings_command))
-        app.add_handler(CommandHandler("subscription", subscription_command))
-        app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
-        app.add_handler(CommandHandler("reload_aliases", reload_aliases_command))
-        app.add_handler(CommandHandler("sync", sync_command))
-        app.add_handler(CommandHandler("force_sync", force_sync_command))
-        app.add_handler(CommandHandler("cancel", cancel_command))
-        app.add_handler(CommandHandler("test_daily", test_daily_command))
-        app.add_handler(CommandHandler("check_ids", check_ids_command))
-        app.add_handler(CommandHandler("test_report", test_report_command))
-        app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
-        app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
-        app.add_handler(CommandHandler("price_check", price_check_command))
-        app.add_handler(CommandHandler("add_cafe", add_second_account_command))
-
-        # Shipment template commands
-        app.add_handler(CommandHandler("templates", templates_command))
-        app.add_handler(CommandHandler("edit_template", edit_template_command))
-        app.add_handler(CommandHandler("delete_template", delete_template_command))
-
-        app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        # Handle documents (PDF or images sent as files without compression)
-        # Document handler removed (not needed for current functionality)
-        # app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-        app.add_handler(CallbackQueryHandler(handle_callback))
-
-        # Register global error handler
-        app.add_error_handler(error_handler)
-
-        # Зарегистрировать фоновую задачу автосинхронизации
-        from datetime import timedelta
-        job_queue = app.job_queue
-
-        # Запуск каждые 24 часа, первый запуск через 1 час
-        job_queue.run_repeating(
-            auto_sync_poster_data,
-            interval=timedelta(hours=24),
-            first=timedelta(hours=1),
-            name='auto_sync_poster'
-        )
-
-        logger.info("✅ Auto-sync job scheduled: every 24 hours, first run in 1 hour")
-
-        # Setup scheduler для автоматических задач
-        scheduler = setup_scheduler(app)
-
-        # Start bot
-        logger.info("🤖 Poster Helper Bot starting...")
+        # Start bot in polling mode
+        logger.info("🤖 Poster Helper Bot starting in POLLING mode...")
         logger.info(f"   Allowed users: {ALLOWED_USER_IDS}")
 
         app.run_polling(allowed_updates=Update.ALL_TYPES)

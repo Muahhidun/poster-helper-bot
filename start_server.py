@@ -1,13 +1,14 @@
 """
 Unified launcher for Telegram Bot and Flask Web App
-Runs both bot.py and web_app.py in the same process
+Integrates Telegram webhook with Flask
 """
 import os
-import sys
-import subprocess
-import threading
+import asyncio
 import logging
-import time
+from flask import Flask, request
+from telegram import Update
+from bot import initialize_application
+from config import WEBHOOK_URL, WEBHOOK_PATH, TELEGRAM_BOT_TOKEN
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,50 +16,77 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def start_bot():
-    """Start Telegram bot in subprocess"""
-    logger.info("🤖 Starting Telegram bot in background...")
+# Initialize the Telegram bot application
+logger.info("🔧 Initializing Telegram bot...")
+telegram_app = initialize_application()
+
+# Import Flask app from web_app
+from web_app import app
+
+# Add webhook endpoint to Flask app
+@app.route(WEBHOOK_PATH, methods=['POST'])
+async def telegram_webhook():
+    """Handle incoming Telegram updates via webhook"""
     try:
-        # Run bot as subprocess WITHOUT capturing output
-        # This allows it to run in background without blocking
-        process = subprocess.Popen(
-            [sys.executable, 'bot.py'],
-            # Don't capture output - let it go to stdout directly
+        # Get the update from request
+        update_data = request.get_json(force=True)
+        update = Update.de_json(update_data, telegram_app.bot)
+
+        # Process the update
+        await telegram_app.process_update(update)
+
+        return 'OK', 200
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}", exc_info=True)
+        return 'Error', 500
+
+async def setup_webhook():
+    """Setup webhook on Telegram"""
+    try:
+        webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+        logger.info(f"🔗 Setting up webhook: {webhook_url}")
+
+        # Initialize bot
+        await telegram_app.initialize()
+        await telegram_app.start()
+
+        # Set webhook
+        await telegram_app.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
         )
 
-        logger.info(f"✅ Bot process started with PID {process.pid}")
-    except Exception as e:
-        logger.error(f"❌ Error starting bot: {e}")
+        webhook_info = await telegram_app.bot.get_webhook_info()
+        logger.info(f"✅ Webhook set successfully!")
+        logger.info(f"   URL: {webhook_info.url}")
+        logger.info(f"   Pending updates: {webhook_info.pending_update_count}")
 
-def start_web_app():
-    """Start Flask web app"""
-    logger.info("🌐 Starting Flask web app...")
-    from web_app import app
+    except Exception as e:
+        logger.error(f"❌ Error setting up webhook: {e}", exc_info=True)
+        raise
+
+def run_server():
+    """Run the Flask server with webhook"""
     port = int(os.environ.get('PORT', 5000))
 
+    logger.info("=" * 60)
+    logger.info("🚀 Starting Poster Helper Bot + Web App (WEBHOOK mode)")
+    logger.info("=" * 60)
     logger.info(f"📡 Flask will listen on port {port}")
 
-    # Use threaded=True for better concurrency
+    # Setup webhook asynchronously
+    asyncio.run(setup_webhook())
+
+    # Start Flask server
+    logger.info("🎯 Starting Flask server...")
     app.run(
         host='0.0.0.0',
         port=port,
         debug=False,
         threaded=True,
-        use_reloader=False  # Important: disable reloader in production
+        use_reloader=False
     )
 
 if __name__ == '__main__':
-    logger.info("=" * 60)
-    logger.info("🚀 Starting Poster Helper Bot + Web App")
-    logger.info("=" * 60)
-
-    # Start bot in background subprocess
-    start_bot()
-
-    # Give bot a moment to initialize
-    logger.info("⏳ Waiting 2 seconds for bot to initialize...")
-    time.sleep(2)
-
-    # Start Flask in main thread (Railway needs this for health checks)
-    logger.info("🎯 Starting Flask in main thread...")
-    start_web_app()
+    run_server()
