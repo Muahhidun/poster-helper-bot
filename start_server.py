@@ -43,6 +43,13 @@ async def telegram_webhook():
 async def setup_webhook():
     """Setup webhook on Telegram"""
     try:
+        # Validate WEBHOOK_URL is set
+        if not WEBHOOK_URL:
+            logger.error("❌ WEBHOOK_URL is not set in environment variables!")
+            logger.error("   Please add WEBHOOK_URL to Railway environment variables")
+            logger.error("   Example: WEBHOOK_URL=https://your-app.up.railway.app")
+            return False
+
         webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
         logger.info(f"🔗 Setting up webhook: {webhook_url}")
 
@@ -61,10 +68,11 @@ async def setup_webhook():
         logger.info(f"✅ Webhook set successfully!")
         logger.info(f"   URL: {webhook_info.url}")
         logger.info(f"   Pending updates: {webhook_info.pending_update_count}")
+        return True
 
     except Exception as e:
         logger.error(f"❌ Error setting up webhook: {e}", exc_info=True)
-        raise
+        return False
 
 def run_server():
     """Run the Flask server with webhook"""
@@ -76,7 +84,11 @@ def run_server():
     logger.info(f"📡 Flask will listen on port {port}")
 
     # Setup webhook asynchronously
-    asyncio.run(setup_webhook())
+    webhook_success = asyncio.run(setup_webhook())
+
+    if not webhook_success:
+        logger.warning("⚠️  Webhook setup failed, but Flask will still start")
+        logger.warning("   Add WEBHOOK_URL environment variable to enable webhook")
 
     # Start Flask server
     logger.info("🎯 Starting Flask server...")
