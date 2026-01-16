@@ -25,15 +25,18 @@ from web_app import app
 
 # Add webhook endpoint to Flask app
 @app.route(WEBHOOK_PATH, methods=['POST'])
-async def telegram_webhook():
+def telegram_webhook():
     """Handle incoming Telegram updates via webhook"""
     try:
         # Get the update from request
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, telegram_app.bot)
 
-        # Process the update
-        await telegram_app.process_update(update)
+        # Process the update asynchronously
+        async def process_update():
+            await telegram_app.process_update(update)
+
+        asyncio.run(process_update())
 
         return 'OK', 200
     except Exception as e:
