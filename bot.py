@@ -64,8 +64,25 @@ logger = logging.getLogger(__name__)
 # === Helper Functions ===
 
 def get_main_menu_keyboard():
-    """Создать постоянную клавиатуру с кнопкой меню"""
-    keyboard = [[KeyboardButton("📋 Меню")]]
+    """Главное меню - ReplyKeyboard (сетка 2x2)"""
+    keyboard = [
+        [KeyboardButton("💰 Зарплаты"), KeyboardButton("🗑️ Удалить чек")],
+        [KeyboardButton("📱 Приложение"), KeyboardButton("⚙️ Ещё")]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+
+def get_more_menu_keyboard():
+    """Подменю 'Ещё' - ReplyKeyboard"""
+    keyboard = [
+        [KeyboardButton("🏪 Закрыть кассу"), KeyboardButton("📝 Транзакции")],
+        [KeyboardButton("📊 Отчёт недели"), KeyboardButton("📈 Отчёт месяца")],
+        [KeyboardButton("← Назад")]
+    ]
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True,
@@ -495,7 +512,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📝 Просто отправьте:\n"
             f"   • Голосовое сообщение для транзакций\n"
             f"   • Фото накладной для поставок\n\n"
-            f"Нажмите кнопку 📋 Меню для просмотра всех команд",
+            f"Используйте кнопки меню внизу экрана 👇",
             reply_markup=get_main_menu_keyboard()
         )
     else:
@@ -1014,35 +1031,10 @@ async def price_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @admin_only
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /menu command - показать меню с кнопками"""
-    keyboard = [
-        [
-            InlineKeyboardButton("📱 Мобильное приложение", web_app=WebAppInfo(url=WEBAPP_URL))
-        ],
-        [
-            InlineKeyboardButton("🏪 Закрыть кассу", callback_data="close_cash_register")
-        ],
-        [
-            InlineKeyboardButton("🗑️ Удалить чек", callback_data="delete_receipt_mode")
-        ],
-        [
-            InlineKeyboardButton("💰 Рассчитать зарплаты", callback_data="calculate_salaries")
-        ],
-        [
-            InlineKeyboardButton("📝 Создать дневные транзакции", callback_data="create_daily_transactions")
-        ],
-        [
-            InlineKeyboardButton("📊 Еженедельный отчёт", callback_data="generate_weekly_report"),
-            InlineKeyboardButton("📈 Месячный отчёт", callback_data="generate_monthly_report")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
+    """Handle /menu command - показать главное меню (ReplyKeyboard)"""
     await update.message.reply_text(
-        "🎛️ **Главное меню**\n\n"
-        "Выберите действие:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        "Выберите действие 👇",
+        reply_markup=get_main_menu_keyboard()
     )
 
 
@@ -1480,9 +1472,102 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Text message from user {user_id} in chat type: {chat_type}")
 
-    # Check if user pressed the menu button
-    if update.message.text == "📋 Меню":
-        await menu_command(update, context)
+    # Check if user pressed menu buttons (ReplyKeyboard)
+    text = update.message.text
+
+    # Главное меню
+    if text == "💰 Зарплаты":
+        # Показать выбор количества кассиров
+        keyboard = [
+            [
+                InlineKeyboardButton("👥 2 кассира", callback_data="cashiers_2"),
+                InlineKeyboardButton("👥👥 3 кассира", callback_data="cashiers_3")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "💰 **Расчёт зарплат**\n\n"
+            "Сколько кассиров на смене сегодня?",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+
+    elif text == "🗑️ Удалить чек":
+        # Активировать режим удаления чека
+        context.user_data['waiting_for_receipt_photo'] = True
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel_receipt_delete")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "📸 **Режим удаления чека активирован**\n\n"
+            "Отправьте фото чека, который нужно удалить.\n\n"
+            "Бот распознает дату, время и сумму, найдёт заказ в Poster и предложит его удалить.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+
+    elif text == "📱 Приложение":
+        # Отправить ссылку на WebApp
+        keyboard = [[InlineKeyboardButton("📱 Открыть приложение", web_app=WebAppInfo(url=WEBAPP_URL))]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Нажмите кнопку, чтобы открыть приложение:",
+            reply_markup=reply_markup
+        )
+        return
+
+    elif text == "⚙️ Ещё":
+        # Показать подменю
+        await update.message.reply_text(
+            "Дополнительные функции:",
+            reply_markup=get_more_menu_keyboard()
+        )
+        return
+
+    elif text == "← Назад":
+        # Вернуться в главное меню
+        await update.message.reply_text(
+            "Главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
+    # Подменю "Ещё"
+    elif text == "🏪 Закрыть кассу":
+        # Показать выбор отдела
+        keyboard = [
+            [
+                InlineKeyboardButton("🍕 PizzBurg", callback_data="close_cash_dept:pittsburgh"),
+                InlineKeyboardButton("☕ PizzBurg Cafe", callback_data="close_cash_dept:pittsburgh_cafe")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "🏪 **Закрытие кассы**\n\n"
+            "Выберите отдел:",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+
+    elif text == "📝 Транзакции":
+        # Создать дневные транзакции
+        await update.message.reply_text("⏳ Создаю дневные транзакции...")
+        await run_daily_transactions_for_user(update.effective_user.id)
+        await update.message.reply_text("✅ Дневные транзакции созданы!")
+        return
+
+    elif text == "📊 Отчёт недели":
+        # Сгенерировать еженедельный отчёт
+        await update.message.reply_text("⏳ Генерирую еженедельный отчёт...")
+        await run_weekly_report_for_user(update.effective_user.id, context.application)
+        return
+
+    elif text == "📈 Отчёт месяца":
+        # Сгенерировать месячный отчёт
+        await update.message.reply_text("⏳ Генерирую месячный отчёт...")
+        await run_monthly_report_for_user(update.effective_user.id, context.application)
         return
 
     # Check if user is in onboarding flow (BEFORE authorization check)
@@ -1519,7 +1604,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if in salary flow (расчет зарплат)
     if 'salary_flow' in context.user_data:
         step = context.user_data['salary_flow'].get('step')
-        text = update.message.text
 
         if step == 'waiting_cashier_names':
             await salary_flow_handlers.handle_cashier_names(update, context, text)
