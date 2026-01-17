@@ -17,11 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize the Telegram bot application
-logger.info("🔧 Initializing Telegram bot...")
-telegram_app = initialize_application()
-
-# Global variable to store the event loop
+# Global variables
+telegram_app = None
 bot_event_loop = None
 
 # Import Flask app from web_app
@@ -32,19 +29,20 @@ from web_app import app
 def telegram_webhook():
     """Handle incoming Telegram updates via webhook"""
     try:
+        # Check if bot is initialized
+        if not telegram_app or not bot_event_loop:
+            logger.error("Bot not initialized yet")
+            return 'Service Unavailable', 503
+
         # Get the update from request
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, telegram_app.bot)
 
         # Schedule update processing in the bot's event loop
-        if bot_event_loop:
-            asyncio.run_coroutine_threadsafe(
-                telegram_app.update_queue.put(update),
-                bot_event_loop
-            )
-        else:
-            logger.error("Bot event loop not available")
-            return 'Service Unavailable', 503
+        asyncio.run_coroutine_threadsafe(
+            telegram_app.update_queue.put(update),
+            bot_event_loop
+        )
 
         return 'OK', 200
     except Exception as e:
@@ -53,12 +51,16 @@ def telegram_webhook():
 
 async def setup_webhook():
     """Setup webhook on Telegram"""
-    global bot_event_loop
+    global bot_event_loop, telegram_app
 
     try:
         # Store the current event loop
         bot_event_loop = asyncio.get_running_loop()
         logger.info(f"✅ Bot event loop captured")
+
+        # Initialize the Telegram bot application in THIS event loop
+        logger.info("🔧 Initializing Telegram bot...")
+        telegram_app = initialize_application()
 
         # Validate WEBHOOK_URL is set
         if not WEBHOOK_URL:

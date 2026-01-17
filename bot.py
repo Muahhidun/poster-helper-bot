@@ -2967,10 +2967,13 @@ async def handle_assistant_time_and_calculate(update: Update, context: ContextTy
         message_lines = ["✅ **Зарплаты рассчитаны!**\n"]
 
         if cashier_result['success']:
+            salaries = cashier_result['salaries']
+            salary_per_cashier = salaries[0]['salary'] if salaries else 0
+            transaction_ids = [s['transaction_id'] for s in salaries]
             message_lines.append(f"👥 **Кассиры ({cashier_count} чел):**")
-            message_lines.append(f"   Продажи: {cashier_result['total_sales']/100:,.0f}₸".replace(',', ' '))
-            message_lines.append(f"   Зарплата каждого: {cashier_result['salary_per_cashier']:,}₸".replace(',', ' '))
-            message_lines.append(f"   ID транзакций: {', '.join(str(id) for id in cashier_result['transaction_ids'])}")
+            for s in salaries:
+                message_lines.append(f"   {s['name']}: {s['salary']:,}₸".replace(',', ' '))
+            message_lines.append(f"   ID транзакций: {', '.join(str(id) for id in transaction_ids)}")
         else:
             message_lines.append(f"❌ Ошибка расчёта кассиров: {cashier_result.get('error')}")
 
