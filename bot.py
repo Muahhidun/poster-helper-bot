@@ -496,10 +496,25 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command with onboarding for new users"""
     from database import get_database
+    from telegram import MenuButtonWebApp, WebAppInfo
 
     user = update.effective_user
     telegram_user_id = user.id
+    chat_id = update.effective_chat.id
     db = get_database()
+
+    # Установить MenuButton WebApp для этого чата
+    try:
+        await context.bot.set_chat_menu_button(
+            chat_id=chat_id,
+            menu_button=MenuButtonWebApp(
+                text="📱 App",
+                web_app=WebAppInfo(url=WEBAPP_URL)
+            )
+        )
+        logger.info(f"✅ MenuButton WebApp установлен для чата {chat_id}")
+    except Exception as e:
+        logger.warning(f"Не удалось установить MenuButton: {e}")
 
     # Check if user exists
     user_data = db.get_user(telegram_user_id)
