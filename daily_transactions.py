@@ -195,8 +195,8 @@ class DailyTransactionScheduler:
         # 3× Логистика - Доставка продуктов (ID=24) с разными комментариями
         logistics_configs = [
             {"comment": "Караганда", "amount": 1},
-            {"comment": "Фарш", "amount": 600},
-            {"comment": "Кюрдамир", "amount": 600}
+            {"comment": "Фарш", "amount": 700},
+            {"comment": "Кюрдамир", "amount": 1000}
         ]
         for config in logistics_configs:
             tx_id = await poster_client.create_transaction(
