@@ -1,8 +1,10 @@
 """
-Accounts Check Module - сверка счетов двух отделов
+Accounts Check Module - интерактивная сверка счетов двух отделов
 
-Суммирует балансы одноименных счетов из PizzBurg и Pizzburg-cafe (SunDay)
-для сравнения с фактическими остатками.
+Сверяет 3 основных счета:
+- Оставил в кассе (на закупы)
+- Kaspi Pay
+- Халык банк
 """
 
 import logging
@@ -12,59 +14,31 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
-# Маппинг счетов между отделами (имена могут немного отличаться)
-ACCOUNT_MAPPING = {
-    # PizzBurg name -> Pizzburg-cafe name (если отличается)
-    "Kaspi Pay": "Kaspi Pay",
-    "Денежный ящик (Кассира)": "Денежный ящик (Кассира)",
-    "Инкассация (вечером)": "Инкассация (вечером)",
-    "Оставил в кассе (на закупы)": "Оставил в кассе (на закупы)",
-    "Деньги дома (отложенные)": "Деньги дома (отложенные)",
-    "Wolt доставка": "Wolt доставка",
-    "Халык банк": "Халык банк",
-    "Форте банк": "Форте банк",
-    "Прибыль": "Прибыль",
-    "На налоги": "На налоги",
-}
-
-# Счета, которые физически общие для двух отделов
-SHARED_PHYSICAL_ACCOUNTS = [
+# Счета для сверки (в порядке запроса)
+ACCOUNTS_TO_CHECK = [
+    "Оставил в кассе (на закупы)",
     "Kaspi Pay",
     "Халык банк",
-    "Форте банк",
-    "Деньги дома (отложенные)",
-    "Прибыль",
 ]
 
 
 @dataclass
-class AccountBalance:
-    """Баланс счета"""
-    account_id: int
+class AccountCheckResult:
+    """Результат сверки одного счета"""
     name: str
-    balance: float
-    account_type: str  # 'cash' or 'bank'
+    poster_pb: float  # Баланс в PizzBurg
+    poster_cafe: float  # Баланс в Cafe
+    poster_total: float  # Сумма в Poster
+    actual: float  # Фактический баланс
+    discrepancy: float  # Расхождение (poster - actual)
 
 
-@dataclass
-class CombinedAccountBalance:
-    """Объединенный баланс из двух отделов"""
-    name: str
-    pizzburg_balance: float
-    cafe_balance: float
-    total_poster: float
-    is_shared: bool  # True если физически один счет
-
-
-async def get_all_account_balances(telegram_user_id: int) -> Tuple[
-    List[AccountBalance],  # PizzBurg accounts
-    List[AccountBalance],  # Pizzburg-cafe accounts
-]:
+async def get_poster_balances(telegram_user_id: int) -> Dict[str, Tuple[float, float]]:
     """
-    Получить балансы счетов из обоих отделов
+    Получить балансы нужных счетов из обоих отделов
 
     Returns:
-        Tuple of (pizzburg_accounts, cafe_accounts)
+        Dict[account_name] -> (pizzburg_balance, cafe_balance)
     """
     from database import get_database
     from poster_client import PosterClient
@@ -72,11 +46,11 @@ async def get_all_account_balances(telegram_user_id: int) -> Tuple[
     db = get_database()
     accounts = db.get_accounts(telegram_user_id)
 
-    pizzburg_balances = []
-    cafe_balances = []
+    balances = {name: [0.0, 0.0] for name in ACCOUNTS_TO_CHECK}
 
     for account in accounts:
         account_name = account['account_name']
+        is_cafe = 'cafe' in account_name.lower() or 'sunday' in account_name.lower()
 
         client = PosterClient(
             telegram_user_id=telegram_user_id,
@@ -88,202 +62,124 @@ async def get_all_account_balances(telegram_user_id: int) -> Tuple[
         try:
             poster_accounts = await client.get_accounts()
 
-            balances = []
             for acc in poster_accounts:
-                # API возвращает баланс в тиынах (копейках), делим на 100
-                raw_balance = float(acc.get('balance', 0))
-                balance = AccountBalance(
-                    account_id=int(acc.get('account_id', 0)),
-                    name=acc.get('name', 'Unknown'),
-                    balance=raw_balance / 100,  # Конвертируем тиыны в тенге
-                    account_type=acc.get('type', 'cash')
-                )
-                balances.append(balance)
-
-            # Определяем какой это аккаунт
-            if 'cafe' in account_name.lower() or 'sunday' in account_name.lower():
-                cafe_balances = balances
-            else:
-                pizzburg_balances = balances
+                acc_name = acc.get('name', '')
+                if acc_name in ACCOUNTS_TO_CHECK:
+                    # API возвращает в тиынах, делим на 100
+                    balance = float(acc.get('balance', 0)) / 100
+                    if is_cafe:
+                        balances[acc_name][1] = balance
+                    else:
+                        balances[acc_name][0] = balance
 
         finally:
             await client.close()
 
-    return pizzburg_balances, cafe_balances
+    # Конвертируем в tuple
+    return {name: (pb, cafe) for name, (pb, cafe) in balances.items()}
 
 
-def combine_account_balances(
-    pizzburg_accounts: List[AccountBalance],
-    cafe_accounts: List[AccountBalance]
-) -> List[CombinedAccountBalance]:
+def calculate_all_discrepancies(
+    poster_balances: Dict[str, Tuple[float, float]],
+    actual_balances: Dict[str, float]
+) -> List[AccountCheckResult]:
     """
-    Объединить балансы из двух отделов
-
-    Для физически общих счетов (Kaspi Pay, Халык банк) показываем сумму.
-    """
-    combined = {}
-
-    # Добавляем счета PizzBurg
-    for acc in pizzburg_accounts:
-        name = acc.name
-        combined[name] = CombinedAccountBalance(
-            name=name,
-            pizzburg_balance=acc.balance,
-            cafe_balance=0,
-            total_poster=acc.balance,
-            is_shared=name in SHARED_PHYSICAL_ACCOUNTS
-        )
-
-    # Добавляем/объединяем счета Pizzburg-cafe
-    for acc in cafe_accounts:
-        name = acc.name
-        if name in combined:
-            combined[name].cafe_balance = acc.balance
-            combined[name].total_poster = combined[name].pizzburg_balance + acc.balance
-        else:
-            combined[name] = CombinedAccountBalance(
-                name=name,
-                pizzburg_balance=0,
-                cafe_balance=acc.balance,
-                total_poster=acc.balance,
-                is_shared=name in SHARED_PHYSICAL_ACCOUNTS
-            )
-
-    return list(combined.values())
-
-
-def format_accounts_for_check(combined: List[CombinedAccountBalance]) -> str:
-    """
-    Форматировать счета для сверки
-
-    Показывает:
-    - Счета с разбивкой по отделам
-    - Итого в Poster
-    - Поле для ввода фактического остатка
-    """
-    lines = ["📊 *Сверка счетов*\n"]
-
-    # Сначала общие физические счета
-    shared = [c for c in combined if c.is_shared]
-    if shared:
-        lines.append("*Общие счета (один физический счет):*")
-        for acc in sorted(shared, key=lambda x: x.name):
-            lines.append(f"  `{acc.name}`")
-            lines.append(f"    PizzBurg: {acc.pizzburg_balance:,.0f}₸")
-            lines.append(f"    Cafe: {acc.cafe_balance:,.0f}₸")
-            lines.append(f"    *ИТОГО в Poster: {acc.total_poster:,.0f}₸*")
-            lines.append("")
-
-    # Отдельные счета (разные физические)
-    separate = [c for c in combined if not c.is_shared]
-    if separate:
-        lines.append("*Раздельные счета:*")
-        for acc in sorted(separate, key=lambda x: x.name):
-            if acc.pizzburg_balance != 0:
-                lines.append(f"  `{acc.name}` (PB): {acc.pizzburg_balance:,.0f}₸")
-            if acc.cafe_balance != 0:
-                lines.append(f"  `{acc.name}` (Cafe): {acc.cafe_balance:,.0f}₸")
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-def format_accounts_simple(combined: List[CombinedAccountBalance]) -> str:
-    """
-    Простой формат для сверки - только общие счета с итогами
-    """
-    lines = ["📊 Сверка счетов\n"]
-    lines.append("Общие счета (сумма двух отделов):\n")
-
-    shared = [c for c in combined if c.is_shared]
-    for acc in sorted(shared, key=lambda x: x.name):
-        lines.append(f"  {acc.name}")
-        lines.append(f"    PB: {acc.pizzburg_balance:,.2f}₸")
-        lines.append(f"    Cafe: {acc.cafe_balance:,.2f}₸")
-        lines.append(f"    ИТОГО: {acc.total_poster:,.2f}₸\n")
-
-    # Показать также раздельные счета (не общие физически)
-    separate = [c for c in combined if not c.is_shared and (c.pizzburg_balance != 0 or c.cafe_balance != 0)]
-    if separate:
-        lines.append("\nРаздельные счета:\n")
-        for acc in sorted(separate, key=lambda x: x.name):
-            if acc.pizzburg_balance != 0 and acc.cafe_balance != 0:
-                lines.append(f"  {acc.name}")
-                lines.append(f"    PB: {acc.pizzburg_balance:,.2f}₸  Cafe: {acc.cafe_balance:,.2f}₸")
-            elif acc.pizzburg_balance != 0:
-                lines.append(f"  {acc.name} (PB): {acc.pizzburg_balance:,.2f}₸")
-            elif acc.cafe_balance != 0:
-                lines.append(f"  {acc.name} (Cafe): {acc.cafe_balance:,.2f}₸")
-
-    lines.append("\n💡 /check Kaspi Pay 1550000 - расчёт расхождения")
-
-    return "\n".join(lines)
-
-
-async def get_accounts_summary(telegram_user_id: int) -> str:
-    """
-    Получить сводку по счетам для быстрой сверки
-
-    Returns:
-        Форматированная строка с балансами
-    """
-    try:
-        pizzburg, cafe = await get_all_account_balances(telegram_user_id)
-        combined = combine_account_balances(pizzburg, cafe)
-        return format_accounts_simple(combined)
-    except Exception as e:
-        logger.error(f"Failed to get accounts summary: {e}", exc_info=True)
-        return f"Ошибка получения счетов: {str(e)}"
-
-
-async def calculate_discrepancy(
-    telegram_user_id: int,
-    account_name: str,
-    actual_balance: float
-) -> Tuple[float, str]:
-    """
-    Рассчитать расхождение по счету
+    Рассчитать расхождения по всем счетам
 
     Args:
-        telegram_user_id: ID пользователя
-        account_name: Имя счета (например "Kaspi Pay")
-        actual_balance: Фактический остаток
+        poster_balances: {account_name: (pb_balance, cafe_balance)}
+        actual_balances: {account_name: actual_balance}
 
     Returns:
-        Tuple of (discrepancy, formatted_message)
-        Положительное значение = в Poster больше чем по факту
+        List of AccountCheckResult
     """
+    results = []
+
+    for name in ACCOUNTS_TO_CHECK:
+        pb, cafe = poster_balances.get(name, (0, 0))
+        poster_total = pb + cafe
+        actual = actual_balances.get(name, 0)
+        discrepancy = poster_total - actual
+
+        results.append(AccountCheckResult(
+            name=name,
+            poster_pb=pb,
+            poster_cafe=cafe,
+            poster_total=poster_total,
+            actual=actual,
+            discrepancy=discrepancy
+        ))
+
+    return results
+
+
+def format_discrepancy_report(results: List[AccountCheckResult]) -> str:
+    """
+    Форматировать отчет о расхождениях
+    """
+    lines = ["📊 Результаты сверки\n"]
+
+    total_discrepancy = 0
+
+    for r in results:
+        # Определяем статус
+        if abs(r.discrepancy) < 1:
+            status = "✅"
+            disc_str = "0"
+        elif r.discrepancy > 0:
+            status = "🔴"
+            disc_str = f"+{r.discrepancy:,.0f}"
+        else:
+            status = "🔴"
+            disc_str = f"{r.discrepancy:,.0f}"
+
+        lines.append(f"{status} {r.name}")
+        lines.append(f"   Расхождение: {disc_str}₸")
+        lines.append("")
+
+        total_discrepancy += r.discrepancy
+
+    # Итого
+    lines.append("─" * 25)
+    if abs(total_discrepancy) < 1:
+        lines.append("✅ Всё сходится!")
+    else:
+        sign = "+" if total_discrepancy > 0 else ""
+        lines.append(f"Общее расхождение: {sign}{total_discrepancy:,.0f}₸")
+
+    return "\n".join(lines)
+
+
+def get_short_name(account_name: str) -> str:
+    """Короткое название для запроса"""
+    if "закуп" in account_name.lower():
+        return "Закуп"
+    elif "kaspi" in account_name.lower():
+        return "Kaspi Pay"
+    elif "халык" in account_name.lower():
+        return "Халык"
+    return account_name
+
+
+async def send_accounts_check_reminder(telegram_user_id: int, app):
+    """Отправка напоминания о сверке счетов в 22:30"""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
     try:
-        pizzburg, cafe = await get_all_account_balances(telegram_user_id)
-        combined = combine_account_balances(pizzburg, cafe)
+        keyboard = [
+            [InlineKeyboardButton("🔄 Сверка счетов", callback_data="accounts_check_start")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Найти счет
-        for acc in combined:
-            if acc.name.lower() == account_name.lower():
-                discrepancy = acc.total_poster - actual_balance
+        await app.bot.send_message(
+            chat_id=telegram_user_id,
+            text="⏰ **Пора сверить счета!**\n\n"
+                 "Нажмите кнопку ниже или воспользуйтесь кнопкой в главном меню.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
 
-                if discrepancy > 0:
-                    sign = "+"
-                    status = "переплата в Poster"
-                elif discrepancy < 0:
-                    sign = ""
-                    status = "недостача в Poster"
-                else:
-                    sign = ""
-                    status = "сходится"
-
-                message = (
-                    f"📊 Сверка: {acc.name}\n\n"
-                    f"В Poster: {acc.total_poster:,.0f}₸\n"
-                    f"  (PB: {acc.pizzburg_balance:,.0f}₸ + Cafe: {acc.cafe_balance:,.0f}₸)\n"
-                    f"По факту: {actual_balance:,.0f}₸\n\n"
-                    f"Расхождение: {sign}{discrepancy:,.0f}₸ ({status})"
-                )
-
-                return discrepancy, message
-
-        return 0, f"Счет '{account_name}' не найден"
+        logger.info(f"✅ Отправлено напоминание о сверке счетов пользователю {telegram_user_id}")
 
     except Exception as e:
-        logger.error(f"Failed to calculate discrepancy: {e}", exc_info=True)
-        return 0, f"Ошибка: {str(e)}"
+        logger.error(f"❌ Ошибка отправки напоминания о сверке счетов: {e}")
