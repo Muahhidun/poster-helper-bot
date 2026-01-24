@@ -1240,6 +1240,70 @@ async def daily_transfers_command(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"❌ Ошибка создания переводов: {e}")
 
 
+@authorized_only
+async def accounts_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /accounts_check command - сверка счетов двух отделов
+
+    Показывает суммарные балансы из PizzBurg и Pizzburg-cafe
+    для сравнения с фактическими остатками.
+    """
+    telegram_user_id = update.effective_user.id
+
+    await update.message.reply_text("📊 Загружаю балансы счетов из обоих отделов...")
+
+    try:
+        from accounts_check import get_accounts_summary
+        summary = await get_accounts_summary(telegram_user_id)
+        await update.message.reply_text(summary)
+
+    except Exception as e:
+        logger.error(f"Accounts check failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка сверки счетов: {str(e)[:300]}")
+
+
+@authorized_only
+async def check_discrepancy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /check command - проверка расхождения по конкретному счету
+
+    Usage: /check Kaspi Pay 1500000
+    """
+    telegram_user_id = update.effective_user.id
+
+    # Parse arguments
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "📊 Использование: /check <название_счета> <фактический_остаток>\n\n"
+            "Примеры:\n"
+            "  /check Kaspi Pay 1500000\n"
+            "  /check Халык банк 2350000\n\n"
+            "Сначала выполните /accounts_check чтобы увидеть все счета."
+        )
+        return
+
+    try:
+        # Last argument is the amount, everything before is account name
+        actual_balance = float(context.args[-1].replace(',', '').replace(' ', ''))
+        account_name = ' '.join(context.args[:-1])
+
+        from accounts_check import calculate_discrepancy
+        discrepancy, message = await calculate_discrepancy(
+            telegram_user_id, account_name, actual_balance
+        )
+
+        await update.message.reply_text(message)
+
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Неверный формат суммы. Используйте число без пробелов.\n"
+            "Пример: /check Kaspi Pay 1500000"
+        )
+    except Exception as e:
+        logger.error(f"Check discrepancy failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {str(e)[:300]}")
+
+
 # === Voice Handler ===
 
 @authorized_only
@@ -5365,6 +5429,10 @@ def initialize_application():
     app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
     app.add_handler(CommandHandler("price_check", price_check_command))
     app.add_handler(CommandHandler("add_cafe", add_second_account_command))
+
+    # Accounts check commands (сверка счетов двух отделов)
+    app.add_handler(CommandHandler("accounts_check", accounts_check_command))
+    app.add_handler(CommandHandler("check", check_discrepancy_command))
 
     # Shipment template commands
     app.add_handler(CommandHandler("templates", templates_command))
