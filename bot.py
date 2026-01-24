@@ -3500,9 +3500,6 @@ async def handle_accounts_check_input(update: Update, context: ContextTypes.DEFA
 
             report = format_discrepancy_report(results)
 
-            # Добавляем детализацию ввода по Халык (торговля + остаток)
-            report += f"\n\n💡 Халык ввод: {amount1:,.0f} (торговля) + {amount2:,.0f} (остаток) = {halyk_total:,.0f}₸"
-
             # Очищаем состояние
             del context.user_data['accounts_check']
 
