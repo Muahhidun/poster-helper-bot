@@ -90,10 +90,12 @@ async def get_all_account_balances(telegram_user_id: int) -> Tuple[
 
             balances = []
             for acc in poster_accounts:
+                # API возвращает баланс в тиынах (копейках), делим на 100
+                raw_balance = float(acc.get('balance', 0))
                 balance = AccountBalance(
                     account_id=int(acc.get('account_id', 0)),
                     name=acc.get('name', 'Unknown'),
-                    balance=float(acc.get('balance', 0)),
+                    balance=raw_balance / 100,  # Конвертируем тиыны в тенге
                     account_type=acc.get('type', 'cash')
                 )
                 balances.append(balance)
@@ -196,11 +198,24 @@ def format_accounts_simple(combined: List[CombinedAccountBalance]) -> str:
     shared = [c for c in combined if c.is_shared]
     for acc in sorted(shared, key=lambda x: x.name):
         lines.append(f"  {acc.name}")
-        lines.append(f"    PB: {acc.pizzburg_balance:,.0f}₸  Cafe: {acc.cafe_balance:,.0f}₸")
-        lines.append(f"    ИТОГО: {acc.total_poster:,.0f}₸\n")
+        lines.append(f"    PB: {acc.pizzburg_balance:,.2f}₸")
+        lines.append(f"    Cafe: {acc.cafe_balance:,.2f}₸")
+        lines.append(f"    ИТОГО: {acc.total_poster:,.2f}₸\n")
 
-    lines.append("\nВведите фактические остатки через бота")
-    lines.append("или скопируйте итоги для сравнения.")
+    # Показать также раздельные счета (не общие физически)
+    separate = [c for c in combined if not c.is_shared and (c.pizzburg_balance != 0 or c.cafe_balance != 0)]
+    if separate:
+        lines.append("\nРаздельные счета:\n")
+        for acc in sorted(separate, key=lambda x: x.name):
+            if acc.pizzburg_balance != 0 and acc.cafe_balance != 0:
+                lines.append(f"  {acc.name}")
+                lines.append(f"    PB: {acc.pizzburg_balance:,.2f}₸  Cafe: {acc.cafe_balance:,.2f}₸")
+            elif acc.pizzburg_balance != 0:
+                lines.append(f"  {acc.name} (PB): {acc.pizzburg_balance:,.2f}₸")
+            elif acc.cafe_balance != 0:
+                lines.append(f"  {acc.name} (Cafe): {acc.cafe_balance:,.2f}₸")
+
+    lines.append("\n💡 /check Kaspi Pay 1550000 - расчёт расхождения")
 
     return "\n".join(lines)
 
