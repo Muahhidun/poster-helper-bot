@@ -67,7 +67,7 @@ def get_main_menu_keyboard():
     """Главное меню - ReplyKeyboard (сетка 2x2)"""
     keyboard = [
         [KeyboardButton("💰 Зарплаты"), KeyboardButton("🗑️ Удалить чек")],
-        [KeyboardButton("📱 Приложение"), KeyboardButton("⚙️ Ещё")]
+        [KeyboardButton("🔄 Сверка счетов"), KeyboardButton("⚙️ Ещё")]
     ]
     return ReplyKeyboardMarkup(
         keyboard,
@@ -81,7 +81,7 @@ def get_more_menu_keyboard():
     keyboard = [
         [KeyboardButton("🏪 Закрыть кассу"), KeyboardButton("📝 Транзакции")],
         [KeyboardButton("📊 Отчёт недели"), KeyboardButton("📈 Отчёт месяца")],
-        [KeyboardButton("🔄 Сверка счетов"), KeyboardButton("← Назад")]
+        [KeyboardButton("← Назад")]
     ]
     return ReplyKeyboardMarkup(
         keyboard,
