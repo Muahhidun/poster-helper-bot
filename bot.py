@@ -1650,15 +1650,34 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "🔄 Сверка счетов":
-        # Сверка счетов двух отделов
-        await update.message.reply_text("📊 Загружаю балансы счетов из обоих отделов...")
+        # Начинаем интерактивную сверку счетов
+        await update.message.reply_text("📊 Загружаю данные из Poster...")
         try:
-            from accounts_check import get_accounts_summary
-            summary = await get_accounts_summary(update.effective_user.id)
-            await update.message.reply_text(summary)
+            from accounts_check import get_poster_balances, ACCOUNTS_TO_CHECK
+
+            # Получаем балансы из Poster (без показа пользователю)
+            poster_balances = await get_poster_balances(update.effective_user.id)
+
+            # Сохраняем в context для последующих шагов
+            context.user_data['accounts_check'] = {
+                'step': 0,  # 0=Закуп, 1=Kaspi, 2=Халык
+                'poster_balances': poster_balances,
+                'actual_balances': {}
+            }
+
+            # Запрашиваем первый счет
+            await update.message.reply_text(
+                "💵 Введите фактический остаток:\n\n"
+                "**Оставил в кассе (на закупы)**\n\n"
+                "Просто напишите число, например: 127500",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("❌ Отмена")]],
+                    resize_keyboard=True
+                )
+            )
         except Exception as e:
             logger.error(f"Accounts check failed: {e}", exc_info=True)
-            await update.message.reply_text(f"❌ Ошибка сверки счетов: {str(e)[:300]}")
+            await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
         return
 
     # Check if user is in onboarding flow (BEFORE authorization check)
@@ -1702,6 +1721,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif step == 'waiting_staff_names':
             await salary_flow_handlers.handle_staff_names(update, context, text)
             return
+
+    # Check if in accounts check flow (сверка счетов)
+    if 'accounts_check' in context.user_data:
+        await handle_accounts_check_input(update, context, text)
+        return
 
     # Check if in cash closing flow
     if 'cash_closing_data' in context.user_data:
@@ -3368,6 +3392,130 @@ async def handle_cash_closing_start(update: Update, context: ContextTypes.DEFAUL
         )
 
 
+async def handle_accounts_check_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """
+    Обработка ввода данных в интерактивной сверке счетов.
+
+    Шаги:
+    0 - Ждём ввод суммы Закуп
+    1 - Ждём ввод суммы Kaspi Pay
+    2 - Ждём ввод 2 сумм для Халык (торговля + остаток)
+    """
+    from accounts_check import ACCOUNTS_TO_CHECK, calculate_all_discrepancies, format_discrepancy_report
+
+    data = context.user_data.get('accounts_check')
+    if not data:
+        return
+
+    # Обработка отмены
+    if text == "❌ Отмена":
+        del context.user_data['accounts_check']
+        await update.message.reply_text(
+            "Сверка отменена.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
+    step = data['step']
+
+    # Шаг 0 и 1: ввод одной суммы
+    if step in [0, 1]:
+        try:
+            amount = float(text.replace(',', '.').replace(' ', ''))
+            if amount < 0:
+                await update.message.reply_text("❌ Сумма не может быть отрицательной. Попробуйте ещё раз:")
+                return
+
+            # Сохраняем сумму
+            account_name = ACCOUNTS_TO_CHECK[step]
+            data['actual_balances'][account_name] = amount
+
+            # Переходим к следующему шагу
+            data['step'] = step + 1
+
+            if step == 0:
+                # Запрашиваем Kaspi Pay
+                await update.message.reply_text(
+                    "💳 Введите фактический остаток:\n\n"
+                    "**Kaspi Pay**\n\n"
+                    "Просто напишите число, например: 45000",
+                    reply_markup=ReplyKeyboardMarkup(
+                        [[KeyboardButton("❌ Отмена")]],
+                        resize_keyboard=True
+                    ),
+                    parse_mode='Markdown'
+                )
+            else:
+                # Запрашиваем Халык (2 суммы)
+                await update.message.reply_text(
+                    "🏦 Введите фактический остаток:\n\n"
+                    "**Халык банк**\n\n"
+                    "Введите 2 числа через пробел или с новой строки:\n"
+                    "• Торговля за сегодня\n"
+                    "• Остаток на счёте\n\n"
+                    "Например: 85000 120000",
+                    reply_markup=ReplyKeyboardMarkup(
+                        [[KeyboardButton("❌ Отмена")]],
+                        resize_keyboard=True
+                    ),
+                    parse_mode='Markdown'
+                )
+
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат. Введите число, например: 127500")
+            return
+
+    # Шаг 2: ввод 2 сумм для Халык
+    elif step == 2:
+        try:
+            # Парсим 2 числа (через пробел, запятую, или с новой строки)
+            import re
+            numbers = re.findall(r'[\d.,]+', text)
+
+            if len(numbers) < 2:
+                await update.message.reply_text(
+                    "❌ Нужно 2 числа.\n\n"
+                    "Введите торговлю за сегодня и остаток на счёте.\n"
+                    "Например: 85000 120000"
+                )
+                return
+
+            # Берём первые 2 числа
+            amount1 = float(numbers[0].replace(',', '.'))
+            amount2 = float(numbers[1].replace(',', '.'))
+
+            if amount1 < 0 or amount2 < 0:
+                await update.message.reply_text("❌ Суммы не могут быть отрицательными. Попробуйте ещё раз:")
+                return
+
+            # Сохраняем сумму Халык (сумма двух)
+            halyk_total = amount1 + amount2
+            data['actual_balances']['Халык банк'] = halyk_total
+
+            # Рассчитываем расхождения и показываем отчёт
+            results = calculate_all_discrepancies(
+                data['poster_balances'],
+                data['actual_balances']
+            )
+
+            report = format_discrepancy_report(results)
+
+            # Очищаем состояние
+            del context.user_data['accounts_check']
+
+            await update.message.reply_text(
+                report,
+                reply_markup=get_main_menu_keyboard()
+            )
+
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Неверный формат.\n\n"
+                "Введите 2 числа, например: 85000 120000"
+            )
+            return
+
+
 async def handle_cash_input_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода данных на текущем шаге закрытия кассы"""
     message = update.message
@@ -3876,6 +4024,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
+
+    # Обработка сверки счетов (из напоминания)
+    if query.data == "accounts_check_start":
+        from accounts_check import get_poster_balances, ACCOUNTS_TO_CHECK
+
+        await query.edit_message_text("📊 Загружаю данные из Poster...")
+        try:
+            # Получаем балансы из Poster (без показа пользователю)
+            poster_balances = await get_poster_balances(update.effective_user.id)
+
+            # Сохраняем в context для последующих шагов
+            context.user_data['accounts_check'] = {
+                'step': 0,  # 0=Закуп, 1=Kaspi, 2=Халык
+                'poster_balances': poster_balances,
+                'actual_balances': {}
+            }
+
+            # Запрашиваем первый счет
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text="💵 Введите фактический остаток:\n\n"
+                     "**Оставил в кассе (на закупы)**\n\n"
+                     "Просто напишите число, например: 127500",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("❌ Отмена")]],
+                    resize_keyboard=True
+                ),
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Accounts check failed: {e}", exc_info=True)
+            await context.bot.send_message(
+                chat_id=update.effective_user.id,
+                text=f"❌ Ошибка: {str(e)[:200]}"
+            )
+        return
 
     # Обработка диалога расчета зарплат
     if query.data == "salary_flow_start":
@@ -5260,6 +5444,27 @@ def setup_scheduler(app: Application):
         )
 
         logger.info(f"✅ Запланировано напоминание о зарплатах для пользователя {telegram_user_id} в 21:30 (Asia/Almaty)")
+
+    # Напоминание о сверке счетов для всех активных пользователей в 22:30
+    from accounts_check import send_accounts_check_reminder
+    for telegram_user_id in ALLOWED_USER_IDS:
+        # Триггер: каждый день в 22:30
+        accounts_check_trigger = CronTrigger(
+            hour=22,
+            minute=30,
+            timezone=astana_tz
+        )
+
+        scheduler.add_job(
+            send_accounts_check_reminder,
+            trigger=accounts_check_trigger,
+            args=[telegram_user_id, app],
+            id=f'accounts_check_reminder_{telegram_user_id}',
+            name=f'Напоминание о сверке счетов для пользователя {telegram_user_id}',
+            replace_existing=True
+        )
+
+        logger.info(f"✅ Запланировано напоминание о сверке счетов для пользователя {telegram_user_id} в 22:30 (Asia/Almaty)")
 
     # Запустить scheduler
     scheduler.start()
