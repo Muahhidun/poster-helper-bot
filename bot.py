@@ -1551,6 +1551,118 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка обработки фото: {str(e)[:200]}")
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document message (XLSX files for Kaspi statements)"""
+    try:
+        telegram_user_id = update.effective_user.id
+        document = update.message.document
+
+        if not document:
+            return
+
+        file_name = document.file_name or ""
+        logger.info(f"📄 Document received from user {telegram_user_id}: {file_name}")
+
+        # Проверяем расширение файла
+        is_xlsx = file_name.lower().endswith(('.xlsx', '.xls'))
+
+        if not is_xlsx:
+            await update.message.reply_text(
+                "❌ Поддерживаются только XLSX файлы (выписки Kaspi).\n\n"
+                "Для фото используйте обычную отправку изображений."
+            )
+            return
+
+        # Проверяем режим expense_input
+        expense_input = context.user_data.get('expense_input')
+
+        if not expense_input:
+            # Автоматически включаем режим для Kaspi
+            context.user_data['expense_input'] = {
+                'mode': 'waiting_photo',
+                'items': [],
+                'source': 'kaspi'
+            }
+            expense_input = context.user_data['expense_input']
+
+        await update.message.reply_text("📄 Обрабатываю выписку Kaspi...")
+
+        # Скачиваем файл
+        file = await document.get_file()
+        file_path = Path(f"storage/kaspi_{update.message.message_id}.xlsx")
+        await file.download_to_drive(file_path)
+
+        try:
+            from expense_input import (
+                parse_kaspi_xlsx,
+                ExpenseSession,
+                ExpenseType,
+                format_expense_list
+            )
+
+            # Парсим XLSX
+            items = parse_kaspi_xlsx(str(file_path))
+
+            if not items:
+                await update.message.reply_text(
+                    "❌ Не найдено расходов в выписке.\n\n"
+                    "Убедитесь что это выписка с расходами (Дебет), а не приходами."
+                )
+                return
+
+            # Сохраняем в сессию
+            expense_input['items'] = items
+            expense_input['mode'] = 'review'
+            expense_input['source'] = 'kaspi'
+
+            # Создаём сессию
+            session = ExpenseSession(
+                items=items,
+                source_account="Kaspi Pay"
+            )
+            expense_input['session'] = session
+
+            # Форматируем список
+            text = format_expense_list(session)
+
+            # Создаём inline кнопки для каждой позиции
+            keyboard = []
+            for i, item in enumerate(items[:15]):  # Ограничиваем 15 позициями для кнопок
+                type_label = "📦→💰" if item.expense_type == ExpenseType.SUPPLY else "💰→📦"
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{i+1}. {type_label} {item.description[:20]}",
+                        callback_data=f"exp_toggle:{item.id}"
+                    )
+                ])
+
+            if len(items) > 15:
+                text += f"\n\n⚠️ Показаны кнопки для первых 15 из {len(items)} позиций"
+
+            # Кнопки действий
+            keyboard.append([
+                InlineKeyboardButton("✅ Создать транзакции", callback_data="exp_create_kaspi"),
+                InlineKeyboardButton("❌ Отмена", callback_data="exp_cancel")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+
+        finally:
+            # Удаляем временный файл
+            if file_path.exists():
+                file_path.unlink()
+
+    except Exception as e:
+        logger.error(f"Document processing failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка обработки файла: {str(e)[:200]}")
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text message"""
     # Log chat info for debugging
@@ -1574,8 +1686,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text(
             "📥 **Режим ввода расходов**\n\n"
-            "Отправьте фото листа кассира с расходами.\n\n"
-            "Бот распознает текст и создаст список расходов с разбивкой на транзакции и поставки.",
+            "Отправьте:\n"
+            "• 📷 Фото листа кассира (наличка)\n"
+            "• 📄 XLSX выписку Kaspi\n\n"
+            "Бот распознает и создаст список расходов с разбивкой на транзакции и поставки.",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
             parse_mode='Markdown'
         )
@@ -3790,6 +3904,107 @@ async def handle_expense_callback(update: Update, context: ContextTypes.DEFAULT_
             logger.error(f"Ошибка создания транзакций: {e}", exc_info=True)
             await query.edit_message_text(f"❌ Ошибка: {str(e)[:200]}")
 
+    # Создать транзакции из Kaspi выписки
+    elif data == "exp_create_kaspi":
+        await query.edit_message_text("⏳ Создаю транзакции в Poster (Kaspi Pay)...")
+
+        try:
+            from database import get_database
+            from poster_client import PosterClient
+
+            telegram_user_id = update.effective_user.id
+            db = get_database()
+            accounts = db.get_accounts(telegram_user_id)
+
+            if not accounts:
+                await query.edit_message_text("❌ Нет подключенных аккаунтов Poster")
+                return
+
+            account = accounts[0]
+            client = PosterClient(
+                telegram_user_id=telegram_user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                # Получаем счета и категории
+                poster_accounts = await client.get_accounts()
+                categories = await client.get_categories()
+
+                # Находим счёт "Kaspi Pay"
+                account_id = None
+                for acc in poster_accounts:
+                    if "kaspi" in acc.get('name', '').lower():
+                        account_id = int(acc['account_id'])
+                        break
+
+                if not account_id and poster_accounts:
+                    # Fallback - первый счёт
+                    account_id = int(poster_accounts[0]['account_id'])
+                    logger.warning("Kaspi Pay не найден, использую первый счёт")
+
+                # Маппинг категорий
+                category_map = {}
+                for cat in categories:
+                    category_map[cat.get('category_name', '')] = int(cat.get('category_id', 1))
+
+                if "Прочее" not in category_map:
+                    category_map["Прочее"] = list(category_map.values())[0] if category_map else 1
+
+                # Создаём транзакции
+                transactions = session.get_transactions()
+                success = 0
+                errors = []
+
+                for item in transactions:
+                    try:
+                        cat_id = category_map.get(item.category, category_map.get("Прочее", 1))
+
+                        await client.create_transaction(
+                            transaction_type=0,
+                            category_id=cat_id,
+                            account_from_id=account_id,
+                            amount=int(item.amount),
+                            comment=item.description
+                        )
+                        success += 1
+                    except Exception as e:
+                        errors.append(f"{item.description}: {e}")
+
+                # Формируем результат
+                supplies = session.get_supplies()
+                result_text = f"✅ Создано транзакций (Kaspi Pay): {success}\n"
+
+                if errors:
+                    result_text += f"❌ Ошибок: {len(errors)}\n"
+
+                if supplies:
+                    result_text += f"\n📦 Осталось поставок: {len(supplies)}\n"
+                    for s in supplies[:10]:  # Ограничиваем 10
+                        result_text += f"  • {s.amount:,.0f}₸ — {s.description}\n"
+                    if len(supplies) > 10:
+                        result_text += f"  ... и ещё {len(supplies) - 10}\n"
+
+                # Очищаем сессию
+                del context.user_data['expense_input']
+
+                await query.edit_message_text(result_text)
+
+                await context.bot.send_message(
+                    chat_id=update.effective_user.id,
+                    text="Главное меню:",
+                    reply_markup=get_main_menu_keyboard()
+                )
+
+            finally:
+                await client.close()
+
+        except Exception as e:
+            logger.error(f"Ошибка создания транзакций Kaspi: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка: {str(e)[:200]}")
+
     # Отмена
     elif data == "exp_cancel":
         del context.user_data['expense_input']
@@ -5949,9 +6164,7 @@ def initialize_application():
 
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    # Handle documents (PDF or images sent as files without compression)
-    # Document handler removed (not needed for current functionality)
-    # app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.add_handler(CallbackQueryHandler(handle_callback))

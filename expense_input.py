@@ -444,3 +444,129 @@ async def create_transactions_in_poster(
         await client.close()
 
     return success_count, error_count, errors
+
+
+def parse_kaspi_xlsx(file_path: str) -> List[ExpenseItem]:
+    """
+    Парсинг выписки Kaspi из XLSX файла
+
+    Колонки:
+    - № документа (A)
+    - Дата операции (B)
+    - Дебет (C) - расход
+    - Кредит (D) - приход
+    - Наименование бенефициара (E)
+    - ИИК бенефициара (F)
+    - БИК банка (G)
+    - КНП (H)
+    - Назначение платежа (I)
+
+    Returns:
+        Список ExpenseItem (только расходы, без переводов себе)
+    """
+    from openpyxl import load_workbook
+    from datetime import datetime
+
+    logger.info(f"📄 Парсинг Kaspi выписки: {file_path}")
+
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    ws = wb.active
+
+    items = []
+    header_found = False
+    data_start_row = 0
+
+    # Ищем заголовок таблицы (строка с "№ документа" или "Дата операции")
+    for row_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=20, values_only=True), 1):
+        if row and any(cell and "документа" in str(cell).lower() for cell in row if cell):
+            header_found = True
+            data_start_row = row_idx + 2  # Пропускаем заголовок и номера колонок
+            break
+
+    if not header_found:
+        # Пробуем найти первую строку с данными
+        data_start_row = 1
+
+    # Читаем данные
+    for row in ws.iter_rows(min_row=data_start_row, values_only=True):
+        if not row or len(row) < 9:
+            continue
+
+        # Пропускаем итоговые строки
+        first_cell = str(row[0] or "").lower()
+        if "итого" in first_cell or not row[0]:
+            continue
+
+        try:
+            # Колонки: № док, Дата, Дебет, Кредит, Наименование, ИИК, БИК, КНП, Назначение
+            doc_num = row[0]
+            date_cell = row[1]
+            debit = row[2]  # Расход
+            credit = row[3]  # Приход
+            beneficiary = row[4]  # Наименование бенефициара
+            purpose = row[8]  # Назначение платежа
+
+            # Пропускаем если нет дебета (не расход)
+            if not debit or debit == 0:
+                continue
+
+            # Парсим сумму
+            if isinstance(debit, str):
+                amount = float(debit.replace(" ", "").replace(",", "."))
+            else:
+                amount = float(debit)
+
+            if amount <= 0:
+                continue
+
+            # Формируем описание
+            beneficiary_str = str(beneficiary or "").strip()
+            purpose_str = str(purpose or "").strip()
+
+            # Пропускаем переводы себе
+            if "перевод собственных" in purpose_str.lower():
+                logger.debug(f"Пропуск: перевод себе - {amount}₸")
+                continue
+
+            # Формируем описание
+            # Если есть "Оплата с Kaspi QR" - берём имя бенефициара
+            if "kaspi qr" in purpose_str.lower() or "оплата с kaspi" in purpose_str.lower():
+                description = beneficiary_str if beneficiary_str else purpose_str
+            else:
+                description = f"{beneficiary_str}: {purpose_str}" if beneficiary_str else purpose_str
+
+            # Убираем лишнее из описания
+            description = description.replace("АО \"KASPI BANK\"", "").strip()
+            description = description.replace("ИИН/БИН", "").strip()
+            if description.startswith(":"):
+                description = description[1:].strip()
+
+            # Определяем тип
+            expense_type = detect_expense_type(description)
+            category = detect_category(description)
+
+            item = ExpenseItem(
+                amount=amount,
+                description=description[:100],  # Ограничиваем длину
+                expense_type=expense_type,
+                category=category,
+                source="kaspi"
+            )
+            items.append(item)
+
+            logger.debug(f"Добавлен расход: {amount}₸ - {description[:50]}")
+
+        except (ValueError, TypeError) as e:
+            logger.debug(f"Пропуск строки: {e}")
+            continue
+
+    wb.close()
+
+    logger.info(f"✅ Распознано {len(items)} расходов из Kaspi выписки")
+    return items
+
+
+async def parse_kaspi_xlsx_from_file(file_path: str) -> List[ExpenseItem]:
+    """Асинхронная обёртка для parse_kaspi_xlsx"""
+    import asyncio
+    return await asyncio.get_event_loop().run_in_executor(None, parse_kaspi_xlsx, file_path)
