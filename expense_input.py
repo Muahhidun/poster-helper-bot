@@ -523,11 +523,6 @@ def parse_kaspi_xlsx(file_path: str) -> List[ExpenseItem]:
             beneficiary_str = str(beneficiary or "").strip()
             purpose_str = str(purpose or "").strip()
 
-            # Пропускаем переводы себе
-            if "перевод собственных" in purpose_str.lower():
-                logger.debug(f"Пропуск: перевод себе - {amount}₸")
-                continue
-
             # Формируем описание
             # Если есть "Оплата с Kaspi QR" - берём имя бенефициара
             if "kaspi qr" in purpose_str.lower() or "оплата с kaspi" in purpose_str.lower():
