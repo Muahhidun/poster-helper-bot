@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 def get_main_menu_keyboard():
     """Главное меню - ReplyKeyboard (сетка 2x2)"""
     keyboard = [
-        [KeyboardButton("💰 Зарплаты"), KeyboardButton("🗑️ Удалить чек")],
+        [KeyboardButton("📥 Расходы"), KeyboardButton("💰 Зарплаты")],
         [KeyboardButton("🔄 Сверка счетов"), KeyboardButton("⚙️ Ещё")]
     ]
     return ReplyKeyboardMarkup(
@@ -79,9 +79,9 @@ def get_main_menu_keyboard():
 def get_more_menu_keyboard():
     """Подменю 'Ещё' - ReplyKeyboard"""
     keyboard = [
-        [KeyboardButton("🏪 Закрыть кассу"), KeyboardButton("📝 Транзакции")],
+        [KeyboardButton("🏪 Закрыть кассу"), KeyboardButton("🗑️ Удалить чек")],
         [KeyboardButton("📊 Отчёт недели"), KeyboardButton("📈 Отчёт месяца")],
-        [KeyboardButton("← Назад")]
+        [KeyboardButton("📝 Транзакции"), KeyboardButton("← Назад")]
     ]
     return ReplyKeyboardMarkup(
         keyboard,
@@ -1371,6 +1371,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_path = Path(f"storage/photo_{update.message.message_id}.jpg")
         await photo_file.download_to_drive(photo_path)
 
+        # Check if user is in expense input mode
+        expense_input = context.user_data.get('expense_input')
+        if expense_input and expense_input.get('mode') == 'waiting_photo':
+            await handle_expense_photo(update, context, str(photo_path))
+            photo_path.unlink()
+            return
+
         # Check if user is in receipt deletion mode
         waiting_for_receipt = context.user_data.get('waiting_for_receipt_photo', False)
 
@@ -1544,6 +1551,118 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка обработки фото: {str(e)[:200]}")
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document message (XLSX files for Kaspi statements)"""
+    try:
+        telegram_user_id = update.effective_user.id
+        document = update.message.document
+
+        if not document:
+            return
+
+        file_name = document.file_name or ""
+        logger.info(f"📄 Document received from user {telegram_user_id}: {file_name}")
+
+        # Проверяем расширение файла
+        is_xlsx = file_name.lower().endswith(('.xlsx', '.xls'))
+
+        if not is_xlsx:
+            await update.message.reply_text(
+                "❌ Поддерживаются только XLSX файлы (выписки Kaspi).\n\n"
+                "Для фото используйте обычную отправку изображений."
+            )
+            return
+
+        # Проверяем режим expense_input
+        expense_input = context.user_data.get('expense_input')
+
+        if not expense_input:
+            # Автоматически включаем режим для Kaspi
+            context.user_data['expense_input'] = {
+                'mode': 'waiting_photo',
+                'items': [],
+                'source': 'kaspi'
+            }
+            expense_input = context.user_data['expense_input']
+
+        await update.message.reply_text("📄 Обрабатываю выписку Kaspi...")
+
+        # Скачиваем файл
+        file = await document.get_file()
+        file_path = Path(f"storage/kaspi_{update.message.message_id}.xlsx")
+        await file.download_to_drive(file_path)
+
+        try:
+            from expense_input import (
+                parse_kaspi_xlsx,
+                ExpenseSession,
+                ExpenseType,
+                format_expense_list
+            )
+
+            # Парсим XLSX
+            items = parse_kaspi_xlsx(str(file_path))
+
+            if not items:
+                await update.message.reply_text(
+                    "❌ Не найдено расходов в выписке.\n\n"
+                    "Убедитесь что это выписка с расходами (Дебет), а не приходами."
+                )
+                return
+
+            # Сохраняем в сессию
+            expense_input['items'] = items
+            expense_input['mode'] = 'review'
+            expense_input['source'] = 'kaspi'
+
+            # Создаём сессию
+            session = ExpenseSession(
+                items=items,
+                source_account="Kaspi Pay"
+            )
+            expense_input['session'] = session
+
+            # Форматируем список
+            text = format_expense_list(session)
+
+            # Создаём inline кнопки для каждой позиции
+            keyboard = []
+            for i, item in enumerate(items[:15]):  # Ограничиваем 15 позициями для кнопок
+                type_label = "📦→💰" if item.expense_type == ExpenseType.SUPPLY else "💰→📦"
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{i+1}. {type_label} {item.description[:20]}",
+                        callback_data=f"exp_toggle:{item.id}"
+                    )
+                ])
+
+            if len(items) > 15:
+                text += f"\n\n⚠️ Показаны кнопки для первых 15 из {len(items)} позиций"
+
+            # Кнопки действий
+            keyboard.append([
+                InlineKeyboardButton("✅ Создать транзакции", callback_data="exp_create_kaspi"),
+                InlineKeyboardButton("❌ Отмена", callback_data="exp_cancel")
+            ])
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+
+        finally:
+            # Удаляем временный файл
+            if file_path.exists():
+                file_path.unlink()
+
+    except Exception as e:
+        logger.error(f"Document processing failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка обработки файла: {str(e)[:200]}")
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text message"""
     # Log chat info for debugging
@@ -1555,7 +1674,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     # Главное меню
-    if text == "💰 Зарплаты":
+    if text == "📥 Расходы":
+        # Начинаем режим ввода расходов
+        context.user_data['expense_input'] = {
+            'mode': 'waiting_photo',  # Ждём фото листа кассира
+            'items': [],
+            'source': 'наличка'
+        }
+        keyboard = [
+            [KeyboardButton("✅ Готово"), KeyboardButton("❌ Отмена")]
+        ]
+        await update.message.reply_text(
+            "📥 **Режим ввода расходов**\n\n"
+            "Отправьте:\n"
+            "• 📷 Фото листа кассира (наличка)\n"
+            "• 📄 XLSX выписку Kaspi\n\n"
+            "Бот распознает и создаст список расходов с разбивкой на транзакции и поставки.",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+            parse_mode='Markdown'
+        )
+        return
+
+    elif text == "💰 Зарплаты":
         # Показать выбор количества кассиров
         keyboard = [
             [
@@ -1725,6 +1865,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if in accounts check flow (сверка счетов)
     if 'accounts_check' in context.user_data:
         await handle_accounts_check_input(update, context, text)
+        return
+
+    # Check if in expense input flow (ввод расходов)
+    if 'expense_input' in context.user_data:
+        await handle_expense_input_text(update, context, text)
         return
 
     # Check if in cash closing flow
@@ -3516,6 +3661,362 @@ async def handle_accounts_check_input(update: Update, context: ContextTypes.DEFA
             return
 
 
+async def handle_expense_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_path: str):
+    """Обработка фото в режиме ввода расходов"""
+    from expense_input import (
+        parse_cashier_sheet_from_image,
+        ExpenseSession,
+        ExpenseType,
+        format_expense_list
+    )
+
+    try:
+        await update.message.reply_text("🔍 Распознаю лист расходов...")
+
+        # OCR + GPT парсинг
+        items = await parse_cashier_sheet_from_image(photo_path)
+
+        if not items:
+            await update.message.reply_text(
+                "❌ Не удалось распознать расходы.\n\n"
+                "Убедитесь что фото чёткое и текст читаемый."
+            )
+            return
+
+        # Сохраняем в сессию
+        expense_data = context.user_data.get('expense_input', {})
+        expense_data['items'] = items
+        expense_data['mode'] = 'review'
+
+        # Создаём сессию
+        session = ExpenseSession(
+            items=items,
+            source_account="Оставил в кассе (на закупы)"
+        )
+        expense_data['session'] = session
+
+        # Форматируем список
+        text = format_expense_list(session)
+
+        # Создаём inline кнопки для каждой позиции
+        keyboard = []
+        for i, item in enumerate(items):
+            type_label = "📦→💰" if item.expense_type == ExpenseType.SUPPLY else "💰→📦"
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{i+1}. {type_label} {item.description[:20]}",
+                    callback_data=f"exp_toggle:{item.id}"
+                )
+            ])
+
+        # Кнопки действий
+        keyboard.append([
+            InlineKeyboardButton("✅ Создать транзакции", callback_data="exp_create"),
+            InlineKeyboardButton("❌ Отмена", callback_data="exp_cancel")
+        ])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки фото расходов: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
+
+
+async def handle_expense_input_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Обработка текста в режиме ввода расходов"""
+    expense_data = context.user_data.get('expense_input')
+    if not expense_data:
+        return
+
+    if text == "❌ Отмена":
+        del context.user_data['expense_input']
+        await update.message.reply_text(
+            "Ввод расходов отменён.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
+    if text == "✅ Готово":
+        # Если есть items - показать финальный список
+        if expense_data.get('items'):
+            await update.message.reply_text(
+                "Нажмите '✅ Создать транзакции' под списком расходов.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Нет данных для обработки.\n"
+                "Сначала отправьте фото листа кассира.",
+                reply_markup=get_main_menu_keyboard()
+            )
+        return
+
+
+async def handle_expense_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка inline кнопок для расходов"""
+    from expense_input import ExpenseType, format_expense_list
+
+    query = update.callback_query
+    data = query.data
+
+    expense_data = context.user_data.get('expense_input')
+    if not expense_data:
+        await query.edit_message_text("❌ Сессия истекла. Начните заново.")
+        return
+
+    session = expense_data.get('session')
+    if not session:
+        await query.edit_message_text("❌ Нет данных для обработки.")
+        return
+
+    # Переключить тип расхода
+    if data.startswith("exp_toggle:"):
+        item_id = data.split(":")[1]
+        session.toggle_type(item_id)
+
+        # Обновляем сообщение
+        text = format_expense_list(session)
+
+        keyboard = []
+        for i, item in enumerate(session.items):
+            type_label = "📦→💰" if item.expense_type == ExpenseType.SUPPLY else "💰→📦"
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{i+1}. {type_label} {item.description[:20]}",
+                    callback_data=f"exp_toggle:{item.id}"
+                )
+            ])
+
+        keyboard.append([
+            InlineKeyboardButton("✅ Создать транзакции", callback_data="exp_create"),
+            InlineKeyboardButton("❌ Отмена", callback_data="exp_cancel")
+        ])
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+    # Создать транзакции
+    elif data == "exp_create":
+        await query.edit_message_text("⏳ Создаю транзакции в Poster...")
+
+        try:
+            from expense_input import create_transactions_in_poster
+            from database import get_database
+            from poster_client import PosterClient
+
+            telegram_user_id = update.effective_user.id
+            db = get_database()
+            accounts = db.get_accounts(telegram_user_id)
+
+            if not accounts:
+                await query.edit_message_text("❌ Нет подключенных аккаунтов Poster")
+                return
+
+            account = accounts[0]
+            client = PosterClient(
+                telegram_user_id=telegram_user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                # Получаем счета и категории
+                poster_accounts = await client.get_accounts()
+                categories = await client.get_categories()
+
+                # Находим счёт "Оставил в кассе"
+                account_id = None
+                for acc in poster_accounts:
+                    if "закуп" in acc.get('name', '').lower() or "оставил" in acc.get('name', '').lower():
+                        account_id = int(acc['account_id'])
+                        break
+
+                if not account_id and poster_accounts:
+                    account_id = int(poster_accounts[0]['account_id'])
+
+                # Маппинг категорий
+                category_map = {}
+                for cat in categories:
+                    category_map[cat.get('category_name', '')] = int(cat.get('category_id', 1))
+
+                # Дефолтная категория
+                if "Прочее" not in category_map:
+                    category_map["Прочее"] = list(category_map.values())[0] if category_map else 1
+
+                # Создаём транзакции
+                transactions = session.get_transactions()
+                success = 0
+                errors = []
+
+                for item in transactions:
+                    try:
+                        cat_id = category_map.get(item.category, category_map.get("Прочее", 1))
+
+                        await client.create_transaction(
+                            transaction_type=0,
+                            category_id=cat_id,
+                            account_from_id=account_id,
+                            amount=int(item.amount),
+                            comment=item.description
+                        )
+                        success += 1
+                    except Exception as e:
+                        errors.append(f"{item.description}: {e}")
+
+                # Формируем результат
+                supplies = session.get_supplies()
+                result_text = f"✅ Создано транзакций: {success}\n"
+
+                if errors:
+                    result_text += f"❌ Ошибок: {len(errors)}\n"
+
+                if supplies:
+                    result_text += f"\n📦 Осталось поставок: {len(supplies)}\n"
+                    for s in supplies:
+                        result_text += f"  • {s.amount:,.0f}₸ — {s.description}\n"
+
+                # Очищаем сессию
+                del context.user_data['expense_input']
+
+                await query.edit_message_text(result_text)
+
+                # Отправляем главное меню
+                await context.bot.send_message(
+                    chat_id=update.effective_user.id,
+                    text="Главное меню:",
+                    reply_markup=get_main_menu_keyboard()
+                )
+
+            finally:
+                await client.close()
+
+        except Exception as e:
+            logger.error(f"Ошибка создания транзакций: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка: {str(e)[:200]}")
+
+    # Создать транзакции из Kaspi выписки
+    elif data == "exp_create_kaspi":
+        await query.edit_message_text("⏳ Создаю транзакции в Poster (Kaspi Pay)...")
+
+        try:
+            from database import get_database
+            from poster_client import PosterClient
+
+            telegram_user_id = update.effective_user.id
+            db = get_database()
+            accounts = db.get_accounts(telegram_user_id)
+
+            if not accounts:
+                await query.edit_message_text("❌ Нет подключенных аккаунтов Poster")
+                return
+
+            account = accounts[0]
+            client = PosterClient(
+                telegram_user_id=telegram_user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                # Получаем счета и категории
+                poster_accounts = await client.get_accounts()
+                categories = await client.get_categories()
+
+                # Находим счёт "Kaspi Pay"
+                account_id = None
+                for acc in poster_accounts:
+                    if "kaspi" in acc.get('name', '').lower():
+                        account_id = int(acc['account_id'])
+                        break
+
+                if not account_id and poster_accounts:
+                    # Fallback - первый счёт
+                    account_id = int(poster_accounts[0]['account_id'])
+                    logger.warning("Kaspi Pay не найден, использую первый счёт")
+
+                # Маппинг категорий
+                category_map = {}
+                for cat in categories:
+                    category_map[cat.get('category_name', '')] = int(cat.get('category_id', 1))
+
+                if "Прочее" not in category_map:
+                    category_map["Прочее"] = list(category_map.values())[0] if category_map else 1
+
+                # Создаём транзакции
+                transactions = session.get_transactions()
+                success = 0
+                errors = []
+
+                for item in transactions:
+                    try:
+                        cat_id = category_map.get(item.category, category_map.get("Прочее", 1))
+
+                        await client.create_transaction(
+                            transaction_type=0,
+                            category_id=cat_id,
+                            account_from_id=account_id,
+                            amount=int(item.amount),
+                            comment=item.description
+                        )
+                        success += 1
+                    except Exception as e:
+                        errors.append(f"{item.description}: {e}")
+
+                # Формируем результат
+                supplies = session.get_supplies()
+                result_text = f"✅ Создано транзакций (Kaspi Pay): {success}\n"
+
+                if errors:
+                    result_text += f"❌ Ошибок: {len(errors)}\n"
+
+                if supplies:
+                    result_text += f"\n📦 Осталось поставок: {len(supplies)}\n"
+                    for s in supplies[:10]:  # Ограничиваем 10
+                        result_text += f"  • {s.amount:,.0f}₸ — {s.description}\n"
+                    if len(supplies) > 10:
+                        result_text += f"  ... и ещё {len(supplies) - 10}\n"
+
+                # Очищаем сессию
+                del context.user_data['expense_input']
+
+                await query.edit_message_text(result_text)
+
+                await context.bot.send_message(
+                    chat_id=update.effective_user.id,
+                    text="Главное меню:",
+                    reply_markup=get_main_menu_keyboard()
+                )
+
+            finally:
+                await client.close()
+
+        except Exception as e:
+            logger.error(f"Ошибка создания транзакций Kaspi: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка: {str(e)[:200]}")
+
+    # Отмена
+    elif data == "exp_cancel":
+        del context.user_data['expense_input']
+        await query.edit_message_text("Ввод расходов отменён.")
+
+        await context.bot.send_message(
+            chat_id=update.effective_user.id,
+            text="Главное меню:",
+            reply_markup=get_main_menu_keyboard()
+        )
+
+
 async def handle_cash_input_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода данных на текущем шаге закрытия кассы"""
     message = update.message
@@ -4024,6 +4525,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
+
+    # Обработка расходов (expense input)
+    if query.data.startswith("exp_"):
+        await handle_expense_callback(update, context)
+        return
 
     # Обработка сверки счетов (из напоминания)
     if query.data == "accounts_check_start":
@@ -5658,9 +6164,7 @@ def initialize_application():
 
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    # Handle documents (PDF or images sent as files without compression)
-    # Document handler removed (not needed for current functionality)
-    # app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
