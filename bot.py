@@ -67,7 +67,7 @@ def get_main_menu_keyboard():
     """Главное меню - ReplyKeyboard (сетка 2x2)"""
     keyboard = [
         [KeyboardButton("💰 Зарплаты"), KeyboardButton("🗑️ Удалить чек")],
-        [KeyboardButton("📱 Приложение"), KeyboardButton("⚙️ Ещё")]
+        [KeyboardButton("🔄 Сверка счетов"), KeyboardButton("⚙️ Ещё")]
     ]
     return ReplyKeyboardMarkup(
         keyboard,
@@ -1647,6 +1647,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Сгенерировать месячный отчёт
         await update.message.reply_text("⏳ Генерирую месячный отчёт...")
         await run_monthly_report_for_user(update.effective_user.id, context.application)
+        return
+
+    elif text == "🔄 Сверка счетов":
+        # Сверка счетов двух отделов
+        await update.message.reply_text("📊 Загружаю балансы счетов из обоих отделов...")
+        try:
+            from accounts_check import get_accounts_summary
+            summary = await get_accounts_summary(update.effective_user.id)
+            await update.message.reply_text(summary)
+        except Exception as e:
+            logger.error(f"Accounts check failed: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка сверки счетов: {str(e)[:300]}")
         return
 
     # Check if user is in onboarding flow (BEFORE authorization check)
