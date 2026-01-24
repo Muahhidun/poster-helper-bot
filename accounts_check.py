@@ -125,16 +125,17 @@ def format_discrepancy_report(results: List[AccountCheckResult]) -> str:
         # Определяем статус
         if abs(r.discrepancy) < 1:
             status = "✅"
-            disc_str = "0"
+            disc_str = "сходится"
         elif r.discrepancy > 0:
+            # В Poster больше чем по факту = недостача
             status = "🔴"
-            disc_str = f"+{r.discrepancy:,.0f}"
+            disc_str = f"недостача {r.discrepancy:,.0f}₸"
         else:
+            # В Poster меньше чем по факту = излишек
             status = "🔴"
-            disc_str = f"{r.discrepancy:,.0f}"
+            disc_str = f"излишек {abs(r.discrepancy):,.0f}₸"
 
-        lines.append(f"{status} {r.name}")
-        lines.append(f"   Расхождение: {disc_str}₸")
+        lines.append(f"{status} {r.name}: {disc_str}")
         lines.append("")
 
         total_discrepancy += r.discrepancy
@@ -143,9 +144,10 @@ def format_discrepancy_report(results: List[AccountCheckResult]) -> str:
     lines.append("─" * 25)
     if abs(total_discrepancy) < 1:
         lines.append("✅ Всё сходится!")
+    elif total_discrepancy > 0:
+        lines.append(f"Общая недостача: {total_discrepancy:,.0f}₸")
     else:
-        sign = "+" if total_discrepancy > 0 else ""
-        lines.append(f"Общее расхождение: {sign}{total_discrepancy:,.0f}₸")
+        lines.append(f"Общий излишек: {abs(total_discrepancy):,.0f}₸")
 
     return "\n".join(lines)
 
