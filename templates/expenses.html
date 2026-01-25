@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+
+{% block title %}Расходы - PizzBurg{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Черновики расходов</h1>
+
+    {% if drafts %}
+    <form id="drafts-form" method="POST">
+        <div class="drafts-actions">
+            <button type="submit" formaction="{{ url_for('process_drafts') }}" class="btn btn-success">
+                ✅ Создать выбранные транзакции
+            </button>
+            <button type="submit" formaction="{{ url_for('delete_drafts') }}" class="btn btn-danger"
+                    onclick="return confirm('Удалить выбранные?')">
+                🗑️ Удалить выбранные
+            </button>
+            <span class="selected-count">Выбрано: <span id="count">0</span></span>
+        </div>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="select-all"></th>
+                    <th>Сумма</th>
+                    <th>Описание</th>
+                    <th>Тип</th>
+                    <th>Категория</th>
+                    <th>Источник</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for draft in drafts %}
+                <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %}">
+                    <td>
+                        <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
+                    </td>
+                    <td class="amount">{{ "{:,.0f}".format(draft.amount) }}₸</td>
+                    <td class="description">{{ draft.description }}</td>
+                    <td class="type">
+                        <button type="button" class="btn-type"
+                                data-id="{{ draft.id }}"
+                                data-type="{{ draft.expense_type }}">
+                            {% if draft.expense_type == 'supply' %}
+                                📦 поставка
+                            {% else %}
+                                💰 транзакция
+                            {% endif %}
+                        </button>
+                    </td>
+                    <td class="category">{{ draft.category or '-' }}</td>
+                    <td class="source">
+                        {% if draft.source == 'kaspi' %}
+                            💳 Kaspi
+                        {% else %}
+                            💵 Наличка
+                        {% endif %}
+                    </td>
+                    <td class="actions">
+                        <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="summary">
+            <p>Всего: {{ drafts|length }} записей</p>
+            <p>💰 Транзакций: {{ drafts|selectattr('expense_type', 'equalto', 'transaction')|list|length }}</p>
+            <p>📦 Поставок: {{ drafts|selectattr('expense_type', 'equalto', 'supply')|list|length }}</p>
+            <p><strong>Сумма: {{ "{:,.0f}".format(drafts|sum(attribute='amount')) }}₸</strong></p>
+        </div>
+    </form>
+    {% else %}
+    <div class="empty-state">
+        <p>Нет черновиков расходов</p>
+        <p>Отправьте фото или Kaspi выписку в бота, чтобы создать черновики.</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+h1 {
+    margin-bottom: 20px;
+}
+
+.drafts-actions {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    align-items: center;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.btn-success {
+    background: #28a745;
+    color: white;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn:hover {
+    opacity: 0.9;
+}
+
+.selected-count {
+    margin-left: auto;
+    color: #666;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+.table th, .table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.table th {
+    background: #f5f5f5;
+    font-weight: 600;
+}
+
+.draft-row:hover {
+    background: #f9f9f9;
+}
+
+.draft-row.supply {
+    border-left: 4px solid #17a2b8;
+}
+
+.draft-row.transaction {
+    border-left: 4px solid #28a745;
+}
+
+.amount {
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.description {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn-type {
+    padding: 5px 10px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    background: white;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.btn-type:hover {
+    background: #f0f0f0;
+}
+
+.btn-delete {
+    padding: 5px 10px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+.btn-delete:hover {
+    background: #fee;
+    border-radius: 3px;
+}
+
+.summary {
+    background: #f5f5f5;
+    padding: 15px;
+    border-radius: 5px;
+}
+
+.summary p {
+    margin: 5px 0;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 50px;
+    color: #666;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Select all checkbox
+    const selectAll = document.getElementById('select-all');
+    const checkboxes = document.querySelectorAll('.draft-checkbox');
+    const countSpan = document.getElementById('count');
+
+    function updateCount() {
+        const checked = document.querySelectorAll('.draft-checkbox:checked').length;
+        countSpan.textContent = checked;
+    }
+
+    if (selectAll) {
+        selectAll.addEventListener('change', function() {
+            checkboxes.forEach(cb => cb.checked = this.checked);
+            updateCount();
+        });
+    }
+
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', updateCount);
+    });
+
+    // Toggle type buttons
+    document.querySelectorAll('.btn-type').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const id = this.dataset.id;
+            const currentType = this.dataset.type;
+            const newType = currentType === 'supply' ? 'transaction' : 'supply';
+
+            try {
+                const response = await fetch(`/expenses/toggle-type/${id}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({expense_type: newType})
+                });
+
+                if (response.ok) {
+                    this.dataset.type = newType;
+                    this.innerHTML = newType === 'supply' ? '📦 поставка' : '💰 транзакция';
+
+                    const row = this.closest('tr');
+                    row.classList.remove('supply', 'transaction');
+                    row.classList.add(newType);
+                }
+            } catch (e) {
+                console.error('Error:', e);
+            }
+        });
+    });
+
+    // Delete single item
+    document.querySelectorAll('.btn-delete').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            if (!confirm('Удалить этот черновик?')) return;
+
+            const id = this.dataset.id;
+            try {
+                const response = await fetch(`/expenses/delete/${id}`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    this.closest('tr').remove();
+                }
+            } catch (e) {
+                console.error('Error:', e);
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

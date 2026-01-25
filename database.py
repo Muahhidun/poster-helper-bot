@@ -197,6 +197,32 @@ class UserDatabase:
                 CREATE INDEX IF NOT EXISTS idx_employees_user_role
                 ON employees(telegram_user_id, role)
             """)
+
+            # Table for expense drafts (черновики расходов для веб-интерфейса)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expense_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    description TEXT NOT NULL,
+                    expense_type TEXT NOT NULL DEFAULT 'transaction',
+                    category TEXT,
+                    source TEXT NOT NULL DEFAULT 'cash',
+                    source_account TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    quantity REAL,
+                    unit TEXT,
+                    price_per_unit REAL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TEXT,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_expense_drafts_user_status
+                ON expense_drafts(telegram_user_id, status)
+            """)
         else:
             # PostgreSQL syntax
             cursor.execute("""
@@ -338,6 +364,32 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_employees_user_role
                 ON employees(telegram_user_id, role)
+            """)
+
+            # Table for expense drafts (черновики расходов для веб-интерфейса)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expense_drafts (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    amount DECIMAL(12,2) NOT NULL,
+                    description TEXT NOT NULL,
+                    expense_type TEXT NOT NULL DEFAULT 'transaction',
+                    category TEXT,
+                    source TEXT NOT NULL DEFAULT 'cash',
+                    source_account TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    quantity DECIMAL(10,3),
+                    unit TEXT,
+                    price_per_unit DECIMAL(12,2),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_expense_drafts_user_status
+                ON expense_drafts(telegram_user_id, status)
             """)
 
         conn.commit()
@@ -1597,6 +1649,232 @@ class UserDatabase:
 
         conn.close()
         return [dict(row) for row in rows]
+
+    # ==================== Expense Drafts Methods ====================
+
+    def save_expense_drafts(self, telegram_user_id: int, items: list, source: str = "cash", source_account: str = None) -> int:
+        """
+        Сохранить черновики расходов в БД
+
+        Args:
+            telegram_user_id: ID пользователя Telegram
+            items: Список ExpenseItem или dict с полями amount, description, expense_type, category
+            source: Источник (cash, kaspi)
+            source_account: Название счёта
+
+        Returns:
+            Количество сохранённых записей
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            count = 0
+            for item in items:
+                # Поддержка как dict, так и объектов с атрибутами
+                if hasattr(item, 'amount'):
+                    amount = item.amount
+                    description = item.description
+                    expense_type = item.expense_type.value if hasattr(item.expense_type, 'value') else str(item.expense_type)
+                    category = item.category
+                    quantity = getattr(item, 'quantity', None)
+                    unit = getattr(item, 'unit', None)
+                    price_per_unit = getattr(item, 'price_per_unit', None)
+                else:
+                    amount = item.get('amount')
+                    description = item.get('description')
+                    expense_type = item.get('expense_type', 'transaction')
+                    category = item.get('category')
+                    quantity = item.get('quantity')
+                    unit = item.get('unit')
+                    price_per_unit = item.get('price_per_unit')
+
+                if DB_TYPE == "sqlite":
+                    cursor.execute("""
+                        INSERT INTO expense_drafts
+                        (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit))
+                else:
+                    cursor.execute("""
+                        INSERT INTO expense_drafts
+                        (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit))
+                count += 1
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Saved {count} expense drafts for user {telegram_user_id}")
+            return count
+
+        except Exception as e:
+            logger.error(f"Failed to save expense drafts: {e}")
+            return 0
+
+    def get_expense_drafts(self, telegram_user_id: int, status: str = "pending") -> list:
+        """
+        Получить черновики расходов пользователя
+
+        Args:
+            telegram_user_id: ID пользователя
+            status: Фильтр по статусу (pending, processed, all)
+
+        Returns:
+            Список черновиков
+        """
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            if status == "all":
+                cursor.execute("""
+                    SELECT * FROM expense_drafts
+                    WHERE telegram_user_id = ?
+                    ORDER BY created_at DESC
+                """, (telegram_user_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM expense_drafts
+                    WHERE telegram_user_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                """, (telegram_user_id, status))
+            rows = cursor.fetchall()
+            # Convert to dict
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in rows]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            if status == "all":
+                cursor.execute("""
+                    SELECT * FROM expense_drafts
+                    WHERE telegram_user_id = %s
+                    ORDER BY created_at DESC
+                """, (telegram_user_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM expense_drafts
+                    WHERE telegram_user_id = %s AND status = %s
+                    ORDER BY created_at DESC
+                """, (telegram_user_id, status))
+            rows = cursor.fetchall()
+
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def update_expense_draft(self, draft_id: int, **kwargs) -> bool:
+        """
+        Обновить черновик расхода
+
+        Args:
+            draft_id: ID черновика
+            **kwargs: Поля для обновления (expense_type, category, amount, description, etc.)
+
+        Returns:
+            True если успешно
+        """
+        if not kwargs:
+            return False
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Build SET clause
+            if DB_TYPE == "sqlite":
+                set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
+                query = f"UPDATE expense_drafts SET {set_clause} WHERE id = ?"
+                cursor.execute(query, list(kwargs.values()) + [draft_id])
+            else:
+                set_clause = ", ".join([f"{k} = %s" for k in kwargs.keys()])
+                query = f"UPDATE expense_drafts SET {set_clause} WHERE id = %s"
+                cursor.execute(query, list(kwargs.values()) + [draft_id])
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update expense draft: {e}")
+            return False
+
+    def delete_expense_draft(self, draft_id: int) -> bool:
+        """Удалить черновик"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM expense_drafts WHERE id = ?", (draft_id,))
+            else:
+                cursor.execute("DELETE FROM expense_drafts WHERE id = %s", (draft_id,))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete expense draft: {e}")
+            return False
+
+    def delete_expense_drafts_bulk(self, draft_ids: list) -> int:
+        """Удалить несколько черновиков"""
+        if not draft_ids:
+            return 0
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                placeholders = ",".join(["?" for _ in draft_ids])
+                cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders})", draft_ids)
+            else:
+                placeholders = ",".join(["%s" for _ in draft_ids])
+                cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders})", draft_ids)
+
+            deleted = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return deleted
+
+        except Exception as e:
+            logger.error(f"Failed to delete expense drafts: {e}")
+            return 0
+
+    def mark_drafts_processed(self, draft_ids: list) -> int:
+        """Пометить черновики как обработанные"""
+        if not draft_ids:
+            return 0
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                placeholders = ",".join(["?" for _ in draft_ids])
+                cursor.execute(f"""
+                    UPDATE expense_drafts
+                    SET status = 'processed', processed_at = CURRENT_TIMESTAMP
+                    WHERE id IN ({placeholders})
+                """, draft_ids)
+            else:
+                placeholders = ",".join(["%s" for _ in draft_ids])
+                cursor.execute(f"""
+                    UPDATE expense_drafts
+                    SET status = 'processed', processed_at = CURRENT_TIMESTAMP
+                    WHERE id IN ({placeholders})
+                """, draft_ids)
+
+            updated = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return updated
+
+        except Exception as e:
+            logger.error(f"Failed to mark drafts processed: {e}")
+            return 0
 
 
 # Singleton instance

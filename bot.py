@@ -1610,6 +1610,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
+            # Сохраняем черновики в БД для веб-интерфейса
+            from database import get_database
+            db = get_database()
+            db.save_expense_drafts(
+                telegram_user_id=update.effective_user.id,
+                items=items,
+                source="kaspi",
+                source_account="Kaspi Pay"
+            )
+
             # Сохраняем в сессию
             expense_input['items'] = items
             expense_input['mode'] = 'review'
@@ -3682,6 +3692,16 @@ async def handle_expense_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                 "Убедитесь что фото чёткое и текст читаемый."
             )
             return
+
+        # Сохраняем черновики в БД для веб-интерфейса
+        from database import get_database
+        db = get_database()
+        db.save_expense_drafts(
+            telegram_user_id=update.effective_user.id,
+            items=items,
+            source="cash",
+            source_account="Оставил в кассе (на закупы)"
+        )
 
         # Сохраняем в сессию
         expense_data = context.user_data.get('expense_input', {})
