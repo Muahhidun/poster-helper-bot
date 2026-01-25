@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block title %}Алиасы поставщиков - PizzBurg{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Алиасы поставщиков</h1>
+    <p class="text-muted">Связь названий из Kaspi с поставщиками в Poster (например: "ИП Федорова" → "Кока-Кола")</p>
+
+    <!-- Add form -->
+    <div class="card mb-4">
+        <div class="card-header">Добавить алиас</div>
+        <div class="card-body">
+            <form id="add-alias-form" class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Название в Kaspi</label>
+                    <input type="text" class="form-control" name="alias_text" id="alias_text"
+                           placeholder="ИП Ержанова" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Поставщик в Poster</label>
+                    <input type="text" class="form-control supplier-search" id="supplier_search"
+                           placeholder="Начните вводить..." autocomplete="off">
+                    <input type="hidden" name="poster_supplier_id" id="poster_supplier_id">
+                    <input type="hidden" name="poster_supplier_name" id="poster_supplier_name">
+                    <div class="search-results" id="supplier-results"></div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Заметка</label>
+                    <input type="text" class="form-control" name="notes" placeholder="Опционально">
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary">+</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Aliases table -->
+    {% if aliases %}
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Название в Kaspi</th>
+                <th>Поставщик в Poster</th>
+                <th>Заметка</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for alias in aliases %}
+            <tr data-id="{{ alias.id }}">
+                <td><code>{{ alias.alias_text }}</code></td>
+                <td>{{ alias.poster_supplier_name }}</td>
+                <td class="text-muted">{{ alias.notes or '' }}</td>
+                <td>
+                    <button class="btn btn-sm btn-danger btn-delete" data-id="{{ alias.id }}">🗑️</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="alert alert-info">
+        Нет алиасов поставщиков. Добавьте первый алиас выше.
+    </div>
+    {% endif %}
+
+    <div class="mt-4">
+        <h5>Доступные поставщики в Poster:</h5>
+        <div class="row">
+            {% for supplier in suppliers[:20] %}
+            <div class="col-md-3 col-sm-6 mb-2">
+                <small class="text-muted">{{ supplier.id }}:</small> {{ supplier.name }}
+            </div>
+            {% endfor %}
+            {% if suppliers|length > 20 %}
+            <div class="col-12 text-muted">...и ещё {{ suppliers|length - 20 }} поставщиков</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<style>
+.supplier-search {
+    position: relative;
+}
+
+.search-results {
+    position: absolute;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    width: 100%;
+    display: none;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.search-result-item {
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.search-result-item:hover, .search-result-item.active {
+    background: #f0f0f0;
+}
+
+code {
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.card {
+    margin-bottom: 20px;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('supplier_search');
+    const resultsDiv = document.getElementById('supplier-results');
+    const supplierIdInput = document.getElementById('poster_supplier_id');
+    const supplierNameInput = document.getElementById('poster_supplier_name');
+    let searchTimeout = null;
+    let selectedIndex = -1;
+
+    // Supplier search
+    searchInput.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        const query = this.value.trim();
+        selectedIndex = -1;
+
+        if (query.length < 1) {
+            resultsDiv.style.display = 'none';
+            return;
+        }
+
+        searchTimeout = setTimeout(async () => {
+            const response = await fetch(`/api/suppliers/search?q=${encodeURIComponent(query)}`);
+            const suppliers = await response.json();
+
+            if (suppliers.length === 0) {
+                resultsDiv.innerHTML = '<div class="search-result-item text-muted">Не найдено</div>';
+            } else {
+                resultsDiv.innerHTML = suppliers.map((s, i) =>
+                    `<div class="search-result-item" data-id="${s.id}" data-name="${s.name}" data-index="${i}">${s.name}</div>`
+                ).join('');
+            }
+            resultsDiv.style.display = 'block';
+        }, 200);
+    });
+
+    // Keyboard navigation
+    searchInput.addEventListener('keydown', function(e) {
+        const items = resultsDiv.querySelectorAll('.search-result-item[data-id]');
+        if (items.length === 0) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+            updateSelection(items);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedIndex = Math.max(selectedIndex - 1, 0);
+            updateSelection(items);
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            if (selectedIndex >= 0 && items[selectedIndex]) {
+                e.preventDefault();
+                selectSupplier(items[selectedIndex]);
+            } else if (items.length === 1) {
+                e.preventDefault();
+                selectSupplier(items[0]);
+            }
+        }
+    });
+
+    function updateSelection(items) {
+        items.forEach((item, i) => {
+            item.classList.toggle('active', i === selectedIndex);
+        });
+        if (selectedIndex >= 0) {
+            items[selectedIndex].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function selectSupplier(item) {
+        const id = item.dataset.id;
+        const name = item.dataset.name;
+
+        supplierIdInput.value = id;
+        supplierNameInput.value = name;
+        searchInput.value = name;
+        resultsDiv.style.display = 'none';
+
+        // Move to next field
+        document.querySelector('input[name="notes"]').focus();
+    }
+
+    // Click on result
+    resultsDiv.addEventListener('click', function(e) {
+        const item = e.target.closest('.search-result-item');
+        if (item && item.dataset.id) {
+            selectSupplier(item);
+        }
+    });
+
+    // Hide results on outside click
+    document.addEventListener('click', function(e) {
+        if (!searchInput.contains(e.target) && !resultsDiv.contains(e.target)) {
+            resultsDiv.style.display = 'none';
+        }
+    });
+
+    // Form submit
+    document.getElementById('add-alias-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const formData = new FormData(this);
+        const data = Object.fromEntries(formData);
+
+        if (!data.poster_supplier_id) {
+            alert('Выберите поставщика из списка');
+            return;
+        }
+
+        const response = await fetch('/supplier-aliases/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            location.reload();
+        } else {
+            alert('Ошибка: ' + (result.error || 'Неизвестная ошибка'));
+        }
+    });
+
+    // Delete alias
+    document.querySelectorAll('.btn-delete').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            if (!confirm('Удалить этот алиас?')) return;
+
+            const id = this.dataset.id;
+            const response = await fetch(`/supplier-aliases/delete/${id}`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                this.closest('tr').remove();
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

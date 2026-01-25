@@ -1607,8 +1607,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 format_expense_list
             )
 
-            # Парсим XLSX
-            items = parse_kaspi_xlsx(str(file_path))
+            # Парсим XLSX (с алиасами поставщиков)
+            items = parse_kaspi_xlsx(str(file_path), telegram_user_id=telegram_user_id)
 
             if not items:
                 await update.message.reply_text(

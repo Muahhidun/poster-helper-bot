@@ -55,6 +55,11 @@ class ExpenseItem:
     unit: Optional[str] = None
     price_per_unit: Optional[float] = None
 
+    # Информация о поставщике (из алиасов)
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    original_beneficiary: Optional[str] = None  # Оригинальное название из Kaspi
+
     # Идентификатор для кнопок
     id: str = field(default_factory=lambda: "")
 
@@ -446,7 +451,7 @@ async def create_transactions_in_poster(
     return success_count, error_count, errors
 
 
-def parse_kaspi_xlsx(file_path: str) -> List[ExpenseItem]:
+def parse_kaspi_xlsx(file_path: str, telegram_user_id: int = None) -> List[ExpenseItem]:
     """
     Парсинг выписки Kaspi из XLSX файла
 
@@ -461,13 +466,26 @@ def parse_kaspi_xlsx(file_path: str) -> List[ExpenseItem]:
     - КНП (H)
     - Назначение платежа (I)
 
+    Args:
+        file_path: Путь к XLSX файлу
+        telegram_user_id: ID пользователя для поиска алиасов поставщиков
+
     Returns:
-        Список ExpenseItem (только расходы, без переводов себе)
+        Список ExpenseItem (только расходы)
     """
     from openpyxl import load_workbook
-    from datetime import datetime
 
     logger.info(f"📄 Парсинг Kaspi выписки: {file_path}")
+
+    # Загружаем алиасы поставщиков если есть user_id
+    supplier_aliases_lookup = None
+    if telegram_user_id:
+        try:
+            from database import get_database
+            db = get_database()
+            supplier_aliases_lookup = db.get_supplier_by_alias
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить алиасы поставщиков: {e}")
 
     wb = load_workbook(file_path, read_only=True, data_only=True)
     ws = wb.active
@@ -536,8 +554,24 @@ def parse_kaspi_xlsx(file_path: str) -> List[ExpenseItem]:
             if description.startswith(":"):
                 description = description[1:].strip()
 
+            # Ищем поставщика по алиасу
+            supplier_id = None
+            supplier_name = None
+
+            if supplier_aliases_lookup and beneficiary_str:
+                supplier_match = supplier_aliases_lookup(telegram_user_id, beneficiary_str)
+                if supplier_match:
+                    supplier_id = supplier_match['poster_supplier_id']
+                    supplier_name = supplier_match['poster_supplier_name']
+                    logger.info(f"🏪 Найден поставщик: {beneficiary_str} → {supplier_name}")
+
             # Определяем тип
-            expense_type = detect_expense_type(description)
+            # Если нашли поставщика по алиасу - это поставка
+            if supplier_id:
+                expense_type = ExpenseType.SUPPLY
+            else:
+                expense_type = detect_expense_type(description)
+
             category = detect_category(description)
 
             item = ExpenseItem(
@@ -545,7 +579,10 @@ def parse_kaspi_xlsx(file_path: str) -> List[ExpenseItem]:
                 description=description[:100],  # Ограничиваем длину
                 expense_type=expense_type,
                 category=category,
-                source="kaspi"
+                source="kaspi",
+                supplier_id=supplier_id,
+                supplier_name=supplier_name,
+                original_beneficiary=beneficiary_str[:100] if beneficiary_str else None
             )
             items.append(item)
 

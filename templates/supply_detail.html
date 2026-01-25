@@ -221,12 +221,16 @@ h2 {
     border-bottom: 1px solid #eee;
 }
 
-.search-result-item:hover {
-    background: #f0f0f0;
+.search-result-item:hover, .search-result-item.active {
+    background: #e3f2fd;
 }
 
 .search-result-item:last-child {
     border-bottom: none;
+}
+
+.text-muted {
+    color: #6c757d;
 }
 
 .matched-ingredient {
@@ -314,44 +318,78 @@ const items = {{ items|tojson }};
 let searchTimeout = null;
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Ingredient search
+    // Ingredient search with keyboard navigation
     document.querySelectorAll('.ingredient-search').forEach(input => {
         const itemId = input.dataset.itemId;
         const resultsDiv = input.nextElementSibling;
+        let selectedIndex = -1;
+        let currentMatches = [];
 
         input.addEventListener('input', function() {
             clearTimeout(searchTimeout);
             const query = this.value.toLowerCase().trim();
+            selectedIndex = -1;
 
-            if (query.length < 2) {
+            if (query.length < 1) {
                 resultsDiv.style.display = 'none';
                 return;
             }
 
             searchTimeout = setTimeout(() => {
-                const matches = items.filter(item =>
+                currentMatches = items.filter(item =>
                     item.name.toLowerCase().includes(query)
                 ).slice(0, 10);
 
-                if (matches.length === 0) {
-                    resultsDiv.innerHTML = '<div class="search-result-item">Ничего не найдено</div>';
+                if (currentMatches.length === 0) {
+                    resultsDiv.innerHTML = '<div class="search-result-item text-muted">Ничего не найдено</div>';
                 } else {
-                    resultsDiv.innerHTML = matches.map(item =>
-                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}">
-                            ${item.name} <small>(${item.type})</small>
+                    resultsDiv.innerHTML = currentMatches.map((item, i) =>
+                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}" data-index="${i}">
+                            ${item.name} <small class="text-muted">(${item.type})</small>
                         </div>`
                     ).join('');
                 }
 
                 resultsDiv.style.display = 'block';
-            }, 300);
+            }, 150);
         });
 
-        // Handle selection
-        resultsDiv.addEventListener('click', async function(e) {
-            const resultItem = e.target.closest('.search-result-item');
-            if (!resultItem || !resultItem.dataset.id) return;
+        // Keyboard navigation
+        input.addEventListener('keydown', function(e) {
+            const resultItems = resultsDiv.querySelectorAll('.search-result-item[data-id]');
+            if (resultItems.length === 0) return;
 
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIndex = Math.min(selectedIndex + 1, resultItems.length - 1);
+                updateSelection(resultItems);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIndex = Math.max(selectedIndex - 1, 0);
+                updateSelection(resultItems);
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                if (selectedIndex >= 0 && resultItems[selectedIndex]) {
+                    e.preventDefault();
+                    selectIngredient(resultItems[selectedIndex], input, itemId);
+                } else if (resultItems.length === 1) {
+                    e.preventDefault();
+                    selectIngredient(resultItems[0], input, itemId);
+                }
+            } else if (e.key === 'Escape') {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        function updateSelection(items) {
+            items.forEach((item, i) => {
+                item.classList.toggle('active', i === selectedIndex);
+            });
+            if (selectedIndex >= 0) {
+                items[selectedIndex].scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        async function selectIngredient(resultItem, inputEl, itemId) {
             const ingredientId = parseInt(resultItem.dataset.id);
             const ingredientName = resultItem.dataset.name;
 
@@ -367,7 +405,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (response.ok) {
                 // Update UI
-                const cell = input.parentElement;
+                const cell = inputEl.parentElement;
                 cell.innerHTML = `<span class="matched-ingredient">✅ ${ingredientName}</span>`;
 
                 // Update row class
@@ -375,9 +413,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 row.classList.remove('unmatched');
                 row.classList.add('matched');
 
+                // Move to next unmatched input
+                const nextUnmatched = document.querySelector('.item-row.unmatched .ingredient-search');
+                if (nextUnmatched) {
+                    nextUnmatched.focus();
+                }
+
                 // Check if all items are matched
                 checkAllMatched();
             }
+        }
+
+        // Handle click selection
+        resultsDiv.addEventListener('click', function(e) {
+            const resultItem = e.target.closest('.search-result-item');
+            if (!resultItem || !resultItem.dataset.id) return;
+            selectIngredient(resultItem, input, itemId);
         });
 
         // Hide results on outside click
