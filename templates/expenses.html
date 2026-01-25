@@ -27,18 +27,25 @@
                     <th>Описание</th>
                     <th>Тип</th>
                     <th>Категория</th>
+                    <th>Счёт</th>
                     <th>Источник</th>
-                    <th>Действия</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
                 {% for draft in drafts %}
-                <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %}">
+                <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %}" data-id="{{ draft.id }}">
                     <td>
                         <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
                     </td>
-                    <td class="amount">{{ "{:,.0f}".format(draft.amount) }}₸</td>
-                    <td class="description">{{ draft.description }}</td>
+                    <td class="amount">
+                        <input type="number" class="edit-amount" value="{{ draft.amount }}"
+                               data-id="{{ draft.id }}" step="1" min="0">
+                    </td>
+                    <td class="description">
+                        <input type="text" class="edit-description" value="{{ draft.description }}"
+                               data-id="{{ draft.id }}">
+                    </td>
                     <td class="type">
                         <button type="button" class="btn-type"
                                 data-id="{{ draft.id }}"
@@ -50,13 +57,32 @@
                             {% endif %}
                         </button>
                     </td>
-                    <td class="category">{{ draft.category or '-' }}</td>
+                    <td class="category">
+                        <div class="autocomplete-wrapper">
+                            <input type="text" class="edit-category"
+                                   value="{{ draft.category or '' }}"
+                                   data-id="{{ draft.id }}"
+                                   placeholder="Категория..."
+                                   autocomplete="off">
+                            <div class="autocomplete-results"></div>
+                        </div>
+                    </td>
+                    <td class="account">
+                        <select class="edit-account" data-id="{{ draft.id }}">
+                            <option value="">Авто</option>
+                            {% for acc in accounts %}
+                            <option value="{{ acc.account_id }}"
+                                    {% if draft.account_id == acc.account_id %}selected{% endif %}>
+                                {{ acc.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </td>
                     <td class="source">
-                        {% if draft.source == 'kaspi' %}
-                            💳 Kaspi
-                        {% else %}
-                            💵 Наличка
-                        {% endif %}
+                        <select class="edit-source" data-id="{{ draft.id }}">
+                            <option value="cash" {% if draft.source != 'kaspi' %}selected{% endif %}>💵 Наличка</option>
+                            <option value="kaspi" {% if draft.source == 'kaspi' %}selected{% endif %}>💳 Kaspi</option>
+                        </select>
                     </td>
                     <td class="actions">
                         <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
@@ -70,7 +96,7 @@
             <p>Всего: {{ drafts|length }} записей</p>
             <p>💰 Транзакций: {{ drafts|selectattr('expense_type', 'equalto', 'transaction')|list|length }}</p>
             <p>📦 Поставок: {{ drafts|selectattr('expense_type', 'equalto', 'supply')|list|length }}</p>
-            <p><strong>Сумма: {{ "{:,.0f}".format(drafts|sum(attribute='amount')) }}₸</strong></p>
+            <p><strong>Сумма: <span id="total-sum">{{ "{:,.0f}".format(drafts|sum(attribute='amount')) }}</span>₸</strong></p>
         </div>
     </form>
     {% else %}
@@ -83,7 +109,7 @@
 
 <style>
 .container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 20px;
 }
@@ -133,7 +159,7 @@ h1 {
 }
 
 .table th, .table td {
-    padding: 12px;
+    padding: 8px;
     text-align: left;
     border-bottom: 1px solid #ddd;
 }
@@ -155,16 +181,73 @@ h1 {
     border-left: 4px solid #28a745;
 }
 
-.amount {
-    font-weight: 600;
+/* Editable inputs */
+.edit-amount {
+    width: 100px;
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    text-align: right;
     font-family: monospace;
+    font-weight: 600;
 }
 
-.description {
-    max-width: 300px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+.edit-description {
+    width: 200px;
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.edit-category {
+    width: 140px;
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.edit-account, .edit-source {
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    background: white;
+}
+
+.edit-account {
+    width: 150px;
+}
+
+.edit-source {
+    width: 100px;
+}
+
+/* Autocomplete */
+.autocomplete-wrapper {
+    position: relative;
+}
+
+.autocomplete-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.autocomplete-item {
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.autocomplete-item:hover, .autocomplete-item.active {
+    background: #e3f2fd;
 }
 
 .btn-type {
@@ -174,6 +257,7 @@ h1 {
     background: white;
     cursor: pointer;
     font-size: 13px;
+    white-space: nowrap;
 }
 
 .btn-type:hover {
@@ -208,9 +292,23 @@ h1 {
     padding: 50px;
     color: #666;
 }
+
+/* Saved indicator */
+.saved {
+    animation: flash-green 0.3s;
+}
+
+@keyframes flash-green {
+    0% { background-color: #d4edda; }
+    100% { background-color: transparent; }
+}
 </style>
 
 <script>
+// Categories for autocomplete
+const categories = {{ categories|tojson if categories else '[]' }};
+let searchTimeout = null;
+
 document.addEventListener('DOMContentLoaded', function() {
     // Select all checkbox
     const selectAll = document.getElementById('select-all');
@@ -261,6 +359,139 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    // Amount editing
+    document.querySelectorAll('.edit-amount').forEach(input => {
+        input.addEventListener('change', async function() {
+            const id = this.dataset.id;
+            await updateField(id, 'amount', this.value);
+            this.classList.add('saved');
+            setTimeout(() => this.classList.remove('saved'), 300);
+            updateTotalSum();
+        });
+    });
+
+    // Description editing
+    document.querySelectorAll('.edit-description').forEach(input => {
+        input.addEventListener('change', async function() {
+            const id = this.dataset.id;
+            await updateField(id, 'description', this.value);
+            this.classList.add('saved');
+            setTimeout(() => this.classList.remove('saved'), 300);
+        });
+    });
+
+    // Category autocomplete
+    document.querySelectorAll('.edit-category').forEach(input => {
+        const resultsDiv = input.nextElementSibling;
+        let selectedIndex = -1;
+
+        input.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            const query = this.value.toLowerCase().trim();
+            selectedIndex = -1;
+
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                const matches = categories.filter(c =>
+                    c.category_name && c.category_name.toLowerCase().includes(query)
+                ).slice(0, 8);
+
+                if (matches.length === 0) {
+                    resultsDiv.innerHTML = '<div class="autocomplete-item text-muted">Не найдено</div>';
+                } else {
+                    resultsDiv.innerHTML = matches.map((c, i) =>
+                        `<div class="autocomplete-item" data-name="${c.category_name}" data-index="${i}">${c.category_name}</div>`
+                    ).join('');
+                }
+                resultsDiv.style.display = 'block';
+            }, 100);
+        });
+
+        // Keyboard navigation
+        input.addEventListener('keydown', function(e) {
+            const items = resultsDiv.querySelectorAll('.autocomplete-item[data-name]');
+            if (items.length === 0) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+                updateSelection(items);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIndex = Math.max(selectedIndex - 1, 0);
+                updateSelection(items);
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                if (selectedIndex >= 0 && items[selectedIndex]) {
+                    e.preventDefault();
+                    selectCategory(items[selectedIndex], input);
+                } else if (items.length === 1) {
+                    e.preventDefault();
+                    selectCategory(items[0], input);
+                }
+            } else if (e.key === 'Escape') {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        function updateSelection(items) {
+            items.forEach((item, i) => {
+                item.classList.toggle('active', i === selectedIndex);
+            });
+        }
+
+        async function selectCategory(item, inputEl) {
+            const name = item.dataset.name;
+            inputEl.value = name;
+            resultsDiv.style.display = 'none';
+
+            const id = inputEl.dataset.id;
+            await updateField(id, 'category', name);
+            inputEl.classList.add('saved');
+            setTimeout(() => inputEl.classList.remove('saved'), 300);
+        }
+
+        resultsDiv.addEventListener('click', function(e) {
+            const item = e.target.closest('.autocomplete-item');
+            if (item && item.dataset.name) {
+                selectCategory(item, input);
+            }
+        });
+
+        // Save on blur (for manual entry)
+        input.addEventListener('blur', async function() {
+            setTimeout(() => {
+                resultsDiv.style.display = 'none';
+            }, 200);
+
+            const id = this.dataset.id;
+            await updateField(id, 'category', this.value);
+        });
+    });
+
+    // Account select
+    document.querySelectorAll('.edit-account').forEach(select => {
+        select.addEventListener('change', async function() {
+            const id = this.dataset.id;
+            await updateField(id, 'account_id', this.value);
+            this.classList.add('saved');
+            setTimeout(() => this.classList.remove('saved'), 300);
+        });
+    });
+
+    // Source select
+    document.querySelectorAll('.edit-source').forEach(select => {
+        select.addEventListener('change', async function() {
+            const id = this.dataset.id;
+            await updateField(id, 'source', this.value);
+            this.classList.add('saved');
+            setTimeout(() => this.classList.remove('saved'), 300);
+        });
+    });
+
     // Delete single item
     document.querySelectorAll('.btn-delete').forEach(btn => {
         btn.addEventListener('click', async function() {
@@ -274,6 +505,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 if (response.ok) {
                     this.closest('tr').remove();
+                    updateTotalSum();
                 }
             } catch (e) {
                 console.error('Error:', e);
@@ -281,5 +513,28 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+async function updateField(id, field, value) {
+    try {
+        const data = {};
+        data[field] = value;
+
+        await fetch(`/expenses/update/${id}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+    } catch (e) {
+        console.error('Error updating field:', e);
+    }
+}
+
+function updateTotalSum() {
+    let total = 0;
+    document.querySelectorAll('.edit-amount').forEach(input => {
+        total += parseFloat(input.value) || 0;
+    });
+    document.getElementById('total-sum').textContent = total.toLocaleString('ru-RU');
+}
 </script>
 {% endblock %}

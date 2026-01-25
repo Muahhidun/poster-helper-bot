@@ -306,13 +306,57 @@ async def parse_cashier_sheet(ocr_text: str, source: str = "наличка") -> 
     return items
 
 
-async def parse_cashier_sheet_from_image(image_path: str, source: str = "наличка") -> List[ExpenseItem]:
+def detect_source_from_ocr(ocr_text: str) -> str:
+    """
+    Определить источник платежа по OCR-тексту
+
+    Ищем признаки Kaspi: "Kaspi", "Каспи", "QR", характерные элементы интерфейса.
+
+    Returns:
+        "kaspi" или "наличка"
+    """
+    text_lower = ocr_text.lower()
+
+    # Признаки Kaspi скриншота
+    kaspi_indicators = [
+        "kaspi",
+        "каспи",
+        "kaspi.kz",
+        "kaspi pay",
+        "kaspi gold",
+        "qr-код",
+        "qr код",
+        "перевод",  # часто в скриншотах переводов
+        "платёж успешен",
+        "платеж успешен",
+        "получатель",  # характерно для скриншота перевода
+        "отправитель",
+        "комиссия",
+    ]
+
+    kaspi_count = sum(1 for indicator in kaspi_indicators if indicator in text_lower)
+
+    # Если 2+ признака Kaspi - считаем что это Kaspi скриншот
+    if kaspi_count >= 2:
+        logger.info(f"📱 Определён источник Kaspi ({kaspi_count} признаков)")
+        return "kaspi"
+
+    # Если есть прямое упоминание Kaspi
+    if "kaspi" in text_lower or "каспи" in text_lower:
+        logger.info("📱 Определён источник Kaspi (по названию)")
+        return "kaspi"
+
+    logger.info("💵 Определён источник: наличка")
+    return "наличка"
+
+
+async def parse_cashier_sheet_from_image(image_path: str, source: str = None) -> List[ExpenseItem]:
     """
     Распознать и распарсить лист кассира с фото
 
     Args:
         image_path: Путь к фото
-        source: Источник средств
+        source: Источник средств (если None - определяется автоматически)
 
     Returns:
         Список ExpenseItem
@@ -323,15 +367,19 @@ async def parse_cashier_sheet_from_image(image_path: str, source: str = "нал�
     ocr_text = await ocr_image(image_path)
     logger.info(f"📄 OCR получен: {len(ocr_text)} символов")
 
+    # Автоопределение источника если не указан
+    if source is None:
+        source = detect_source_from_ocr(ocr_text)
+
     # Парсинг через GPT
     items = await parse_cashier_sheet(ocr_text, source)
-    logger.info(f"✅ Распознано {len(items)} позиций")
+    logger.info(f"✅ Распознано {len(items)} позиций (источник: {source})")
 
     return items
 
 
-async def parse_cashier_sheet_from_url(image_url: str, source: str = "наличка") -> List[ExpenseItem]:
-    """Распознать лист кассира по URL"""
+async def parse_cashier_sheet_from_url(image_url: str, source: str = None) -> List[ExpenseItem]:
+    """Распознать лист кассира по URL (source определяется автоматически если не указан)"""
     import aiohttp
     import tempfile
     import os

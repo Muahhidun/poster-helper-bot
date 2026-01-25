@@ -3710,14 +3710,19 @@ async def handle_expense_photo(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
+        # Определяем источник из распознанных позиций (берём из первой)
+        detected_source = items[0].source if items else "наличка"
+        source_db = "kaspi" if detected_source == "kaspi" else "cash"
+        source_account = "Kaspi Gold" if detected_source == "kaspi" else "Оставил в кассе (на закупы)"
+
         # Сохраняем черновики в БД для веб-интерфейса
         from database import get_database
         db = get_database()
         db.save_expense_drafts(
             telegram_user_id=update.effective_user.id,
             items=items,
-            source="cash",
-            source_account="Оставил в кассе (на закупы)"
+            source=source_db,
+            source_account=source_account
         )
 
         # Сохраняем в сессию
@@ -3728,7 +3733,7 @@ async def handle_expense_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         # Создаём сессию
         session = ExpenseSession(
             items=items,
-            source_account="Оставил в кассе (на закупы)"
+            source_account=source_account
         )
         expense_data['session'] = session
 
