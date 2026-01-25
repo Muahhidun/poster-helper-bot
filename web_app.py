@@ -1071,6 +1071,95 @@ def process_supply(draft_id):
 
 
 # ========================================
+# Supplier Aliases Web Interface
+# ========================================
+
+def load_suppliers_from_csv():
+    """Load suppliers from CSV file"""
+    suppliers = []
+    suppliers_csv = config.DATA_DIR / "poster_suppliers.csv"
+
+    if suppliers_csv.exists():
+        try:
+            with open(suppliers_csv, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    suppliers.append({
+                        'id': int(row['supplier_id']),
+                        'name': row['name']
+                    })
+        except Exception as e:
+            print(f"Error loading suppliers: {e}")
+
+    return suppliers
+
+
+@app.route('/supplier-aliases')
+def list_supplier_aliases():
+    """Show supplier aliases"""
+    db = get_database()
+    aliases = db.get_supplier_aliases(TELEGRAM_USER_ID)
+    suppliers = load_suppliers_from_csv()
+    return render_template('supplier_aliases.html', aliases=aliases, suppliers=suppliers)
+
+
+@app.route('/supplier-aliases/add', methods=['POST'])
+def add_supplier_alias():
+    """Add new supplier alias"""
+    db = get_database()
+    data = request.get_json() or request.form
+
+    alias_text = data.get('alias_text', '').strip()
+    poster_supplier_id = data.get('poster_supplier_id')
+    poster_supplier_name = data.get('poster_supplier_name', '').strip()
+    notes = data.get('notes', '').strip()
+
+    if not alias_text or not poster_supplier_id or not poster_supplier_name:
+        if request.is_json:
+            return jsonify({'success': False, 'error': 'Заполните все поля'})
+        flash('Заполните все обязательные поля', 'error')
+        return redirect(url_for('list_supplier_aliases'))
+
+    success = db.add_supplier_alias(
+        telegram_user_id=TELEGRAM_USER_ID,
+        alias_text=alias_text,
+        poster_supplier_id=int(poster_supplier_id),
+        poster_supplier_name=poster_supplier_name,
+        notes=notes
+    )
+
+    if request.is_json:
+        return jsonify({'success': success})
+
+    if success:
+        flash(f'Алиас "{alias_text}" добавлен', 'success')
+    else:
+        flash('Ошибка добавления алиаса', 'error')
+
+    return redirect(url_for('list_supplier_aliases'))
+
+
+@app.route('/supplier-aliases/delete/<int:alias_id>', methods=['POST'])
+def delete_supplier_alias_route(alias_id):
+    """Delete supplier alias"""
+    db = get_database()
+    success = db.delete_supplier_alias(TELEGRAM_USER_ID, alias_id)
+    return jsonify({'success': success})
+
+
+@app.route('/api/suppliers/search')
+def search_suppliers():
+    """API endpoint for searching suppliers (autocomplete)"""
+    query = request.args.get('q', '').lower()
+    suppliers = load_suppliers_from_csv()
+
+    if query:
+        suppliers = [s for s in suppliers if query in s['name'].lower()]
+
+    return jsonify(suppliers[:20])
+
+
+# ========================================
 # Serve Mini App static files
 # ========================================
 

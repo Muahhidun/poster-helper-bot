@@ -124,6 +124,26 @@ class UserDatabase:
                 ON ingredient_aliases(telegram_user_id, alias_text)
             """)
 
+            # Table for supplier aliases (ИП Федорова → Кока-Кола)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supplier_aliases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    alias_text TEXT NOT NULL,
+                    poster_supplier_id INTEGER NOT NULL,
+                    poster_supplier_name TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(telegram_user_id, alias_text),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_aliases_user_alias
+                ON supplier_aliases(telegram_user_id, alias_text)
+            """)
+
             # Table for shipment templates (quick templates for recurring shipments)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS shipment_templates (
@@ -334,6 +354,26 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_aliases_user_alias
                 ON ingredient_aliases(telegram_user_id, alias_text)
+            """)
+
+            # Table for supplier aliases (ИП Федорова → Кока-Кола)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supplier_aliases (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    alias_text TEXT NOT NULL,
+                    poster_supplier_id INTEGER NOT NULL,
+                    poster_supplier_name TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(telegram_user_id, alias_text),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supplier_aliases_user_alias
+                ON supplier_aliases(telegram_user_id, alias_text)
             """)
 
             # Table for shipment templates (quick templates for recurring shipments)
@@ -1237,6 +1277,181 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to clean orphaned aliases: {e}")
             return 0
+
+    # === Supplier Aliases Methods ===
+
+    def get_supplier_aliases(self, telegram_user_id: int) -> list:
+        """Get all supplier aliases for a user"""
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, alias_text, poster_supplier_id, poster_supplier_name, notes, created_at
+                FROM supplier_aliases
+                WHERE telegram_user_id = ?
+                ORDER BY alias_text
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in rows]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id, alias_text, poster_supplier_id, poster_supplier_name, notes, created_at
+                FROM supplier_aliases
+                WHERE telegram_user_id = %s
+                ORDER BY alias_text
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def add_supplier_alias(
+        self,
+        telegram_user_id: int,
+        alias_text: str,
+        poster_supplier_id: int,
+        poster_supplier_name: str,
+        notes: str = ""
+    ) -> bool:
+        """Add or update a supplier alias"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT OR REPLACE INTO supplier_aliases (
+                        telegram_user_id, alias_text, poster_supplier_id,
+                        poster_supplier_name, notes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+                """, (
+                    telegram_user_id,
+                    alias_text.strip().lower(),
+                    poster_supplier_id,
+                    poster_supplier_name,
+                    notes
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO supplier_aliases (
+                        telegram_user_id, alias_text, poster_supplier_id,
+                        poster_supplier_name, notes
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, alias_text)
+                    DO UPDATE SET
+                        poster_supplier_id = EXCLUDED.poster_supplier_id,
+                        poster_supplier_name = EXCLUDED.poster_supplier_name,
+                        notes = EXCLUDED.notes
+                """, (
+                    telegram_user_id,
+                    alias_text.strip().lower(),
+                    poster_supplier_id,
+                    poster_supplier_name,
+                    notes
+                ))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Supplier alias added: '{alias_text}' -> {poster_supplier_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to add supplier alias: {e}")
+            return False
+
+    def get_supplier_by_alias(self, telegram_user_id: int, alias_text: str) -> Optional[Dict]:
+        """Find supplier by alias text (for Kaspi parsing)"""
+        conn = self._get_connection()
+
+        # Normalize alias
+        alias_normalized = alias_text.strip().lower()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            # Exact match first
+            cursor.execute("""
+                SELECT poster_supplier_id, poster_supplier_name
+                FROM supplier_aliases
+                WHERE telegram_user_id = ? AND alias_text = ?
+            """, (telegram_user_id, alias_normalized))
+            row = cursor.fetchone()
+
+            if not row:
+                # Partial match (alias contains in text or text contains alias)
+                cursor.execute("""
+                    SELECT poster_supplier_id, poster_supplier_name, alias_text
+                    FROM supplier_aliases
+                    WHERE telegram_user_id = ?
+                """, (telegram_user_id,))
+                all_aliases = cursor.fetchall()
+
+                for alias_row in all_aliases:
+                    stored_alias = alias_row[2]
+                    if stored_alias in alias_normalized or alias_normalized in stored_alias:
+                        row = alias_row[:2]
+                        break
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT poster_supplier_id, poster_supplier_name
+                FROM supplier_aliases
+                WHERE telegram_user_id = %s AND alias_text = %s
+            """, (telegram_user_id, alias_normalized))
+            row = cursor.fetchone()
+
+            if not row:
+                cursor.execute("""
+                    SELECT poster_supplier_id, poster_supplier_name, alias_text
+                    FROM supplier_aliases
+                    WHERE telegram_user_id = %s
+                """, (telegram_user_id,))
+                all_aliases = cursor.fetchall()
+
+                for alias_row in all_aliases:
+                    stored_alias = alias_row['alias_text']
+                    if stored_alias in alias_normalized or alias_normalized in stored_alias:
+                        row = alias_row
+                        break
+
+        conn.close()
+
+        if row:
+            if DB_TYPE == "sqlite":
+                return {'poster_supplier_id': row[0], 'poster_supplier_name': row[1]}
+            else:
+                return dict(row)
+        return None
+
+    def delete_supplier_alias(self, telegram_user_id: int, alias_id: int) -> bool:
+        """Delete a supplier alias by ID"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    DELETE FROM supplier_aliases
+                    WHERE id = ? AND telegram_user_id = ?
+                """, (alias_id, telegram_user_id))
+            else:
+                cursor.execute("""
+                    DELETE FROM supplier_aliases
+                    WHERE id = %s AND telegram_user_id = %s
+                """, (alias_id, telegram_user_id))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Supplier alias deleted: ID={alias_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete supplier alias: {e}")
+            return False
 
     # === Price History Methods ===
 
