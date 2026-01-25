@@ -233,6 +233,7 @@ class UserDatabase:
                     quantity REAL,
                     unit TEXT,
                     price_per_unit REAL,
+                    account_id INTEGER,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     processed_at TEXT,
                     FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
@@ -243,6 +244,12 @@ class UserDatabase:
                 CREATE INDEX IF NOT EXISTS idx_expense_drafts_user_status
                 ON expense_drafts(telegram_user_id, status)
             """)
+
+            # Migration: add account_id column if not exists
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN account_id INTEGER")
+            except Exception:
+                pass  # Column already exists
 
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
@@ -465,6 +472,7 @@ class UserDatabase:
                     quantity DECIMAL(10,3),
                     unit TEXT,
                     price_per_unit DECIMAL(12,2),
+                    account_id INTEGER,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     processed_at TIMESTAMP,
                     FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
@@ -475,6 +483,12 @@ class UserDatabase:
                 CREATE INDEX IF NOT EXISTS idx_expense_drafts_user_status
                 ON expense_drafts(telegram_user_id, status)
             """)
+
+            # Migration: add account_id column if not exists
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS account_id INTEGER")
+            except Exception:
+                pass  # Column already exists
 
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
@@ -2230,10 +2244,10 @@ class UserDatabase:
             # Insert supply draft items
             for item in items:
                 item_name = item.get('name', '')
-                quantity = item.get('quantity', 1)
+                quantity = float(item.get('quantity') or 1)
                 unit = item.get('unit', 'шт')
-                price_per_unit = item.get('price', 0)
-                total = item.get('total', quantity * price_per_unit)
+                price_per_unit = float(item.get('price') or 0)
+                total = float(item.get('total') or 0) or (quantity * price_per_unit)
 
                 if DB_TYPE == "sqlite":
                     cursor.execute("""

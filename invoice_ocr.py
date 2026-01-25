@@ -169,11 +169,15 @@ async def recognize_invoice(image_path: str) -> Dict:
         if not items:
             logger.warning("⚠️ GPT-4 не нашел товаров в накладной")
 
-        # Нормализуем единицы измерения
+        # Нормализуем единицы измерения и значения
         for item in items:
             if 'unit' not in item or not item['unit']:
                 item['unit'] = 'шт'
             item['unit'] = item['unit'].lower().strip()
+
+            # Гарантируем что quantity и price - числа
+            item['quantity'] = float(item.get('quantity') or 1)
+            item['price'] = float(item.get('price') or 0)
 
             # Вычисляем итог по позиции
             item['total'] = item['quantity'] * item['price']

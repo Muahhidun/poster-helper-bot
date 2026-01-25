@@ -747,7 +747,43 @@ def list_expenses():
     """Show expense drafts for user"""
     db = get_database()
     drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
-    return render_template('expenses.html', drafts=drafts)
+
+    # Load categories and accounts for editing
+    categories = []
+    accounts = []
+
+    try:
+        from poster_client import PosterClient
+        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+        if poster_accounts:
+            account = poster_accounts[0]
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            async def load_data():
+                client = PosterClient(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+                try:
+                    cats = await client.get_categories()
+                    accs = await client.get_accounts()
+                    return cats, accs
+                finally:
+                    await client.close()
+
+            categories, accounts = loop.run_until_complete(load_data())
+            loop.close()
+    except Exception as e:
+        print(f"Error loading categories/accounts: {e}")
+
+    return render_template('expenses.html',
+                          drafts=drafts,
+                          categories=categories,
+                          accounts=accounts)
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
@@ -759,6 +795,89 @@ def toggle_expense_type(draft_id):
 
     success = db.update_expense_draft(draft_id, expense_type=new_type)
     return jsonify({'success': success})
+
+
+@app.route('/expenses/update/<int:draft_id>', methods=['POST'])
+def update_expense(draft_id):
+    """Update expense draft fields"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    # Allowed fields to update
+    update_fields = {}
+
+    if 'amount' in data:
+        try:
+            update_fields['amount'] = float(data['amount'])
+        except (ValueError, TypeError):
+            pass
+
+    if 'description' in data:
+        update_fields['description'] = str(data['description'])[:200]
+
+    if 'category' in data:
+        update_fields['category'] = str(data['category'])[:50] if data['category'] else None
+
+    if 'source' in data and data['source'] in ('cash', 'kaspi'):
+        update_fields['source'] = data['source']
+
+    if 'account_id' in data:
+        update_fields['account_id'] = int(data['account_id']) if data['account_id'] else None
+
+    if not update_fields:
+        return jsonify({'success': False, 'error': 'No fields to update'})
+
+    success = db.update_expense_draft(draft_id, **update_fields)
+    return jsonify({'success': success})
+
+
+@app.route('/api/categories/search')
+def search_categories():
+    """Search categories for autocomplete"""
+    query = request.args.get('q', '').lower().strip()
+
+    if not query:
+        return jsonify([])
+
+    try:
+        from poster_client import PosterClient
+        db = get_database()
+        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+        if not poster_accounts:
+            return jsonify([])
+
+        account = poster_accounts[0]
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def get_categories():
+            client = PosterClient(
+                telegram_user_id=TELEGRAM_USER_ID,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+            try:
+                return await client.get_categories()
+            finally:
+                await client.close()
+
+        categories = loop.run_until_complete(get_categories())
+        loop.close()
+
+        # Filter by query
+        matches = [
+            {'id': c.get('category_id'), 'name': c.get('category_name', '')}
+            for c in categories
+            if query in c.get('category_name', '').lower()
+        ][:10]
+
+        return jsonify(matches)
+
+    except Exception as e:
+        print(f"Error searching categories: {e}")
+        return jsonify([])
 
 
 @app.route('/expenses/delete/<int:draft_id>', methods=['POST'])
@@ -840,18 +959,21 @@ def process_drafts():
                 processed_ids = []
 
                 for draft in transactions:
-                    # Find account based on source
-                    account_id = None
-                    if draft['source'] == 'kaspi':
-                        for acc in poster_accounts:
-                            if 'kaspi' in acc.get('name', '').lower():
-                                account_id = int(acc['account_id'])
-                                break
-                    else:
-                        for acc in poster_accounts:
-                            if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
-                                account_id = int(acc['account_id'])
-                                break
+                    # Find account: prefer manually selected, then auto-detect by source
+                    account_id = draft.get('account_id')
+
+                    if not account_id:
+                        # Auto-detect based on source
+                        if draft['source'] == 'kaspi':
+                            for acc in poster_accounts:
+                                if 'kaspi' in acc.get('name', '').lower():
+                                    account_id = int(acc['account_id'])
+                                    break
+                        else:
+                            for acc in poster_accounts:
+                                if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                    account_id = int(acc['account_id'])
+                                    break
 
                     if not account_id and poster_accounts:
                         account_id = int(poster_accounts[0]['account_id'])

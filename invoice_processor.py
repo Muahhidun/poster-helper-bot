@@ -164,14 +164,18 @@ class InvoiceProcessor:
                 candidates = self.ingredient_matcher.get_top_matches(item['name'], limit=5, score_cutoff=60)
                 logger.debug(f"  ℹ️ Found {len(candidates)} candidates for '{item['name']}'")
 
+            # Гарантируем числовые значения
+            qty = float(item.get('quantity') or 1)
+            price = float(item.get('price') or 0)
+
             processed_item = {
                 'name': item['name'],
                 'ingredient_id': ingredient_id,
                 'account_name': account_name,
-                'quantity': item['quantity'],
+                'quantity': qty,
                 'unit': item['unit'],
-                'price': item['price'],
-                'total': item.get('total', item['quantity'] * item['price']),
+                'price': price,
+                'total': item.get('total') or (qty * price),
                 'candidates': candidates  # Список похожих товаров для выбора
             }
             items.append(processed_item)
@@ -302,7 +306,7 @@ class InvoiceProcessor:
                         'quantity': item['quantity'],
                         'unit': item['unit'],
                         'price': item['price'],
-                        'total': item['quantity'] * item['price']
+                        'total': item.get('total') or (item['quantity'] * item['price'])
                     })
 
                     logger.info(f"  ✓ {item['name']}: {item['quantity']} {item['unit']} x {item['price']}₸")

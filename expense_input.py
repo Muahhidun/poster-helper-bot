@@ -200,6 +200,115 @@ async def ocr_image(image_path: str) -> str:
     return result.document.text
 
 
+async def parse_handwritten_with_vision(image_path: str, source: str = "наличка") -> List['ExpenseItem']:
+    """
+    Распознать рукописный лист расходов напрямую через GPT-4 Vision.
+    Гораздо лучше справляется с почерком чем Document AI OCR.
+    """
+    import base64
+
+    logger.info(f"🔍 Распознаю рукописный текст через GPT-4 Vision: {image_path}")
+
+    # Читаем и кодируем изображение
+    with open(image_path, 'rb') as f:
+        image_data = f.read()
+    base64_image = base64.b64encode(image_data).decode('utf-8')
+
+    # Определяем mime type
+    if image_path.lower().endswith('.png'):
+        mime_type = "image/png"
+    else:
+        mime_type = "image/jpeg"
+
+    prompt = """Внимательно прочитай этот рукописный лист расходов кассира.
+
+ВАЖНО: Это может быть список зарплат сотрудникам или список закупок.
+
+Формат листа обычно:
+- Имя сотрудника / название товара — сумма в тенге
+- Может быть в 2 колонки (имена слева, суммы справа)
+- Суммы могут быть написаны рядом с именами или под ними
+
+Извлеки ВСЕ позиции. Для каждой определи:
+1. amount - сумма в тенге (число)
+2. description - описание (имя сотрудника или что купили)
+3. type - тип: "транзакция" (зарплаты, услуги) или "поставка" (продукты)
+
+Если видишь имена людей (Бека, Батима, Курьер и т.д.) - это скорее всего зарплаты = "транзакция".
+Если видишь продукты (мясо, овощи, сыр) - это "поставка".
+
+Верни JSON:
+{
+    "items": [
+        {"amount": 5000, "description": "Бека", "type": "транзакция"},
+        {"amount": 10000, "description": "Курьер", "type": "транзакция"}
+    ]
+}
+
+ВАЖНО:
+- Прочитай ВСЕ записи, даже если почерк неразборчивый
+- Если не можешь прочитать имя точно - напиши как понял
+- Суммы должны быть точными числами без пробелов"""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=2000,
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+
+        result_text = response.choices[0].message.content.strip()
+        logger.info(f"📄 GPT-4 Vision ответ: {result_text[:500]}")
+
+        data = json.loads(result_text)
+
+        items = []
+        for item_data in data.get('items', []):
+            expense_type = (
+                ExpenseType.SUPPLY
+                if item_data.get('type') == 'поставка'
+                else ExpenseType.TRANSACTION
+            )
+
+            item = ExpenseItem(
+                amount=float(item_data.get('amount', 0)),
+                description=str(item_data.get('description', '')),
+                expense_type=expense_type,
+                category=detect_category(str(item_data.get('description', ''))),
+                source=source,
+                quantity=item_data.get('quantity'),
+                unit=item_data.get('unit'),
+                price_per_unit=item_data.get('price_per_unit')
+            )
+            items.append(item)
+
+        logger.info(f"✅ GPT-4 Vision распознал {len(items)} позиций")
+        return items
+
+    except Exception as e:
+        logger.error(f"Ошибка GPT-4 Vision: {e}")
+        raise
+
+
 async def parse_cashier_sheet(ocr_text: str, source: str = "наличка") -> List[ExpenseItem]:
     """
     Распарсить лист кассира через GPT-4
@@ -306,32 +415,99 @@ async def parse_cashier_sheet(ocr_text: str, source: str = "наличка") -> 
     return items
 
 
-async def parse_cashier_sheet_from_image(image_path: str, source: str = "наличка") -> List[ExpenseItem]:
+def detect_source_from_ocr(ocr_text: str) -> str:
+    """
+    Определить источник платежа по OCR-тексту
+
+    Ищем признаки Kaspi: "Kaspi", "Каспи", "QR", характерные элементы интерфейса.
+
+    Returns:
+        "kaspi" или "наличка"
+    """
+    text_lower = ocr_text.lower()
+
+    # Признаки Kaspi скриншота
+    kaspi_indicators = [
+        "kaspi",
+        "каспи",
+        "kaspi.kz",
+        "kaspi pay",
+        "kaspi gold",
+        "qr-код",
+        "qr код",
+        "перевод",  # часто в скриншотах переводов
+        "платёж успешен",
+        "платеж успешен",
+        "получатель",  # характерно для скриншота перевода
+        "отправитель",
+        "комиссия",
+    ]
+
+    kaspi_count = sum(1 for indicator in kaspi_indicators if indicator in text_lower)
+
+    # Если 2+ признака Kaspi - считаем что это Kaspi скриншот
+    if kaspi_count >= 2:
+        logger.info(f"📱 Определён источник Kaspi ({kaspi_count} признаков)")
+        return "kaspi"
+
+    # Если есть прямое упоминание Kaspi
+    if "kaspi" in text_lower or "каспи" in text_lower:
+        logger.info("📱 Определён источник Kaspi (по названию)")
+        return "kaspi"
+
+    logger.info("💵 Определён источник: наличка")
+    return "наличка"
+
+
+async def parse_cashier_sheet_from_image(image_path: str, source: str = None, use_vision: bool = True) -> List[ExpenseItem]:
     """
     Распознать и распарсить лист кассира с фото
 
     Args:
         image_path: Путь к фото
-        source: Источник средств
+        source: Источник средств (если None - определяется автоматически)
+        use_vision: Использовать GPT-4 Vision (лучше для рукописного текста)
 
     Returns:
         Список ExpenseItem
     """
-    logger.info(f"🔍 OCR листа кассира: {image_path}")
+    logger.info(f"🔍 Распознаю лист кассира: {image_path}")
 
-    # OCR
-    ocr_text = await ocr_image(image_path)
-    logger.info(f"📄 OCR получен: {len(ocr_text)} символов")
+    # Сначала делаем OCR для определения источника
+    try:
+        ocr_text = await ocr_image(image_path)
+        logger.info(f"📄 OCR получен: {len(ocr_text)} символов")
 
-    # Парсинг через GPT
-    items = await parse_cashier_sheet(ocr_text, source)
-    logger.info(f"✅ Распознано {len(items)} позиций")
+        # Автоопределение источника
+        if source is None:
+            source = detect_source_from_ocr(ocr_text)
+    except Exception as e:
+        logger.warning(f"OCR не удался: {e}, используем source по умолчанию")
+        ocr_text = ""
+        if source is None:
+            source = "наличка"
 
-    return items
+    # Используем GPT-4 Vision для лучшего распознавания рукописного текста
+    if use_vision:
+        try:
+            items = await parse_handwritten_with_vision(image_path, source)
+            if items:
+                logger.info(f"✅ Vision распознал {len(items)} позиций (источник: {source})")
+                return items
+        except Exception as e:
+            logger.warning(f"Vision не удался: {e}, пробуем через OCR+GPT")
+
+    # Fallback: традиционный OCR + GPT парсинг
+    if ocr_text:
+        items = await parse_cashier_sheet(ocr_text, source)
+        logger.info(f"✅ OCR+GPT распознал {len(items)} позиций (источник: {source})")
+        return items
+
+    return []
 
 
-async def parse_cashier_sheet_from_url(image_url: str, source: str = "наличка") -> List[ExpenseItem]:
-    """Распознать лист кассира по URL"""
+async def parse_cashier_sheet_from_url(image_url: str, source: str = None) -> List[ExpenseItem]:
+    """Распознать лист кассира по URL (source определяется автоматически если не указан)"""
     import aiohttp
     import tempfile
     import os
