@@ -27,8 +27,7 @@
                     <th>Описание</th>
                     <th>Тип</th>
                     <th>Категория</th>
-                    <th>Счёт</th>
-                    <th>Источник</th>
+                    <th>Счёт списания</th>
                     <th></th>
                 </tr>
             </thead>
@@ -39,7 +38,7 @@
                         <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
                     </td>
                     <td class="amount">
-                        <input type="number" class="edit-amount" value="{{ draft.amount }}"
+                        <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
                                data-id="{{ draft.id }}" step="1" min="0">
                     </td>
                     <td class="description">
@@ -68,20 +67,17 @@
                         </div>
                     </td>
                     <td class="account">
-                        <select class="edit-account" data-id="{{ draft.id }}">
-                            <option value="">Авто</option>
+                        <select class="edit-account" data-id="{{ draft.id }}" data-source="{{ draft.source }}">
                             {% for acc in accounts %}
                             <option value="{{ acc.account_id }}"
-                                    {% if draft.account_id == acc.account_id %}selected{% endif %}>
+                                    data-name="{{ acc.name|lower }}"
+                                    {% if draft.account_id == acc.account_id %}selected
+                                    {% elif not draft.account_id and draft.source == 'kaspi' and 'kaspi' in acc.name|lower %}selected
+                                    {% elif not draft.account_id and draft.source != 'kaspi' and ('закуп' in acc.name|lower or 'оставил' in acc.name|lower) %}selected
+                                    {% endif %}>
                                 {{ acc.name }}
                             </option>
                             {% endfor %}
-                        </select>
-                    </td>
-                    <td class="source">
-                        <select class="edit-source" data-id="{{ draft.id }}">
-                            <option value="cash" {% if draft.source != 'kaspi' %}selected{% endif %}>💵 Наличка</option>
-                            <option value="kaspi" {% if draft.source == 'kaspi' %}selected{% endif %}>💳 Kaspi</option>
                         </select>
                     </td>
                     <td class="actions">
@@ -109,7 +105,7 @@
 
 <style>
 .container {
-    max-width: 1400px;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
 }
@@ -123,6 +119,7 @@ h1 {
     gap: 10px;
     margin-bottom: 20px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .btn {
@@ -167,6 +164,7 @@ h1 {
 .table th {
     background: #f5f5f5;
     font-weight: 600;
+    white-space: nowrap;
 }
 
 .draft-row:hover {
@@ -183,7 +181,7 @@ h1 {
 
 /* Editable inputs */
 .edit-amount {
-    width: 100px;
+    width: 90px;
     padding: 4px 6px;
     border: 1px solid #ddd;
     border-radius: 3px;
@@ -193,32 +191,25 @@ h1 {
 }
 
 .edit-description {
-    width: 200px;
+    width: 180px;
     padding: 4px 6px;
     border: 1px solid #ddd;
     border-radius: 3px;
 }
 
 .edit-category {
-    width: 140px;
+    width: 120px;
     padding: 4px 6px;
     border: 1px solid #ddd;
     border-radius: 3px;
 }
 
-.edit-account, .edit-source {
+.edit-account {
     padding: 4px 6px;
     border: 1px solid #ddd;
     border-radius: 3px;
     background: white;
-}
-
-.edit-account {
-    width: 150px;
-}
-
-.edit-source {
-    width: 100px;
+    width: 160px;
 }
 
 /* Autocomplete */
@@ -239,6 +230,7 @@ h1 {
     z-index: 100;
     display: none;
     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    min-width: 150px;
 }
 
 .autocomplete-item {
@@ -250,13 +242,18 @@ h1 {
     background: #e3f2fd;
 }
 
+.autocomplete-item.text-muted {
+    color: #999;
+    cursor: default;
+}
+
 .btn-type {
     padding: 5px 10px;
     border: 1px solid #ddd;
     border-radius: 3px;
     background: white;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
     white-space: nowrap;
 }
 
@@ -302,11 +299,22 @@ h1 {
     0% { background-color: #d4edda; }
     100% { background-color: transparent; }
 }
+
+/* Responsive */
+@media (max-width: 900px) {
+    .edit-description { width: 120px; }
+    .edit-account { width: 130px; }
+}
 </style>
 
 <script>
-// Categories for autocomplete
-const categories = {{ categories|tojson if categories else '[]' }};
+// Categories for autocomplete - data from Poster API
+const categories = {{ categories|tojson|safe if categories else '[]' }};
+const accounts = {{ accounts|tojson|safe if accounts else '[]' }};
+
+console.log('Loaded categories:', categories.length);
+console.log('Loaded accounts:', accounts.length);
+
 let searchTimeout = null;
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -396,16 +404,20 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             searchTimeout = setTimeout(() => {
-                const matches = categories.filter(c =>
-                    c.category_name && c.category_name.toLowerCase().includes(query)
-                ).slice(0, 8);
+                // Search in categories - handle both formats
+                const matches = categories.filter(c => {
+                    const name = c.category_name || c.name || '';
+                    return name.toLowerCase().includes(query);
+                }).slice(0, 8);
 
                 if (matches.length === 0) {
-                    resultsDiv.innerHTML = '<div class="autocomplete-item text-muted">Не найдено</div>';
+                    // Allow custom entry
+                    resultsDiv.innerHTML = `<div class="autocomplete-item" data-name="${this.value}">➕ Добавить "${this.value}"</div>`;
                 } else {
-                    resultsDiv.innerHTML = matches.map((c, i) =>
-                        `<div class="autocomplete-item" data-name="${c.category_name}" data-index="${i}">${c.category_name}</div>`
-                    ).join('');
+                    resultsDiv.innerHTML = matches.map((c, i) => {
+                        const name = c.category_name || c.name || '';
+                        return `<div class="autocomplete-item" data-name="${name}" data-index="${i}">${name}</div>`;
+                    }).join('');
                 }
                 resultsDiv.style.display = 'block';
             }, 100);
@@ -413,7 +425,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Keyboard navigation
         input.addEventListener('keydown', function(e) {
-            const items = resultsDiv.querySelectorAll('.autocomplete-item[data-name]');
+            const items = resultsDiv.querySelectorAll('.autocomplete-item');
             if (items.length === 0) return;
 
             if (e.key === 'ArrowDown') {
@@ -431,6 +443,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else if (items.length === 1) {
                     e.preventDefault();
                     selectCategory(items[0], input);
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    // Save current value as-is
+                    saveCategory(input);
                 }
             } else if (e.key === 'Escape') {
                 resultsDiv.style.display = 'none';
@@ -447,46 +463,36 @@ document.addEventListener('DOMContentLoaded', function() {
             const name = item.dataset.name;
             inputEl.value = name;
             resultsDiv.style.display = 'none';
+            await saveCategory(inputEl);
+        }
 
+        async function saveCategory(inputEl) {
             const id = inputEl.dataset.id;
-            await updateField(id, 'category', name);
+            await updateField(id, 'category', inputEl.value);
             inputEl.classList.add('saved');
             setTimeout(() => inputEl.classList.remove('saved'), 300);
         }
 
         resultsDiv.addEventListener('click', function(e) {
             const item = e.target.closest('.autocomplete-item');
-            if (item && item.dataset.name) {
+            if (item) {
                 selectCategory(item, input);
             }
         });
 
-        // Save on blur (for manual entry)
+        // Save on blur
         input.addEventListener('blur', async function() {
             setTimeout(() => {
                 resultsDiv.style.display = 'none';
             }, 200);
-
-            const id = this.dataset.id;
-            await updateField(id, 'category', this.value);
         });
     });
 
-    // Account select
+    // Account select - auto-save
     document.querySelectorAll('.edit-account').forEach(select => {
         select.addEventListener('change', async function() {
             const id = this.dataset.id;
             await updateField(id, 'account_id', this.value);
-            this.classList.add('saved');
-            setTimeout(() => this.classList.remove('saved'), 300);
-        });
-    });
-
-    // Source select
-    document.querySelectorAll('.edit-source').forEach(select => {
-        select.addEventListener('change', async function() {
-            const id = this.dataset.id;
-            await updateField(id, 'source', this.value);
             this.classList.add('saved');
             setTimeout(() => this.classList.remove('saved'), 300);
         });
