@@ -1,0 +1,481 @@
+{% extends "base.html" %}
+
+{% block title %}Поставка #{{ draft.id }} - PizzBurg{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header">
+        <a href="{{ url_for('list_supplies') }}" class="back-link">← Назад к списку</a>
+        <h1>Поставка #{{ draft.id }}</h1>
+    </div>
+
+    <div class="supply-info">
+        <div class="info-row">
+            <span class="label">Поставщик:</span>
+            <span class="value">{{ draft.supplier_name or 'Не указан' }}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Дата накладной:</span>
+            <span class="value">{{ draft.invoice_date or 'Не указана' }}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Общая сумма:</span>
+            <span class="value amount">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</span>
+        </div>
+        {% if draft.linked_expense_draft_id %}
+        <div class="info-row">
+            <span class="label">Связано с расходом:</span>
+            <span class="value"><span class="badge bg-success">🔗 #{{ draft.linked_expense_draft_id }}</span></span>
+        </div>
+        {% endif %}
+    </div>
+
+    <h2>Товары ({{ draft.items|length }})</h2>
+
+    <div class="items-table">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Название (OCR)</th>
+                    <th>Ингредиент Poster</th>
+                    <th>Кол-во</th>
+                    <th>Ед.</th>
+                    <th>Цена</th>
+                    <th>Сумма</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in draft.items %}
+                <tr class="item-row {% if item.poster_ingredient_id %}matched{% else %}unmatched{% endif %}" data-item-id="{{ item.id }}">
+                    <td>{{ loop.index }}</td>
+                    <td class="item-name">{{ item.item_name }}</td>
+                    <td class="ingredient-cell">
+                        {% if item.poster_ingredient_id %}
+                        <span class="matched-ingredient">✅ {{ item.poster_ingredient_name }}</span>
+                        {% else %}
+                        <input type="text" class="ingredient-search" placeholder="Поиск ингредиента..."
+                               data-item-id="{{ item.id }}">
+                        <div class="search-results" style="display: none;"></div>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <input type="number" class="qty-input" value="{{ item.quantity }}" step="0.1" min="0"
+                               data-item-id="{{ item.id }}">
+                    </td>
+                    <td>{{ item.unit }}</td>
+                    <td>
+                        <input type="number" class="price-input" value="{{ item.price_per_unit }}" step="1" min="0"
+                               data-item-id="{{ item.id }}">
+                    </td>
+                    <td class="item-total">{{ "{:,.0f}".format(item.total or 0) }}₸</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="6" class="text-right"><strong>Итого:</strong></td>
+                    <td class="amount" id="grand-total">{{ "{:,.0f}".format(draft.items|sum(attribute='total')) }}₸</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <div class="actions">
+        <button type="button" class="btn btn-success btn-lg" id="process-supply" {% if draft.items|selectattr('poster_ingredient_id', 'none')|list|length > 0 %}disabled{% endif %}>
+            ✅ Создать поставку в Poster
+        </button>
+        <button type="button" class="btn btn-danger" id="delete-supply">
+            🗑️ Удалить черновик
+        </button>
+    </div>
+
+    {% if draft.items|selectattr('poster_ingredient_id', 'none')|list|length > 0 %}
+    <div class="alert alert-warning">
+        ⚠️ Привяжите все товары к ингредиентам Poster перед созданием поставки.
+        <br>
+        Не привязано: {{ draft.items|selectattr('poster_ingredient_id', 'none')|list|length }} из {{ draft.items|length }} товаров
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.header {
+    margin-bottom: 20px;
+}
+
+.back-link {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+h1 {
+    margin: 10px 0 20px;
+}
+
+h2 {
+    margin: 30px 0 15px;
+    font-size: 1.3em;
+}
+
+.supply-info {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.info-row {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+.info-row:last-child {
+    margin-bottom: 0;
+}
+
+.label {
+    font-weight: 600;
+    width: 180px;
+    color: #666;
+}
+
+.value {
+    flex: 1;
+}
+
+.amount {
+    font-weight: 600;
+    font-family: monospace;
+    font-size: 1.1em;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+.table th, .table td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.table th {
+    background: #f5f5f5;
+    font-weight: 600;
+}
+
+.item-row.unmatched {
+    background: #fff3cd;
+}
+
+.item-row.matched {
+    background: #d4edda;
+}
+
+.item-name {
+    max-width: 200px;
+}
+
+.ingredient-cell {
+    position: relative;
+    min-width: 250px;
+}
+
+.ingredient-search {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.search-result-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+}
+
+.search-result-item:hover {
+    background: #f0f0f0;
+}
+
+.search-result-item:last-child {
+    border-bottom: none;
+}
+
+.matched-ingredient {
+    color: #28a745;
+    font-weight: 500;
+}
+
+.qty-input, .price-input {
+    width: 80px;
+    padding: 5px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    text-align: right;
+}
+
+.text-right {
+    text-align: right;
+}
+
+.actions {
+    display: flex;
+    gap: 15px;
+    margin-top: 30px;
+}
+
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.btn-lg {
+    padding: 15px 30px;
+    font-size: 16px;
+}
+
+.btn-success {
+    background: #28a745;
+    color: white;
+}
+
+.btn-success:disabled {
+    background: #94d3a2;
+    cursor: not-allowed;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.alert {
+    padding: 15px;
+    border-radius: 5px;
+    margin-top: 20px;
+}
+
+.alert-warning {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    color: #856404;
+}
+
+.badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.bg-success {
+    background: #28a745;
+    color: white;
+}
+</style>
+
+<script>
+// Items data for search
+const items = {{ items|tojson }};
+let searchTimeout = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Ingredient search
+    document.querySelectorAll('.ingredient-search').forEach(input => {
+        const itemId = input.dataset.itemId;
+        const resultsDiv = input.nextElementSibling;
+
+        input.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            const query = this.value.toLowerCase().trim();
+
+            if (query.length < 2) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                const matches = items.filter(item =>
+                    item.name.toLowerCase().includes(query)
+                ).slice(0, 10);
+
+                if (matches.length === 0) {
+                    resultsDiv.innerHTML = '<div class="search-result-item">Ничего не найдено</div>';
+                } else {
+                    resultsDiv.innerHTML = matches.map(item =>
+                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}">
+                            ${item.name} <small>(${item.type})</small>
+                        </div>`
+                    ).join('');
+                }
+
+                resultsDiv.style.display = 'block';
+            }, 300);
+        });
+
+        // Handle selection
+        resultsDiv.addEventListener('click', async function(e) {
+            const resultItem = e.target.closest('.search-result-item');
+            if (!resultItem || !resultItem.dataset.id) return;
+
+            const ingredientId = parseInt(resultItem.dataset.id);
+            const ingredientName = resultItem.dataset.name;
+
+            // Update on server
+            const response = await fetch(`/supplies/update-item/${itemId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    poster_ingredient_id: ingredientId,
+                    poster_ingredient_name: ingredientName
+                })
+            });
+
+            if (response.ok) {
+                // Update UI
+                const cell = input.parentElement;
+                cell.innerHTML = `<span class="matched-ingredient">✅ ${ingredientName}</span>`;
+
+                // Update row class
+                const row = cell.closest('tr');
+                row.classList.remove('unmatched');
+                row.classList.add('matched');
+
+                // Check if all items are matched
+                checkAllMatched();
+            }
+        });
+
+        // Hide results on outside click
+        document.addEventListener('click', function(e) {
+            if (!input.contains(e.target) && !resultsDiv.contains(e.target)) {
+                resultsDiv.style.display = 'none';
+            }
+        });
+    });
+
+    // Quantity/price updates
+    document.querySelectorAll('.qty-input, .price-input').forEach(input => {
+        input.addEventListener('change', async function() {
+            const itemId = this.dataset.itemId;
+            const row = this.closest('tr');
+            const qty = parseFloat(row.querySelector('.qty-input').value) || 0;
+            const price = parseFloat(row.querySelector('.price-input').value) || 0;
+            const total = qty * price;
+
+            // Update total in UI
+            row.querySelector('.item-total').textContent = total.toLocaleString('ru-RU') + '₸';
+
+            // Update on server
+            await fetch(`/supplies/update-item/${itemId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    quantity: qty,
+                    price_per_unit: price
+                })
+            });
+
+            // Update grand total
+            updateGrandTotal();
+        });
+    });
+
+    // Process supply
+    document.getElementById('process-supply').addEventListener('click', async function() {
+        if (this.disabled) return;
+
+        if (!confirm('Создать поставку в Poster?')) return;
+
+        this.disabled = true;
+        this.textContent = '⏳ Создаю...';
+
+        try {
+            const response = await fetch('/supplies/process/{{ draft.id }}', {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                alert('✅ Поставка создана в Poster!\nID: ' + result.supply_id);
+                window.location.href = '/supplies';
+            } else {
+                alert('❌ Ошибка: ' + result.error);
+                this.disabled = false;
+                this.textContent = '✅ Создать поставку в Poster';
+            }
+        } catch (e) {
+            alert('❌ Ошибка: ' + e.message);
+            this.disabled = false;
+            this.textContent = '✅ Создать поставку в Poster';
+        }
+    });
+
+    // Delete supply
+    document.getElementById('delete-supply').addEventListener('click', async function() {
+        if (!confirm('Удалить этот черновик поставки?')) return;
+
+        const response = await fetch('/supplies/delete/{{ draft.id }}', {
+            method: 'POST'
+        });
+
+        if (response.ok) {
+            window.location.href = '/supplies';
+        }
+    });
+});
+
+function checkAllMatched() {
+    const unmatched = document.querySelectorAll('.item-row.unmatched').length;
+    const processBtn = document.getElementById('process-supply');
+
+    if (unmatched === 0) {
+        processBtn.disabled = false;
+    }
+}
+
+function updateGrandTotal() {
+    let total = 0;
+    document.querySelectorAll('.item-total').forEach(cell => {
+        const value = parseFloat(cell.textContent.replace(/[^\d]/g, '')) || 0;
+        total += value;
+    });
+    document.getElementById('grand-total').textContent = total.toLocaleString('ru-RU') + '₸';
+}
+</script>
+{% endblock %}

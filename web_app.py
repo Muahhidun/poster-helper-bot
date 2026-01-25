@@ -739,6 +739,338 @@ def delete_template(template_name):
 
 
 # ========================================
+# Expense Drafts Web Interface
+# ========================================
+
+@app.route('/expenses')
+def list_expenses():
+    """Show expense drafts for user"""
+    db = get_database()
+    drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
+    return render_template('expenses.html', drafts=drafts)
+
+
+@app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
+def toggle_expense_type(draft_id):
+    """Toggle expense type between transaction and supply"""
+    db = get_database()
+    data = request.get_json() or {}
+    new_type = data.get('expense_type', 'transaction')
+
+    success = db.update_expense_draft(draft_id, expense_type=new_type)
+    return jsonify({'success': success})
+
+
+@app.route('/expenses/delete/<int:draft_id>', methods=['POST'])
+def delete_expense(draft_id):
+    """Delete single expense draft"""
+    db = get_database()
+    success = db.delete_expense_draft(draft_id)
+    return jsonify({'success': success})
+
+
+@app.route('/expenses/delete', methods=['POST'])
+def delete_drafts():
+    """Delete selected expense drafts"""
+    draft_ids = request.form.getlist('draft_ids', type=int)
+
+    if draft_ids:
+        db = get_database()
+        deleted = db.delete_expense_drafts_bulk(draft_ids)
+        flash(f'Удалено {deleted} черновиков', 'success')
+
+    return redirect(url_for('list_expenses'))
+
+
+@app.route('/expenses/process', methods=['POST'])
+def process_drafts():
+    """Process selected drafts - create transactions in Poster"""
+    draft_ids = request.form.getlist('draft_ids', type=int)
+
+    if not draft_ids:
+        flash('Выберите черновики для обработки', 'warning')
+        return redirect(url_for('list_expenses'))
+
+    db = get_database()
+
+    # Get drafts
+    all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
+    selected_drafts = [d for d in all_drafts if d['id'] in draft_ids]
+
+    # Filter only transactions (not supplies)
+    transactions = [d for d in selected_drafts if d['expense_type'] == 'transaction']
+
+    if not transactions:
+        flash('Нет транзакций для создания (только поставки)', 'warning')
+        return redirect(url_for('list_expenses'))
+
+    # Create transactions in Poster
+    try:
+        from poster_client import PosterClient
+        accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+        if not accounts:
+            flash('Нет подключенных аккаунтов Poster', 'error')
+            return redirect(url_for('list_expenses'))
+
+        account = accounts[0]
+
+        # Run async code in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def create_transactions():
+            client = PosterClient(
+                telegram_user_id=TELEGRAM_USER_ID,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                poster_accounts = await client.get_accounts()
+                categories = await client.get_categories()
+
+                # Build category map
+                category_map = {cat.get('category_name', ''): int(cat.get('category_id', 1)) for cat in categories}
+                if "Прочее" not in category_map and category_map:
+                    category_map["Прочее"] = list(category_map.values())[0]
+
+                success = 0
+                processed_ids = []
+
+                for draft in transactions:
+                    # Find account based on source
+                    account_id = None
+                    if draft['source'] == 'kaspi':
+                        for acc in poster_accounts:
+                            if 'kaspi' in acc.get('name', '').lower():
+                                account_id = int(acc['account_id'])
+                                break
+                    else:
+                        for acc in poster_accounts:
+                            if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                account_id = int(acc['account_id'])
+                                break
+
+                    if not account_id and poster_accounts:
+                        account_id = int(poster_accounts[0]['account_id'])
+
+                    cat_id = category_map.get(draft.get('category'), category_map.get("Прочее", 1))
+
+                    try:
+                        await client.create_transaction(
+                            transaction_type=0,
+                            category_id=cat_id,
+                            account_from_id=account_id,
+                            amount=int(draft['amount']),
+                            comment=draft['description']
+                        )
+                        success += 1
+                        processed_ids.append(draft['id'])
+                    except Exception as e:
+                        print(f"Error creating transaction: {e}")
+
+                return success, processed_ids
+
+            finally:
+                await client.close()
+
+        success, processed_ids = loop.run_until_complete(create_transactions())
+        loop.close()
+
+        # Mark as processed
+        if processed_ids:
+            db.mark_drafts_processed(processed_ids)
+
+        flash(f'Создано {success} транзакций в Poster', 'success')
+
+    except Exception as e:
+        flash(f'Ошибка: {str(e)}', 'error')
+
+    return redirect(url_for('list_expenses'))
+
+
+# ========================================
+# Supply Drafts Web Interface
+# ========================================
+
+@app.route('/supplies')
+def list_supplies():
+    """Show supply drafts for user"""
+    db = get_database()
+    drafts = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+
+    # Get pending expense items of type 'supply' for linking
+    pending_supplies = db.get_pending_supply_items(TELEGRAM_USER_ID)
+
+    return render_template('supplies.html', drafts=drafts, pending_supplies=pending_supplies)
+
+
+@app.route('/supplies/<int:draft_id>')
+def view_supply(draft_id):
+    """View supply draft details with items"""
+    db = get_database()
+    draft = db.get_supply_draft_with_items(draft_id)
+
+    if not draft:
+        flash('Черновик не найден', 'error')
+        return redirect(url_for('list_supplies'))
+
+    # Load items for matching
+    items = load_items_from_csv()
+
+    return render_template('supply_detail.html', draft=draft, items=items)
+
+
+@app.route('/supplies/delete/<int:draft_id>', methods=['POST'])
+def delete_supply(draft_id):
+    """Delete supply draft"""
+    db = get_database()
+    success = db.delete_supply_draft(draft_id)
+    return jsonify({'success': success})
+
+
+@app.route('/supplies/update-item/<int:item_id>', methods=['POST'])
+def update_supply_item(item_id):
+    """Update supply draft item (ingredient matching, quantity, price)"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    update_fields = {}
+    if 'poster_ingredient_id' in data:
+        update_fields['poster_ingredient_id'] = data['poster_ingredient_id']
+    if 'poster_ingredient_name' in data:
+        update_fields['poster_ingredient_name'] = data['poster_ingredient_name']
+    if 'quantity' in data:
+        update_fields['quantity'] = data['quantity']
+    if 'price_per_unit' in data:
+        update_fields['price_per_unit'] = data['price_per_unit']
+        # Recalculate total
+        if 'quantity' in update_fields:
+            update_fields['total'] = update_fields['quantity'] * update_fields['price_per_unit']
+        else:
+            update_fields['total'] = data.get('quantity', 1) * update_fields['price_per_unit']
+
+    success = db.update_supply_draft_item(item_id, **update_fields) if update_fields else False
+    return jsonify({'success': success})
+
+
+@app.route('/supplies/process/<int:draft_id>', methods=['POST'])
+def process_supply(draft_id):
+    """Process supply draft - create supply in Poster"""
+    db = get_database()
+    draft = db.get_supply_draft_with_items(draft_id)
+
+    if not draft:
+        return jsonify({'success': False, 'error': 'Черновик не найден'})
+
+    # Check all items have matched ingredients
+    items = draft.get('items', [])
+    unmatched = [i for i in items if not i.get('poster_ingredient_id')]
+
+    if unmatched:
+        return jsonify({
+            'success': False,
+            'error': f'Не все товары привязаны к ингредиентам ({len(unmatched)} из {len(items)})'
+        })
+
+    try:
+        from poster_client import PosterClient
+
+        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if not accounts:
+            return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
+
+        account = accounts[0]
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def create_supply_in_poster():
+            client = PosterClient(
+                telegram_user_id=TELEGRAM_USER_ID,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                # Get suppliers list
+                suppliers = await client.get_suppliers()
+
+                # Find or create supplier
+                supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
+                supplier_id = None
+
+                for s in suppliers:
+                    if supplier_name.lower() in s.get('supplier_name', '').lower():
+                        supplier_id = int(s['supplier_id'])
+                        break
+
+                if not supplier_id and suppliers:
+                    supplier_id = int(suppliers[0]['supplier_id'])
+
+                # Get accounts
+                poster_accounts = await client.get_accounts()
+                account_id = None
+
+                for acc in poster_accounts:
+                    if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                        account_id = int(acc['account_id'])
+                        break
+
+                if not account_id and poster_accounts:
+                    account_id = int(poster_accounts[0]['account_id'])
+
+                # Prepare ingredients
+                ingredients = []
+                for item in items:
+                    ingredients.append({
+                        'id': item['poster_ingredient_id'],
+                        'num': float(item['quantity']),
+                        'price': float(item['price_per_unit'])
+                    })
+
+                # Create supply
+                supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
+
+                supply_id = await client.create_supply(
+                    supplier_id=supplier_id,
+                    storage_id=1,
+                    date=f"{supply_date} 12:00:00",
+                    ingredients=ingredients,
+                    account_id=account_id,
+                    comment=f"Накладная от {draft.get('supplier_name', 'поставщика')}"
+                )
+
+                return supply_id
+
+            finally:
+                await client.close()
+
+        supply_id = loop.run_until_complete(create_supply_in_poster())
+        loop.close()
+
+        if supply_id:
+            # Mark draft as processed
+            db.mark_supply_draft_processed(draft_id)
+
+            # Also mark linked expense draft if exists
+            if draft.get('linked_expense_draft_id'):
+                db.mark_drafts_processed([draft['linked_expense_draft_id']])
+
+            return jsonify({'success': True, 'supply_id': supply_id})
+        else:
+            return jsonify({'success': False, 'error': 'Не удалось создать поставку'})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)})
+
+
+# ========================================
 # Serve Mini App static files
 # ========================================
 
