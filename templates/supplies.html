@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Поставки - PizzBurg{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Черновики поставок</h1>
+
+    {% if pending_supplies %}
+    <div class="alert alert-info">
+        <strong>📋 Ожидают накладных:</strong> {{ pending_supplies|length }} позиций из листа кассира
+        <ul class="mb-0 mt-2">
+            {% for item in pending_supplies[:5] %}
+            <li>{{ "{:,.0f}".format(item.amount) }}₸ — {{ item.description[:40] }}{% if item.description|length > 40 %}...{% endif %}</li>
+            {% endfor %}
+            {% if pending_supplies|length > 5 %}
+            <li>... и ещё {{ pending_supplies|length - 5 }} позиций</li>
+            {% endif %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if drafts %}
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Поставщик</th>
+                    <th>Дата</th>
+                    <th>Товаров</th>
+                    <th>Сумма</th>
+                    <th>Статус</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for draft in drafts %}
+                <tr class="draft-row">
+                    <td>#{{ draft.id }}</td>
+                    <td>{{ draft.supplier_name or 'Не указан' }}</td>
+                    <td>{{ draft.invoice_date or '-' }}</td>
+                    <td>-</td>
+                    <td class="amount">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</td>
+                    <td>
+                        {% if draft.linked_expense_draft_id %}
+                        <span class="badge bg-success">🔗 Связано</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Новый</span>
+                        {% endif %}
+                    </td>
+                    <td class="actions">
+                        <a href="{{ url_for('view_supply', draft_id=draft.id) }}" class="btn btn-sm btn-primary">
+                            📝 Редактировать
+                        </a>
+                        <button type="button" class="btn btn-sm btn-danger btn-delete" data-id="{{ draft.id }}">
+                            🗑️
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="summary">
+        <p>Всего черновиков: {{ drafts|length }}</p>
+        <p><strong>Общая сумма: {{ "{:,.0f}".format(drafts|sum(attribute='total_sum')) }}₸</strong></p>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>Нет черновиков поставок</p>
+        <p>Отправьте фото накладной в бота (режим "📦 Поставки"), чтобы создать черновик.</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+h1 {
+    margin-bottom: 20px;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+.table th, .table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.table th {
+    background: #f5f5f5;
+    font-weight: 600;
+}
+
+.draft-row:hover {
+    background: #f9f9f9;
+}
+
+.amount {
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.actions {
+    white-space: nowrap;
+}
+
+.btn {
+    padding: 5px 10px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-primary {
+    background: #007bff;
+    color: white;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn:hover {
+    opacity: 0.9;
+}
+
+.badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.bg-success {
+    background: #28a745;
+    color: white;
+}
+
+.bg-secondary {
+    background: #6c757d;
+    color: white;
+}
+
+.summary {
+    background: #f5f5f5;
+    padding: 15px;
+    border-radius: 5px;
+}
+
+.summary p {
+    margin: 5px 0;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 50px;
+    color: #666;
+}
+
+.alert {
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+.alert-info {
+    background: #d1ecf1;
+    border: 1px solid #bee5eb;
+    color: #0c5460;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Delete supply draft
+    document.querySelectorAll('.btn-delete').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            if (!confirm('Удалить этот черновик поставки?')) return;
+
+            const id = this.dataset.id;
+            try {
+                const response = await fetch(`/supplies/delete/${id}`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    this.closest('tr').remove();
+                }
+            } catch (e) {
+                console.error('Error:', e);
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

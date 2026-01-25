@@ -64,9 +64,9 @@ logger = logging.getLogger(__name__)
 # === Helper Functions ===
 
 def get_main_menu_keyboard():
-    """Главное меню - ReplyKeyboard (сетка 2x2)"""
+    """Главное меню - ReplyKeyboard (сетка 2x3)"""
     keyboard = [
-        [KeyboardButton("📥 Расходы"), KeyboardButton("💰 Зарплаты")],
+        [KeyboardButton("📥 Расходы"), KeyboardButton("📦 Поставки"), KeyboardButton("💰 Зарплаты")],
         [KeyboardButton("🔄 Сверка счетов"), KeyboardButton("⚙️ Ещё")]
     ]
     return ReplyKeyboardMarkup(
@@ -1378,6 +1378,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_path.unlink()
             return
 
+        # Check if user is in supply input mode
+        supply_input = context.user_data.get('supply_input')
+        if supply_input and supply_input.get('mode') == 'waiting_invoice':
+            await handle_supply_photo(update, context, str(photo_path))
+            photo_path.unlink()
+            return
+
         # Check if user is in receipt deletion mode
         waiting_for_receipt = context.user_data.get('waiting_for_receipt_photo', False)
 
@@ -1705,6 +1712,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    elif text == "📦 Поставки":
+        # Начинаем режим ввода поставок
+        await handle_supply_mode_start(update, context)
+        return
+
     elif text == "💰 Зарплаты":
         # Показать выбор количества кассиров
         keyboard = [
@@ -1880,6 +1892,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if in expense input flow (ввод расходов)
     if 'expense_input' in context.user_data:
         await handle_expense_input_text(update, context, text)
+        return
+
+    # Check if in supply input flow (ввод поставок)
+    if 'supply_input' in context.user_data:
+        await handle_supply_input_text(update, context, text)
         return
 
     # Check if in cash closing flow
@@ -4037,6 +4054,244 @@ async def handle_expense_callback(update: Update, context: ContextTypes.DEFAULT_
         )
 
 
+async def handle_supply_mode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало режима ввода поставок - показываем pending расходы типа 'supply'"""
+    from database import get_database
+
+    telegram_user_id = update.effective_user.id
+    db = get_database()
+
+    # Получаем pending расходы с типом supply
+    pending_supplies = db.get_pending_supply_items(telegram_user_id)
+
+    # Получаем уже созданные черновики поставок
+    supply_drafts = db.get_supply_drafts(telegram_user_id, status="pending")
+
+    # Начинаем режим ввода поставок
+    context.user_data['supply_input'] = {
+        'mode': 'waiting_invoice',
+        'pending_supplies': pending_supplies
+    }
+
+    keyboard = [
+        [KeyboardButton("✅ Готово"), KeyboardButton("❌ Отмена")]
+    ]
+
+    text = "📦 **Режим поставок**\n\n"
+
+    if pending_supplies:
+        text += f"📋 Ожидают накладных: **{len(pending_supplies)}** позиций\n\n"
+        for i, item in enumerate(pending_supplies[:10], 1):
+            text += f"{i}. {item['amount']:,.0f}₸ — {item['description'][:30]}\n"
+        if len(pending_supplies) > 10:
+            text += f"... и ещё {len(pending_supplies) - 10} позиций\n"
+        text += "\n"
+
+    if supply_drafts:
+        text += f"📄 Черновиков поставок: **{len(supply_drafts)}**\n"
+        text += f"(откройте веб-интерфейс для редактирования)\n\n"
+
+    text += "**Отправьте фото накладной** для создания поставки.\n"
+    text += "Бот распознает товары и свяжет с pending расходами."
+
+    await update.message.reply_text(
+        text,
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        parse_mode='Markdown'
+    )
+
+
+async def handle_supply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_path: str):
+    """Обработка фото накладной в режиме поставок"""
+    from invoice_ocr import recognize_invoice
+    from database import get_database
+
+    telegram_user_id = update.effective_user.id
+    db = get_database()
+
+    try:
+        await update.message.reply_text("🔍 Распознаю накладную...")
+
+        # OCR накладной
+        ocr_result = await recognize_invoice(photo_path)
+
+        if not ocr_result.get('success'):
+            await update.message.reply_text(
+                f"❌ Ошибка распознавания: {ocr_result.get('error', 'Неизвестная ошибка')}\n\n"
+                "Попробуйте сфотографировать накладную более чётко."
+            )
+            return
+
+        supplier_name = ocr_result.get('supplier_name', 'Неизвестный поставщик')
+        invoice_date = ocr_result.get('invoice_date')
+        items = ocr_result.get('items', [])
+        total_sum = ocr_result.get('total_sum')
+        ocr_text = ocr_result.get('ocr_text', '')
+
+        if not items:
+            await update.message.reply_text("❌ Не найдено товаров в накладной")
+            return
+
+        # Получаем pending расходы для связывания
+        pending_supplies = db.get_pending_supply_items(telegram_user_id)
+
+        # Пытаемся найти соответствие по сумме
+        linked_expense_draft_id = None
+        if total_sum and pending_supplies:
+            for ps in pending_supplies:
+                # Ищем точное или близкое соответствие по сумме (±5%)
+                if abs(ps['amount'] - total_sum) <= total_sum * 0.05:
+                    linked_expense_draft_id = ps['id']
+                    break
+
+        # Сохраняем черновик поставки
+        supply_draft_id = db.save_supply_draft(
+            telegram_user_id=telegram_user_id,
+            supplier_name=supplier_name,
+            invoice_date=invoice_date,
+            items=items,
+            total_sum=total_sum,
+            linked_expense_draft_id=linked_expense_draft_id,
+            ocr_text=ocr_text
+        )
+
+        if not supply_draft_id:
+            await update.message.reply_text("❌ Ошибка сохранения черновика поставки")
+            return
+
+        # Формируем ответ
+        text = f"✅ **Накладная распознана**\n\n"
+        text += f"📦 Поставщик: {supplier_name}\n"
+        text += f"📅 Дата: {invoice_date or 'не распознана'}\n"
+        text += f"📊 Товаров: {len(items)}\n"
+
+        if total_sum:
+            text += f"💰 Сумма: {total_sum:,.0f}₸\n"
+
+        if linked_expense_draft_id:
+            text += f"\n🔗 Связано с расходом из листа кассира\n"
+
+        text += f"\n**Товары:**\n"
+        for i, item in enumerate(items[:8], 1):
+            name = item.get('name', '?')[:25]
+            qty = item.get('quantity', 0)
+            unit = item.get('unit', 'шт')
+            price = item.get('price', 0)
+            text += f"{i}. {name} — {qty} {unit} × {price:,.0f}₸\n"
+
+        if len(items) > 8:
+            text += f"... и ещё {len(items) - 8} позиций\n"
+
+        text += f"\n📝 Черновик #{supply_draft_id} сохранён.\n"
+        text += "Откройте веб-интерфейс /supplies для редактирования."
+
+        # Кнопки действий
+        keyboard = [
+            [
+                InlineKeyboardButton("📦 Создать поставку", callback_data=f"supply_create:{supply_draft_id}"),
+                InlineKeyboardButton("🗑️ Удалить", callback_data=f"supply_delete:{supply_draft_id}")
+            ]
+        ]
+
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка обработки фото поставки: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
+
+
+async def handle_supply_input_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Обработка текста в режиме поставок"""
+    supply_data = context.user_data.get('supply_input')
+    if not supply_data:
+        return
+
+    if text == "❌ Отмена":
+        del context.user_data['supply_input']
+        await update.message.reply_text(
+            "Режим поставок отменён.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
+    if text == "✅ Готово":
+        del context.user_data['supply_input']
+        await update.message.reply_text(
+            "Режим поставок завершён.\n\n"
+            "Откройте /supplies для просмотра черновиков.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
+
+async def handle_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка inline кнопок для поставок"""
+    from database import get_database
+
+    query = update.callback_query
+    data = query.data
+
+    telegram_user_id = update.effective_user.id
+    db = get_database()
+
+    # Создать поставку из черновика
+    if data.startswith("supply_create:"):
+        supply_draft_id = int(data.split(":")[1])
+
+        await query.edit_message_text("⏳ Создаю поставку в Poster...")
+
+        try:
+            # Получаем черновик с позициями
+            draft = db.get_supply_draft_with_items(supply_draft_id)
+            if not draft:
+                await query.edit_message_text("❌ Черновик не найден")
+                return
+
+            # Передаём в стандартный process_supply
+            parsed = {
+                'type': 'supply',
+                'supplier': draft.get('supplier_name', ''),
+                'account': 'Оставил в кассе',
+                'items': []
+            }
+
+            for item in draft.get('items', []):
+                parsed['items'].append({
+                    'name': item['item_name'],
+                    'qty': item['quantity'],
+                    'price': item['price_per_unit']
+                })
+
+            # Отмечаем черновик как обработанный
+            db.mark_supply_draft_processed(supply_draft_id)
+
+            # Если есть связанный расход - тоже отмечаем
+            if draft.get('linked_expense_draft_id'):
+                db.mark_drafts_processed([draft['linked_expense_draft_id']])
+
+            await query.edit_message_text("✅ Передано в обработку поставки...")
+
+            # Вызываем process_supply
+            await process_supply(update, context, parsed)
+
+        except Exception as e:
+            logger.error(f"Ошибка создания поставки: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка: {str(e)[:200]}")
+
+    # Удалить черновик поставки
+    elif data.startswith("supply_delete:"):
+        supply_draft_id = int(data.split(":")[1])
+
+        if db.delete_supply_draft(supply_draft_id):
+            await query.edit_message_text("🗑️ Черновик поставки удалён")
+        else:
+            await query.edit_message_text("❌ Ошибка удаления черновика")
+
+
 async def handle_cash_input_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка ввода данных на текущем шаге закрытия кассы"""
     message = update.message
@@ -4549,6 +4804,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Обработка расходов (expense input)
     if query.data.startswith("exp_"):
         await handle_expense_callback(update, context)
+        return
+
+    # Обработка поставок (supply input)
+    if query.data.startswith("supply_"):
+        await handle_supply_callback(update, context)
         return
 
     # Обработка сверки счетов (из напоминания)

@@ -223,6 +223,50 @@ class UserDatabase:
                 CREATE INDEX IF NOT EXISTS idx_expense_drafts_user_status
                 ON expense_drafts(telegram_user_id, status)
             """)
+
+            # Table for supply drafts (черновики поставок)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supply_drafts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    supplier_name TEXT,
+                    invoice_date TEXT,
+                    total_sum REAL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    linked_expense_draft_id INTEGER,
+                    ocr_text TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TEXT,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                    FOREIGN KEY (linked_expense_draft_id) REFERENCES expense_drafts(id) ON DELETE SET NULL
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supply_drafts_user_status
+                ON supply_drafts(telegram_user_id, status)
+            """)
+
+            # Table for supply draft items (позиции в черновике поставки)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supply_draft_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supply_draft_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    quantity REAL NOT NULL DEFAULT 1,
+                    unit TEXT DEFAULT 'шт',
+                    price_per_unit REAL NOT NULL DEFAULT 0,
+                    total REAL NOT NULL DEFAULT 0,
+                    poster_ingredient_id INTEGER,
+                    poster_ingredient_name TEXT,
+                    FOREIGN KEY (supply_draft_id) REFERENCES supply_drafts(id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supply_draft_items_draft
+                ON supply_draft_items(supply_draft_id)
+            """)
         else:
             # PostgreSQL syntax
             cursor.execute("""
@@ -390,6 +434,50 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_expense_drafts_user_status
                 ON expense_drafts(telegram_user_id, status)
+            """)
+
+            # Table for supply drafts (черновики поставок)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supply_drafts (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    supplier_name TEXT,
+                    invoice_date DATE,
+                    total_sum DECIMAL(12,2),
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    linked_expense_draft_id INTEGER,
+                    ocr_text TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP,
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                    FOREIGN KEY (linked_expense_draft_id) REFERENCES expense_drafts(id) ON DELETE SET NULL
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supply_drafts_user_status
+                ON supply_drafts(telegram_user_id, status)
+            """)
+
+            # Table for supply draft items (позиции в черновике поставки)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS supply_draft_items (
+                    id SERIAL PRIMARY KEY,
+                    supply_draft_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    quantity DECIMAL(10,3) NOT NULL DEFAULT 1,
+                    unit TEXT DEFAULT 'шт',
+                    price_per_unit DECIMAL(12,2) NOT NULL DEFAULT 0,
+                    total DECIMAL(12,2) NOT NULL DEFAULT 0,
+                    poster_ingredient_id INTEGER,
+                    poster_ingredient_name TEXT,
+                    FOREIGN KEY (supply_draft_id) REFERENCES supply_drafts(id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_supply_draft_items_draft
+                ON supply_draft_items(supply_draft_id)
             """)
 
         conn.commit()
@@ -1875,6 +1963,302 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to mark drafts processed: {e}")
             return 0
+
+    # ==================== Supply Drafts Methods ====================
+
+    def save_supply_draft(
+        self,
+        telegram_user_id: int,
+        supplier_name: str,
+        invoice_date: str,
+        items: list,
+        total_sum: float = None,
+        linked_expense_draft_id: int = None,
+        ocr_text: str = None
+    ) -> int:
+        """
+        Сохранить черновик поставки с позициями
+
+        Args:
+            telegram_user_id: ID пользователя Telegram
+            supplier_name: Название поставщика
+            invoice_date: Дата накладной (YYYY-MM-DD)
+            items: Список позиций [{'name': str, 'quantity': float, 'unit': str, 'price': float, 'total': float}]
+            total_sum: Общая сумма
+            linked_expense_draft_id: ID связанного черновика расхода
+            ocr_text: Распознанный OCR текст
+
+        Returns:
+            ID созданного черновика поставки или 0 при ошибке
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Insert supply draft
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO supply_drafts
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text))
+                supply_draft_id = cursor.lastrowid
+            else:
+                cursor.execute("""
+                    INSERT INTO supply_drafts
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text))
+                supply_draft_id = cursor.fetchone()[0]
+
+            # Insert supply draft items
+            for item in items:
+                item_name = item.get('name', '')
+                quantity = item.get('quantity', 1)
+                unit = item.get('unit', 'шт')
+                price_per_unit = item.get('price', 0)
+                total = item.get('total', quantity * price_per_unit)
+
+                if DB_TYPE == "sqlite":
+                    cursor.execute("""
+                        INSERT INTO supply_draft_items
+                        (supply_draft_id, item_name, quantity, unit, price_per_unit, total)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total))
+                else:
+                    cursor.execute("""
+                        INSERT INTO supply_draft_items
+                        (supply_draft_id, item_name, quantity, unit, price_per_unit, total)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total))
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ Saved supply draft #{supply_draft_id} with {len(items)} items for user {telegram_user_id}")
+            return supply_draft_id
+
+        except Exception as e:
+            logger.error(f"Failed to save supply draft: {e}")
+            return 0
+
+    def get_supply_drafts(self, telegram_user_id: int, status: str = "pending") -> list:
+        """
+        Получить черновики поставок пользователя
+
+        Args:
+            telegram_user_id: ID пользователя
+            status: Фильтр по статусу (pending, processed, all)
+
+        Returns:
+            Список черновиков поставок
+        """
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            if status == "all":
+                cursor.execute("""
+                    SELECT * FROM supply_drafts
+                    WHERE telegram_user_id = ?
+                    ORDER BY created_at DESC
+                """, (telegram_user_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM supply_drafts
+                    WHERE telegram_user_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                """, (telegram_user_id, status))
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in rows]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            if status == "all":
+                cursor.execute("""
+                    SELECT * FROM supply_drafts
+                    WHERE telegram_user_id = %s
+                    ORDER BY created_at DESC
+                """, (telegram_user_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM supply_drafts
+                    WHERE telegram_user_id = %s AND status = %s
+                    ORDER BY created_at DESC
+                """, (telegram_user_id, status))
+            rows = cursor.fetchall()
+
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_supply_draft_with_items(self, supply_draft_id: int) -> Optional[Dict]:
+        """
+        Получить черновик поставки со всеми позициями
+
+        Args:
+            supply_draft_id: ID черновика поставки
+
+        Returns:
+            Черновик поставки с items или None
+        """
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+
+            # Get supply draft
+            cursor.execute("SELECT * FROM supply_drafts WHERE id = ?", (supply_draft_id,))
+            draft_row = cursor.fetchone()
+            if not draft_row:
+                conn.close()
+                return None
+
+            columns = [desc[0] for desc in cursor.description]
+            draft = dict(zip(columns, draft_row))
+
+            # Get items
+            cursor.execute("""
+                SELECT * FROM supply_draft_items
+                WHERE supply_draft_id = ?
+                ORDER BY id
+            """, (supply_draft_id,))
+            item_rows = cursor.fetchall()
+            item_columns = [desc[0] for desc in cursor.description]
+            draft['items'] = [dict(zip(item_columns, row)) for row in item_rows]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+            cursor.execute("SELECT * FROM supply_drafts WHERE id = %s", (supply_draft_id,))
+            draft_row = cursor.fetchone()
+            if not draft_row:
+                conn.close()
+                return None
+
+            draft = dict(draft_row)
+
+            cursor.execute("""
+                SELECT * FROM supply_draft_items
+                WHERE supply_draft_id = %s
+                ORDER BY id
+            """, (supply_draft_id,))
+            draft['items'] = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+        return draft
+
+    def update_supply_draft_item(self, item_id: int, **kwargs) -> bool:
+        """
+        Обновить позицию в черновике поставки
+
+        Args:
+            item_id: ID позиции
+            **kwargs: Поля для обновления (poster_ingredient_id, poster_ingredient_name, quantity, etc.)
+
+        Returns:
+            True если успешно
+        """
+        if not kwargs:
+            return False
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
+                query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = ?"
+                cursor.execute(query, list(kwargs.values()) + [item_id])
+            else:
+                set_clause = ", ".join([f"{k} = %s" for k in kwargs.keys()])
+                query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = %s"
+                cursor.execute(query, list(kwargs.values()) + [item_id])
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update supply draft item: {e}")
+            return False
+
+    def delete_supply_draft(self, supply_draft_id: int) -> bool:
+        """Удалить черновик поставки (вместе с позициями благодаря CASCADE)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM supply_drafts WHERE id = ?", (supply_draft_id,))
+            else:
+                cursor.execute("DELETE FROM supply_drafts WHERE id = %s", (supply_draft_id,))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete supply draft: {e}")
+            return False
+
+    def mark_supply_draft_processed(self, supply_draft_id: int) -> bool:
+        """Пометить черновик поставки как обработанный"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    UPDATE supply_drafts
+                    SET status = 'processed', processed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (supply_draft_id,))
+            else:
+                cursor.execute("""
+                    UPDATE supply_drafts
+                    SET status = 'processed', processed_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (supply_draft_id,))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to mark supply draft processed: {e}")
+            return False
+
+    def get_pending_supply_items(self, telegram_user_id: int) -> list:
+        """
+        Получить все pending позиции из expense_drafts с типом 'supply'
+        Используется для связывания накладных с расходами
+
+        Returns:
+            Список pending расходов с expense_type='supply'
+        """
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM expense_drafts
+                WHERE telegram_user_id = ? AND status = 'pending' AND expense_type = 'supply'
+                ORDER BY created_at DESC
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in rows]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT * FROM expense_drafts
+                WHERE telegram_user_id = %s AND status = 'pending' AND expense_type = 'supply'
+                ORDER BY created_at DESC
+            """, (telegram_user_id,))
+            rows = cursor.fetchall()
+
+        conn.close()
+        return [dict(row) for row in rows]
 
 
 # Singleton instance
