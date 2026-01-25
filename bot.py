@@ -1938,6 +1938,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
+    # Ignore system button texts that might be sent when session expired
+    ignored_texts = ["✅ Готово", "❌ Отмена", "← Назад"]
+    if text in ignored_texts:
+        await update.message.reply_text(
+            "Сессия истекла. Выберите действие из меню.",
+            reply_markup=get_main_menu_keyboard()
+        )
+        return
+
     # Try to parse quick template syntax (e.g., "лаваш 400")
     template_match = try_parse_quick_template(text)
     if template_match:
