@@ -164,6 +164,8 @@ export interface PosterItem {
   id: number
   name: string
   type: 'ingredient' | 'product'
+  poster_account_id?: number    // Which Poster business account this item belongs to
+  poster_account_name?: string  // Display name (e.g., "PizzBurg", "PizzBurg Cafe")
 }
 
 // Shipment Templates
@@ -229,6 +231,18 @@ export interface AccountsResponse {
   accounts: Account[]
 }
 
+// Poster Business Accounts (multi-account support)
+export interface PosterAccount {
+  id: number
+  name: string
+  base_url: string
+  is_primary: boolean
+}
+
+export interface PosterAccountsResponse {
+  poster_accounts: PosterAccount[]
+}
+
 // Supply Creation
 export interface SupplyItemInput {
   id: number
@@ -238,6 +252,7 @@ export interface SupplyItemInput {
   price: number
   unit: string
   sum?: number  // Optional: for UI calculations only (not sent to backend)
+  poster_account_id?: number  // Which Poster account this item belongs to
 }
 
 export interface CreateSupplyRequest {
@@ -247,6 +262,7 @@ export interface CreateSupplyRequest {
   items: SupplyItemInput[]
   date?: string
   storage_id?: number
+  poster_account_id?: number  // Which Poster business account (PizzBurg, PizzBurg Cafe, etc.)
 }
 
 export interface CreateSupplyResponse {

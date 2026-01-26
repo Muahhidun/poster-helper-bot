@@ -364,6 +364,7 @@ export const CreateSupply: React.FC = () => {
       price: price,
       unit: lastItem?.unit || 'шт',
       sum: quantity * price,  // Initialize sum
+      poster_account_id: posterItem.poster_account_id,  // Track which Poster account this item belongs to
     }
 
     setItems([...items, newItem])
@@ -491,6 +492,7 @@ export const CreateSupply: React.FC = () => {
     webApp?.MainButton?.showProgress()
 
     try {
+      // Items contain poster_account_id - backend will group and create multiple supplies if needed
       await getApiClient().createSupply({
         supplier_id: selectedSupplier.id,
         supplier_name: selectedSupplier.name,
@@ -705,7 +707,7 @@ export const CreateSupply: React.FC = () => {
                 const inLast = lastSupplyItems.some(i => i.id === item.id)
                 return (
                   <button
-                    key={item.id}
+                    key={`${item.id}-${item.poster_account_id}`}
                     onClick={() => addItem(item)}
                     className="w-full p-3 rounded-lg text-left flex items-center justify-between"
                     style={{
@@ -713,7 +715,14 @@ export const CreateSupply: React.FC = () => {
                       color: themeParams.text_color || '#000000',
                     }}
                   >
-                    <span>{item.name}</span>
+                    <div className="flex flex-col">
+                      <span>{item.name}</span>
+                      {item.poster_account_name && (
+                        <span className="text-xs" style={{ color: themeParams.hint_color }}>
+                          {item.poster_account_name}
+                        </span>
+                      )}
+                    </div>
                     {inLast && <span className="text-xs">⭐ Недавно</span>}
                   </button>
                 )

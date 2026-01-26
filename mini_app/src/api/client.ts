@@ -15,6 +15,7 @@ import type {
   PriceHistoryResponse,
   CreateSupplyRequest,
   CreateSupplyResponse,
+  PosterAccountsResponse,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -135,6 +136,11 @@ class ApiClient {
     return this.request(`/api/templates/${encodeURIComponent(templateName)}`, {
       method: 'DELETE',
     })
+  }
+
+  // Poster Business Accounts (multi-account support)
+  async getPosterAccounts(): Promise<PosterAccountsResponse> {
+    return this.request<PosterAccountsResponse>('/api/poster-accounts')
   }
 
   // Supply Creation
