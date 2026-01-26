@@ -65,7 +65,11 @@
 
     <div class="summary">
         <p>Всего черновиков: {{ drafts|length }}</p>
-        <p><strong>Общая сумма: {{ "{:,.0f}".format(drafts|sum(attribute='total_sum')) }}₸</strong></p>
+        {% set total = namespace(sum=0) %}
+        {% for draft in drafts %}
+            {% set total.sum = total.sum + (draft.total_sum or 0) %}
+        {% endfor %}
+        <p><strong>Общая сумма: {{ "{:,.0f}".format(total.sum) }}₸</strong></p>
     </div>
     {% else %}
     <div class="empty-state">
