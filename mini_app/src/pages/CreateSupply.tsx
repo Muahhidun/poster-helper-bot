@@ -10,8 +10,7 @@ import type {
   Account,
   SupplyItemInput,
   PosterItem,
-  LastSupplyItem,
-  PosterAccount
+  LastSupplyItem
 } from '../types'
 
 // Helper function to evaluate math expressions safely
@@ -39,9 +38,6 @@ export const CreateSupply: React.FC = () => {
   const { webApp, themeParams } = useTelegram()
 
   // Data loading
-  const { data: posterAccountsData, loading: loadingPosterAccounts } = useApi(() =>
-    getApiClient().getPosterAccounts()
-  )
   const { data: suppliersData, loading: loadingSuppliers } = useApi(() =>
     getApiClient().getSuppliers()
   )
@@ -50,7 +46,6 @@ export const CreateSupply: React.FC = () => {
   )
 
   // Form state
-  const [selectedPosterAccount, setSelectedPosterAccount] = useState<PosterAccount | null>(null)
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [items, setItems] = useState<SupplyItemInput[]>([])
@@ -77,22 +72,6 @@ export const CreateSupply: React.FC = () => {
 
   // Ref to track if sum field should be skipped after price
   const skipSumFieldRef = useRef<boolean>(false)
-
-  // Auto-select poster account when data loads (prefer primary)
-  useEffect(() => {
-    if (posterAccountsData?.poster_accounts && posterAccountsData.poster_accounts.length > 0) {
-      // If only one account, auto-select it
-      if (posterAccountsData.poster_accounts.length === 1) {
-        setSelectedPosterAccount(posterAccountsData.poster_accounts[0])
-      } else {
-        // Find and select primary account
-        const primary = posterAccountsData.poster_accounts.find(acc => acc.is_primary)
-        if (primary) {
-          setSelectedPosterAccount(primary)
-        }
-      }
-    }
-  }, [posterAccountsData])
 
   // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
   const sortedAccounts = useMemo(() => {
@@ -385,6 +364,7 @@ export const CreateSupply: React.FC = () => {
       price: price,
       unit: lastItem?.unit || 'шт',
       sum: quantity * price,  // Initialize sum
+      poster_account_id: posterItem.poster_account_id,  // Track which Poster account this item belongs to
     }
 
     setItems([...items, newItem])
@@ -512,12 +492,12 @@ export const CreateSupply: React.FC = () => {
     webApp?.MainButton?.showProgress()
 
     try {
+      // Items contain poster_account_id - backend will group and create multiple supplies if needed
       await getApiClient().createSupply({
         supplier_id: selectedSupplier.id,
         supplier_name: selectedSupplier.name,
         account_id: selectedAccount.id,
         items: items,
-        poster_account_id: selectedPosterAccount?.id,  // Which Poster business account to use
       })
 
       webApp?.HapticFeedback?.notificationOccurred('success')
@@ -534,10 +514,7 @@ export const CreateSupply: React.FC = () => {
   useEffect(() => {
     if (!webApp?.MainButton) return
 
-    // Need poster account if there are multiple accounts
-    const needsPosterAccount = (posterAccountsData?.poster_accounts?.length || 0) > 1
-    const posterAccountValid = !needsPosterAccount || selectedPosterAccount !== null
-    const canSubmit = posterAccountValid && selectedSupplier && selectedAccount && items.length > 0
+    const canSubmit = selectedSupplier && selectedAccount && items.length > 0
 
     if (canSubmit) {
       webApp?.MainButton.setText('Создать поставку')
@@ -552,7 +529,7 @@ export const CreateSupply: React.FC = () => {
       webApp?.MainButton.offClick(handleSubmit)
       webApp?.MainButton.hide()
     }
-  }, [webApp?.MainButton, selectedPosterAccount, selectedSupplier, selectedAccount, items, posterAccountsData])
+  }, [webApp?.MainButton, selectedSupplier, selectedAccount, items])
 
   // Setup back button
   useEffect(() => {
@@ -567,7 +544,7 @@ export const CreateSupply: React.FC = () => {
     }
   }, [webApp?.BackButton, navigate])
 
-  if (loadingPosterAccounts || loadingSuppliers || loadingAccounts) return <Loading />
+  if (loadingSuppliers || loadingAccounts) return <Loading />
 
   return (
     <div style={{ backgroundColor: themeParams.bg_color || '#ffffff' }} className="min-h-screen pb-24">
@@ -577,43 +554,6 @@ export const CreateSupply: React.FC = () => {
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-100 text-red-800">
             {error}
-          </div>
-        )}
-
-        {/* Poster Account Selection (only show if multiple accounts) */}
-        {posterAccountsData?.poster_accounts && posterAccountsData.poster_accounts.length > 1 && (
-          <div className="mb-6">
-            <label
-              className="block text-sm font-medium mb-2"
-              style={{ color: themeParams.text_color || '#000000' }}
-            >
-              Бизнес *
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-              {posterAccountsData.poster_accounts.map(account => (
-                <button
-                  key={account.id}
-                  onClick={() => {
-                    setSelectedPosterAccount(account)
-                    webApp?.HapticFeedback?.selectionChanged()
-                  }}
-                  className="p-4 rounded-lg font-medium text-center"
-                  style={{
-                    backgroundColor:
-                      selectedPosterAccount?.id === account.id
-                        ? themeParams.button_color || '#3b82f6'
-                        : themeParams.secondary_bg_color || '#f3f4f6',
-                    color:
-                      selectedPosterAccount?.id === account.id
-                        ? themeParams.button_text_color || '#ffffff'
-                        : themeParams.text_color || '#000000',
-                  }}
-                >
-                  {account.name}
-                </button>
-              ))}
-            </div>
           </div>
         )}
 
@@ -767,7 +707,7 @@ export const CreateSupply: React.FC = () => {
                 const inLast = lastSupplyItems.some(i => i.id === item.id)
                 return (
                   <button
-                    key={item.id}
+                    key={`${item.id}-${item.poster_account_id}`}
                     onClick={() => addItem(item)}
                     className="w-full p-3 rounded-lg text-left flex items-center justify-between"
                     style={{
@@ -775,7 +715,14 @@ export const CreateSupply: React.FC = () => {
                       color: themeParams.text_color || '#000000',
                     }}
                   >
-                    <span>{item.name}</span>
+                    <div className="flex flex-col">
+                      <span>{item.name}</span>
+                      {item.poster_account_name && (
+                        <span className="text-xs" style={{ color: themeParams.hint_color }}>
+                          {item.poster_account_name}
+                        </span>
+                      )}
+                    </div>
                     {inLast && <span className="text-xs">⭐ Недавно</span>}
                   </button>
                 )

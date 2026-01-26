@@ -428,11 +428,68 @@ def api_delete_alias(alias_id):
 
 @app.route('/api/items/search')
 def search_items():
-    """API endpoint for searching items (autocomplete)"""
+    """API endpoint for searching items (autocomplete)
+
+    Searches across ALL Poster accounts and marks each item with its account.
+    If same ingredient exists in multiple accounts, prioritizes primary account (PizzBurg).
+    """
     query = request.args.get('q', '').lower()
     source = request.args.get('source', 'all')  # 'ingredient', 'product', or 'all'
 
-    items = load_items_from_csv()
+    # Try to load from Poster API for all accounts
+    items = []
+    try:
+        db = get_database()
+        accounts = db.get_accounts(g.user_id)
+
+        if accounts:
+            from poster_client import PosterClient
+
+            # Sort accounts: primary first (PizzBurg takes priority for deduplication)
+            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
+
+            seen_names = set()  # Track ingredient names for deduplication
+
+            for acc in accounts_sorted:
+                try:
+                    poster_client = PosterClient(
+                        telegram_user_id=g.user_id,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+
+                    # Run async method in sync context
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    if source in ['all', 'ingredient']:
+                        ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                        for ing in ingredients:
+                            name = ing.get('ingredient_name', '')
+                            name_lower = name.lower()
+
+                            # Skip if already seen (primary account takes priority)
+                            if name_lower in seen_names:
+                                continue
+                            seen_names.add(name_lower)
+
+                            items.append({
+                                'id': int(ing.get('ingredient_id', 0)),
+                                'name': name,
+                                'type': 'ingredient',
+                                'poster_account_id': acc['id'],
+                                'poster_account_name': acc['account_name']
+                            })
+
+                    loop.close()
+                except Exception as e:
+                    print(f"Error loading from account {acc['account_name']}: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error loading from Poster API: {e}")
+        # Fallback to CSV
+        items = load_items_from_csv()
 
     # Filter by type if specified
     if source != 'all':
@@ -573,7 +630,11 @@ def api_item_price_history(item_id):
 
 @app.route('/api/supplies/create', methods=['POST'])
 def api_create_supply():
-    """Create a new supply in Poster"""
+    """Create supplies in Poster.
+
+    Items are grouped by poster_account_id and separate supplies are created
+    for each Poster business account (e.g., PizzBurg and PizzBurg Cafe).
+    """
     data = request.json
 
     # Validate required fields
@@ -593,88 +654,112 @@ def api_create_supply():
     try:
         # Import poster_client and database
         from poster_client import PosterClient
+        from collections import defaultdict
         db = get_database()
 
-        # Get the correct Poster account
-        poster_account_id = data.get('poster_account_id')
         accounts = db.get_accounts(g.user_id)
-
         if not accounts:
             return jsonify({'error': 'No Poster accounts configured'}), 400
 
-        # Find the selected account or use first one
-        selected_account = None
-        if poster_account_id:
-            for acc in accounts:
-                if acc['id'] == poster_account_id:
-                    selected_account = acc
-                    break
+        # Build account lookup by ID
+        accounts_by_id = {acc['id']: acc for acc in accounts}
 
-        if not selected_account:
-            selected_account = accounts[0]  # Default to first account
+        # Find primary account (for items without poster_account_id)
+        primary_account = next((acc for acc in accounts if acc.get('is_primary')), accounts[0])
 
-        # Create PosterClient with the selected account's credentials
-        print(f"📦 Creating supply in account: {selected_account['account_name']} ({selected_account['poster_base_url']})")
-        poster_client = PosterClient(
-            telegram_user_id=g.user_id,
-            poster_token=selected_account['poster_token'],
-            poster_user_id=selected_account['poster_user_id'],
-            poster_base_url=selected_account['poster_base_url']
-        )
-
-        # Prepare ingredients list for Poster API
-        ingredients = []
+        # Group items by poster_account_id
+        items_by_account = defaultdict(list)
         for item in data['items']:
-            ingredients.append({
-                'id': item['id'],
-                'num': float(item['quantity']),
-                'price': float(item['price'])
-            })
+            account_id = item.get('poster_account_id')
+            if account_id and account_id in accounts_by_id:
+                items_by_account[account_id].append(item)
+            else:
+                # Default to primary account
+                items_by_account[primary_account['id']].append(item)
 
         # Prepare date
         supply_date = data.get('date')
         if not supply_date:
             supply_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Create supply using async function wrapped in asyncio.run()
-        async def create_supply_async():
-            supply_id = await poster_client.create_supply(
-                supplier_id=data['supplier_id'],
-                storage_id=data.get('storage_id', 1),
-                date=supply_date,
-                ingredients=ingredients,
-                account_id=data['account_id'],
-                comment=data.get('comment', '')
-            )
-            await poster_client.close()
-            return supply_id
+        # Create supplies for each account
+        created_supplies = []
+        all_price_records = []
 
-        supply_id = asyncio.run(create_supply_async())
+        async def create_all_supplies():
+            nonlocal created_supplies, all_price_records
 
-        if not supply_id:
-            return jsonify({'error': 'Failed to create supply in Poster'}), 500
+            for account_id, account_items in items_by_account.items():
+                account = accounts_by_id[account_id]
+                print(f"📦 Creating supply in {account['account_name']} ({account['poster_base_url']}) - {len(account_items)} items")
+
+                poster_client = PosterClient(
+                    telegram_user_id=g.user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+
+                # Prepare ingredients list for this account
+                ingredients = []
+                for item in account_items:
+                    ingredients.append({
+                        'id': item['id'],
+                        'num': float(item['quantity']),
+                        'price': float(item['price'])
+                    })
+
+                try:
+                    supply_id = await poster_client.create_supply(
+                        supplier_id=data['supplier_id'],
+                        storage_id=data.get('storage_id', 1),
+                        date=supply_date,
+                        ingredients=ingredients,
+                        account_id=data['account_id'],
+                        comment=data.get('comment', '')
+                    )
+
+                    if supply_id:
+                        created_supplies.append({
+                            'supply_id': supply_id,
+                            'account_name': account['account_name'],
+                            'items_count': len(account_items)
+                        })
+
+                        # Prepare price history records for this account's items
+                        for item in account_items:
+                            all_price_records.append({
+                                'ingredient_id': item['id'],
+                                'ingredient_name': item.get('name', ''),
+                                'supplier_id': data['supplier_id'],
+                                'supplier_name': data['supplier_name'],
+                                'price': float(item['price']),
+                                'quantity': float(item['quantity']),
+                                'unit': item.get('unit', 'шт'),
+                                'supply_id': supply_id,
+                                'date': data.get('date', datetime.now().strftime('%Y-%m-%d'))
+                            })
+                    else:
+                        print(f"⚠️ Failed to create supply in {account['account_name']}")
+                except Exception as e:
+                    print(f"⚠️ Error creating supply in {account['account_name']}: {e}")
+                finally:
+                    await poster_client.close()
+
+        asyncio.run(create_all_supplies())
+
+        if not created_supplies:
+            return jsonify({'error': 'Failed to create any supplies in Poster'}), 500
 
         # Save price history to database
-        price_records = []
+        if all_price_records:
+            db.bulk_add_price_history(g.user_id, all_price_records)
 
-        for item in data['items']:
-            price_records.append({
-                'ingredient_id': item['id'],
-                'ingredient_name': item.get('name', ''),
-                'supplier_id': data['supplier_id'],
-                'supplier_name': data['supplier_name'],
-                'price': float(item['price']),
-                'quantity': float(item['quantity']),
-                'unit': item.get('unit', 'шт'),
-                'supply_id': supply_id,
-                'date': data.get('date', datetime.now().strftime('%Y-%m-%d'))
-            })
-
-        db.bulk_add_price_history(g.user_id, price_records)
-
+        # Return all created supplies
         return jsonify({
             'success': True,
-            'supply_id': supply_id
+            'supply_id': created_supplies[0]['supply_id'],  # For backwards compatibility
+            'supplies': created_supplies
         })
 
     except Exception as e:

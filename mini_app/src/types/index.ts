@@ -164,6 +164,8 @@ export interface PosterItem {
   id: number
   name: string
   type: 'ingredient' | 'product'
+  poster_account_id?: number    // Which Poster business account this item belongs to
+  poster_account_name?: string  // Display name (e.g., "PizzBurg", "PizzBurg Cafe")
 }
 
 // Shipment Templates
@@ -250,6 +252,7 @@ export interface SupplyItemInput {
   price: number
   unit: string
   sum?: number  // Optional: for UI calculations only (not sent to backend)
+  poster_account_id?: number  // Which Poster account this item belongs to
 }
 
 export interface CreateSupplyRequest {
