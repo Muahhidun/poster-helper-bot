@@ -545,6 +545,9 @@ class UserDatabase:
         # Run migration to multi-account structure
         self._migrate_to_multi_account()
 
+        # Run migration to add poster_account_id to supply_draft_items
+        self._migrate_supply_items_add_account()
+
     def _migrate_to_multi_account(self):
         """
         Migrate existing users from single-account to multi-account structure.
@@ -620,6 +623,24 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"❌ Multi-account migration failed: {e}")
             # Don't crash the app if migration fails
+
+    def _migrate_supply_items_add_account(self):
+        """Add poster_account_id column to supply_draft_items table"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN poster_account_id INTEGER")
+            else:
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS poster_account_id INTEGER")
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Supply items migration: added poster_account_id column")
+        except Exception as e:
+            # Column probably already exists
+            logger.info(f"✅ Supply items migration: poster_account_id column already exists or error: {e}")
 
     def get_user(self, telegram_user_id: int) -> Optional[Dict]:
         """Get user by Telegram ID"""

@@ -348,8 +348,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     resultsDiv.innerHTML = '<div class="search-result-item text-muted">Ничего не найдено</div>';
                 } else {
                     resultsDiv.innerHTML = currentMatches.map((item, i) =>
-                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}" data-index="${i}">
-                            ${item.name} <small class="text-muted">(${item.type})</small>
+                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}" data-account-id="${item.poster_account_id || ''}" data-account-name="${item.poster_account_name || ''}" data-index="${i}">
+                            ${item.name}
+                            ${item.poster_account_name ? `<small class="text-muted">(${item.poster_account_name})</small>` : ''}
                         </div>`
                     ).join('');
                 }
@@ -396,6 +397,8 @@ document.addEventListener('DOMContentLoaded', function() {
         async function selectIngredient(resultItem, inputEl, itemId) {
             const ingredientId = parseInt(resultItem.dataset.id);
             const ingredientName = resultItem.dataset.name;
+            const accountId = resultItem.dataset.accountId ? parseInt(resultItem.dataset.accountId) : null;
+            const accountName = resultItem.dataset.accountName || '';
 
             // Update on server
             const response = await fetch(`/supplies/update-item/${itemId}`, {
@@ -403,14 +406,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     poster_ingredient_id: ingredientId,
-                    poster_ingredient_name: ingredientName
+                    poster_ingredient_name: ingredientName,
+                    poster_account_id: accountId
                 })
             });
 
             if (response.ok) {
-                // Update UI
+                // Update UI - show account name if available
                 const cell = inputEl.parentElement;
-                cell.innerHTML = `<span class="matched-ingredient">✅ ${ingredientName}</span>`;
+                const displayName = accountName ? `${ingredientName} <small>(${accountName})</small>` : ingredientName;
+                cell.innerHTML = `<span class="matched-ingredient">✅ ${displayName}</span>`;
 
                 // Update row class
                 const row = cell.closest('tr');
