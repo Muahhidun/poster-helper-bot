@@ -229,6 +229,18 @@ export interface AccountsResponse {
   accounts: Account[]
 }
 
+// Poster Business Accounts (multi-account support)
+export interface PosterAccount {
+  id: number
+  name: string
+  base_url: string
+  is_primary: boolean
+}
+
+export interface PosterAccountsResponse {
+  poster_accounts: PosterAccount[]
+}
+
 // Supply Creation
 export interface SupplyItemInput {
   id: number
@@ -247,6 +259,7 @@ export interface CreateSupplyRequest {
   items: SupplyItemInput[]
   date?: string
   storage_id?: number
+  poster_account_id?: number  // Which Poster business account (PizzBurg, PizzBurg Cafe, etc.)
 }
 
 export interface CreateSupplyResponse {

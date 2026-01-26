@@ -472,7 +472,7 @@ def api_suppliers():
 
 @app.route('/api/accounts')
 def api_accounts():
-    """Get list of accounts"""
+    """Get list of payment accounts (Kaspi Pay, Наличка, etc.)"""
     accounts_csv = config.DATA_DIR / "poster_accounts.csv"
     accounts = []
 
@@ -491,6 +491,24 @@ def api_accounts():
             return jsonify({'error': f'Failed to load accounts: {str(e)}'}), 500
 
     return jsonify({'accounts': accounts})
+
+
+@app.route('/api/poster-accounts')
+def api_poster_accounts():
+    """Get list of Poster business accounts (PizzBurg, PizzBurg Cafe, etc.)"""
+    db = get_database()
+    accounts = db.get_accounts(g.user_id)
+
+    result = []
+    for acc in accounts:
+        result.append({
+            'id': acc['id'],
+            'name': acc['account_name'],
+            'base_url': acc['poster_base_url'],
+            'is_primary': acc.get('is_primary', False)
+        })
+
+    return jsonify({'poster_accounts': result})
 
 
 @app.route('/api/supplies/last/<int:supplier_id>')
@@ -575,9 +593,34 @@ def api_create_supply():
     try:
         # Import poster_client and database
         from poster_client import PosterClient
+        db = get_database()
 
-        # Create supply via Poster API
-        poster_client = PosterClient(g.user_id)
+        # Get the correct Poster account
+        poster_account_id = data.get('poster_account_id')
+        accounts = db.get_accounts(g.user_id)
+
+        if not accounts:
+            return jsonify({'error': 'No Poster accounts configured'}), 400
+
+        # Find the selected account or use first one
+        selected_account = None
+        if poster_account_id:
+            for acc in accounts:
+                if acc['id'] == poster_account_id:
+                    selected_account = acc
+                    break
+
+        if not selected_account:
+            selected_account = accounts[0]  # Default to first account
+
+        # Create PosterClient with the selected account's credentials
+        print(f"📦 Creating supply in account: {selected_account['account_name']} ({selected_account['poster_base_url']})")
+        poster_client = PosterClient(
+            telegram_user_id=g.user_id,
+            poster_token=selected_account['poster_token'],
+            poster_user_id=selected_account['poster_user_id'],
+            poster_base_url=selected_account['poster_base_url']
+        )
 
         # Prepare ingredients list for Poster API
         ingredients = []
@@ -612,7 +655,6 @@ def api_create_supply():
             return jsonify({'error': 'Failed to create supply in Poster'}), 500
 
         # Save price history to database
-        db = get_database()
         price_records = []
 
         for item in data['items']:

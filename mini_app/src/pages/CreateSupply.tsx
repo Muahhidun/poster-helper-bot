@@ -10,7 +10,8 @@ import type {
   Account,
   SupplyItemInput,
   PosterItem,
-  LastSupplyItem
+  LastSupplyItem,
+  PosterAccount
 } from '../types'
 
 // Helper function to evaluate math expressions safely
@@ -38,6 +39,9 @@ export const CreateSupply: React.FC = () => {
   const { webApp, themeParams } = useTelegram()
 
   // Data loading
+  const { data: posterAccountsData, loading: loadingPosterAccounts } = useApi(() =>
+    getApiClient().getPosterAccounts()
+  )
   const { data: suppliersData, loading: loadingSuppliers } = useApi(() =>
     getApiClient().getSuppliers()
   )
@@ -46,6 +50,7 @@ export const CreateSupply: React.FC = () => {
   )
 
   // Form state
+  const [selectedPosterAccount, setSelectedPosterAccount] = useState<PosterAccount | null>(null)
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [items, setItems] = useState<SupplyItemInput[]>([])
@@ -72,6 +77,22 @@ export const CreateSupply: React.FC = () => {
 
   // Ref to track if sum field should be skipped after price
   const skipSumFieldRef = useRef<boolean>(false)
+
+  // Auto-select poster account when data loads (prefer primary)
+  useEffect(() => {
+    if (posterAccountsData?.poster_accounts && posterAccountsData.poster_accounts.length > 0) {
+      // If only one account, auto-select it
+      if (posterAccountsData.poster_accounts.length === 1) {
+        setSelectedPosterAccount(posterAccountsData.poster_accounts[0])
+      } else {
+        // Find and select primary account
+        const primary = posterAccountsData.poster_accounts.find(acc => acc.is_primary)
+        if (primary) {
+          setSelectedPosterAccount(primary)
+        }
+      }
+    }
+  }, [posterAccountsData])
 
   // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
   const sortedAccounts = useMemo(() => {
@@ -496,6 +517,7 @@ export const CreateSupply: React.FC = () => {
         supplier_name: selectedSupplier.name,
         account_id: selectedAccount.id,
         items: items,
+        poster_account_id: selectedPosterAccount?.id,  // Which Poster business account to use
       })
 
       webApp?.HapticFeedback?.notificationOccurred('success')
@@ -512,7 +534,10 @@ export const CreateSupply: React.FC = () => {
   useEffect(() => {
     if (!webApp?.MainButton) return
 
-    const canSubmit = selectedSupplier && selectedAccount && items.length > 0
+    // Need poster account if there are multiple accounts
+    const needsPosterAccount = (posterAccountsData?.poster_accounts?.length || 0) > 1
+    const posterAccountValid = !needsPosterAccount || selectedPosterAccount !== null
+    const canSubmit = posterAccountValid && selectedSupplier && selectedAccount && items.length > 0
 
     if (canSubmit) {
       webApp?.MainButton.setText('Создать поставку')
@@ -527,7 +552,7 @@ export const CreateSupply: React.FC = () => {
       webApp?.MainButton.offClick(handleSubmit)
       webApp?.MainButton.hide()
     }
-  }, [webApp?.MainButton, selectedSupplier, selectedAccount, items])
+  }, [webApp?.MainButton, selectedPosterAccount, selectedSupplier, selectedAccount, items, posterAccountsData])
 
   // Setup back button
   useEffect(() => {
@@ -542,7 +567,7 @@ export const CreateSupply: React.FC = () => {
     }
   }, [webApp?.BackButton, navigate])
 
-  if (loadingSuppliers || loadingAccounts) return <Loading />
+  if (loadingPosterAccounts || loadingSuppliers || loadingAccounts) return <Loading />
 
   return (
     <div style={{ backgroundColor: themeParams.bg_color || '#ffffff' }} className="min-h-screen pb-24">
@@ -552,6 +577,43 @@ export const CreateSupply: React.FC = () => {
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-100 text-red-800">
             {error}
+          </div>
+        )}
+
+        {/* Poster Account Selection (only show if multiple accounts) */}
+        {posterAccountsData?.poster_accounts && posterAccountsData.poster_accounts.length > 1 && (
+          <div className="mb-6">
+            <label
+              className="block text-sm font-medium mb-2"
+              style={{ color: themeParams.text_color || '#000000' }}
+            >
+              Бизнес *
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              {posterAccountsData.poster_accounts.map(account => (
+                <button
+                  key={account.id}
+                  onClick={() => {
+                    setSelectedPosterAccount(account)
+                    webApp?.HapticFeedback?.selectionChanged()
+                  }}
+                  className="p-4 rounded-lg font-medium text-center"
+                  style={{
+                    backgroundColor:
+                      selectedPosterAccount?.id === account.id
+                        ? themeParams.button_color || '#3b82f6'
+                        : themeParams.secondary_bg_color || '#f3f4f6',
+                    color:
+                      selectedPosterAccount?.id === account.id
+                        ? themeParams.button_text_color || '#ffffff'
+                        : themeParams.text_color || '#000000',
+                  }}
+                >
+                  {account.name}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
