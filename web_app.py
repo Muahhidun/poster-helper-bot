@@ -1156,6 +1156,204 @@ def list_supplies():
     return render_template('supplies.html', drafts=drafts, pending_supplies=pending_supplies)
 
 
+@app.route('/supplies/all')
+def view_all_supplies():
+    """View all supply drafts expanded on one page"""
+    db = get_database()
+    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+
+    # Load items for each draft
+    drafts = []
+    for draft_raw in drafts_raw:
+        draft = db.get_supply_draft_with_items(draft_raw['id'])
+        if draft:
+            drafts.append(draft)
+
+    # Load ingredients from ALL Poster accounts
+    items = []
+    try:
+        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if accounts:
+            from poster_client import PosterClient
+
+            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
+            seen_names = set()
+
+            for acc in accounts_sorted:
+                try:
+                    poster_client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                    for ing in ingredients:
+                        name = ing.get('ingredient_name', '')
+                        name_lower = name.lower()
+
+                        if name_lower in seen_names:
+                            continue
+                        seen_names.add(name_lower)
+
+                        items.append({
+                            'id': int(ing.get('ingredient_id', 0)),
+                            'name': name,
+                            'type': 'ingredient',
+                            'poster_account_id': acc['id'],
+                            'poster_account_name': acc.get('name', '')
+                        })
+
+                    loop.run_until_complete(poster_client.close())
+                    loop.close()
+                except Exception as e:
+                    print(f"Error loading ingredients from account {acc.get('name', acc['id'])}: {e}")
+
+    except Exception as e:
+        print(f"Error loading ingredients: {e}")
+
+    return render_template('supplies_all.html', drafts=drafts, items=items)
+
+
+@app.route('/supplies/process-all', methods=['POST'])
+def process_all_supplies():
+    """Process all supply drafts - create supplies in Poster"""
+    db = get_database()
+    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+
+    results = []
+    errors = []
+
+    for draft_raw in drafts_raw:
+        draft = db.get_supply_draft_with_items(draft_raw['id'])
+        if not draft:
+            continue
+
+        items = draft.get('items', [])
+        unmatched = [i for i in items if not i.get('poster_ingredient_id')]
+
+        if unmatched:
+            errors.append(f"#{draft['id']}: не привязано {len(unmatched)} товаров")
+            continue
+
+        try:
+            from poster_client import PosterClient
+
+            accounts = db.get_accounts(TELEGRAM_USER_ID)
+            if not accounts:
+                errors.append(f"#{draft['id']}: нет аккаунтов Poster")
+                continue
+
+            # Group items by poster_account_id
+            items_by_account = {}
+            for item in items:
+                acc_id = item.get('poster_account_id')
+                if acc_id not in items_by_account:
+                    items_by_account[acc_id] = []
+                items_by_account[acc_id].append(item)
+
+            # Create supply for each account
+            for acc_id, acc_items in items_by_account.items():
+                account = None
+                for a in accounts:
+                    if a['id'] == acc_id:
+                        account = a
+                        break
+                if not account:
+                    account = accounts[0]
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                async def create_supply_in_poster():
+                    client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=account['poster_token'],
+                        poster_user_id=account['poster_user_id'],
+                        poster_base_url=account['poster_base_url']
+                    )
+
+                    try:
+                        suppliers = await client.get_suppliers()
+                        supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
+                        supplier_id = None
+
+                        for s in suppliers:
+                            if supplier_name.lower() in s.get('supplier_name', '').lower():
+                                supplier_id = int(s['supplier_id'])
+                                break
+
+                        if not supplier_id and suppliers:
+                            supplier_id = int(suppliers[0]['supplier_id'])
+
+                        poster_accounts = await client.get_accounts()
+                        account_id_poster = None
+
+                        for acc in poster_accounts:
+                            if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                account_id_poster = int(acc['account_id'])
+                                break
+
+                        if not account_id_poster and poster_accounts:
+                            account_id_poster = int(poster_accounts[0]['account_id'])
+
+                        ingredients = []
+                        for item in acc_items:
+                            ingredients.append({
+                                'id': item['poster_ingredient_id'],
+                                'num': float(item['quantity']),
+                                'price': float(item['price_per_unit'])
+                            })
+
+                        supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
+
+                        supply_id = await client.create_supply(
+                            supplier_id=supplier_id,
+                            storage_id=1,
+                            date=f"{supply_date} 12:00:00",
+                            ingredients=ingredients,
+                            account_id=account_id_poster,
+                            comment=f"Накладная от {draft.get('supplier_name', 'поставщика')}"
+                        )
+
+                        return supply_id
+                    finally:
+                        await client.close()
+
+                supply_id = loop.run_until_complete(create_supply_in_poster())
+                loop.close()
+
+                if supply_id:
+                    results.append({
+                        'draft_id': draft['id'],
+                        'supply_id': supply_id,
+                        'account': account.get('name', '')
+                    })
+
+            # Mark draft as processed
+            db.mark_supply_draft_processed(draft['id'])
+
+            if draft.get('linked_expense_draft_id'):
+                db.mark_drafts_processed([draft['linked_expense_draft_id']])
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            errors.append(f"#{draft['id']}: {str(e)}")
+
+    return jsonify({
+        'success': len(errors) == 0,
+        'results': results,
+        'errors': errors,
+        'processed': len(results),
+        'failed': len(errors)
+    })
+
+
 @app.route('/supplies/<int:draft_id>')
 def view_supply(draft_id):
     """View supply draft details with items"""
@@ -1252,6 +1450,14 @@ def update_supply_item(item_id):
             update_fields['total'] = data.get('quantity', 1) * update_fields['price_per_unit']
 
     success = db.update_supply_draft_item(item_id, **update_fields) if update_fields else False
+    return jsonify({'success': success})
+
+
+@app.route('/supplies/delete-item/<int:item_id>', methods=['POST'])
+def delete_supply_item(item_id):
+    """Delete a supply draft item"""
+    db = get_database()
+    success = db.delete_supply_draft_item(item_id)
     return jsonify({'success': success})
 
 

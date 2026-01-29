@@ -2432,6 +2432,25 @@ class UserDatabase:
             logger.error(f"Failed to update supply draft item: {e}")
             return False
 
+    def delete_supply_draft_item(self, item_id: int) -> bool:
+        """Удалить отдельную позицию из черновика поставки"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM supply_draft_items WHERE id = ?", (item_id,))
+            else:
+                cursor.execute("DELETE FROM supply_draft_items WHERE id = %s", (item_id,))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete supply draft item: {e}")
+            return False
+
     def delete_supply_draft(self, supply_draft_id: int) -> bool:
         """Удалить черновик поставки (вместе с позициями благодаря CASCADE)"""
         try:
