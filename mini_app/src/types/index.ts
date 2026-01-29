@@ -304,3 +304,66 @@ export interface PriceHistoryResponse {
   item_id: number
   history: PriceHistoryRecord[]
 }
+
+// Shift Closing (Закрытие смены)
+export interface ShiftClosingPosterData {
+  success: boolean
+  date: string
+  total_sum: number        // Общая сумма (с бонусами) - в тийинах
+  trade_total: number      // Торговля за день (без бонусов) - в тийинах
+  bonus: number            // Бонусы (онлайн-оплата) - в тийинах
+  poster_cash: number      // Наличка в Poster - в тийинах
+  poster_card: number      // Безнал в Poster (картой) - в тийинах
+  shift_start: number      // Остаток на начало смены - в тийинах
+  transactions_count: number
+  error?: string
+}
+
+export interface ShiftClosingInput {
+  wolt: number             // Wolt - в тенге
+  halyk: number            // Halyk терминал - в тенге
+  kaspi: number            // Kaspi терминал - в тенге
+  kaspi_cafe: number       // Kaspi от PizzBurg-Cafe (вычитается) - в тенге
+  cash_bills: number       // Наличка бумажная - в тенге
+  cash_coins: number       // Наличка мелочь - в тенге
+  shift_start: number      // Остаток на начало смены - в тенге
+  deposits: number         // Внесения - в тенге
+  expenses: number         // Расходы с кассы - в тенге
+  cash_to_leave: number    // Оставить на смену (бумажные) - в тенге
+  poster_trade: number     // Poster торговля - в тийинах
+  poster_bonus: number     // Poster бонусы - в тийинах
+  poster_card: number      // Poster картой - в тийинах
+}
+
+export interface ShiftClosingCalculations {
+  // Input values echoed back
+  wolt: number
+  halyk: number
+  kaspi: number
+  kaspi_cafe: number
+  cash_bills: number
+  cash_coins: number
+  shift_start: number
+  deposits: number
+  expenses: number
+  cash_to_leave: number
+  poster_trade: number
+  poster_bonus: number
+  poster_card: number
+
+  // Calculated values (all in tenge)
+  fact_cashless: number    // Итого безнал факт
+  fact_total: number       // Фактический
+  fact_adjusted: number    // Итого фактический
+  poster_total: number     // Итого Poster
+  day_result: number       // ИТОГО ДЕНЬ (излишек/недостача)
+  shift_left: number       // Смена оставили
+  collection: number       // Инкассация
+  cashless_diff: number    // Разница безнала
+}
+
+export interface ShiftClosingCalculateResponse {
+  success: boolean
+  calculations: ShiftClosingCalculations
+  error?: string
+}

@@ -9,6 +9,7 @@ import { CreateSupply } from './pages/CreateSupply'
 import { Aliases } from './pages/Aliases'
 import { AliasForm } from './pages/AliasForm'
 import { Templates } from './pages/Templates'
+import { ShiftClosing } from './pages/ShiftClosing'
 import { Loading } from './components/Loading'
 
 function App() {
@@ -45,6 +46,7 @@ function App() {
         <Route path="/aliases/new" element={<AliasForm />} />
         <Route path="/aliases/:id/edit" element={<AliasForm />} />
         <Route path="/templates" element={<Templates />} />
+        <Route path="/shift-closing" element={<ShiftClosing />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

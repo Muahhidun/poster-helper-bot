@@ -16,6 +16,9 @@ import type {
   CreateSupplyRequest,
   CreateSupplyResponse,
   PosterAccountsResponse,
+  ShiftClosingPosterData,
+  ShiftClosingInput,
+  ShiftClosingCalculateResponse,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -170,6 +173,26 @@ class ApiClient {
 
   async createSupply(data: CreateSupplyRequest): Promise<CreateSupplyResponse> {
     return this.request<CreateSupplyResponse>('/api/supplies/create', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  // Shift Closing (Закрытие смены)
+  async getShiftClosingPosterData(date?: string): Promise<ShiftClosingPosterData> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+
+    const queryString = params.toString()
+    const endpoint = queryString
+      ? `/api/shift-closing/poster-data?${queryString}`
+      : '/api/shift-closing/poster-data'
+
+    return this.request<ShiftClosingPosterData>(endpoint)
+  }
+
+  async calculateShiftClosing(data: ShiftClosingInput): Promise<ShiftClosingCalculateResponse> {
+    return this.request<ShiftClosingCalculateResponse>('/api/shift-closing/calculate', {
       method: 'POST',
       body: JSON.stringify(data),
     })
