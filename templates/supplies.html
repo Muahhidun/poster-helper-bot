@@ -4,7 +4,14 @@
 
 {% block content %}
 <div class="container">
-    <h1>Черновики поставок</h1>
+    <div class="page-header">
+        <h1>Черновики поставок</h1>
+        {% if drafts %}
+        <a href="{{ url_for('view_all_supplies') }}" class="btn btn-lg btn-success">
+            📋 Открыть все накладные
+        </a>
+        {% endif %}
+    </div>
 
     {% if pending_supplies %}
     <div class="alert alert-info">
@@ -86,8 +93,20 @@
     padding: 20px;
 }
 
-h1 {
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: 20px;
+}
+
+h1 {
+    margin: 0;
+}
+
+.btn-lg {
+    padding: 12px 24px;
+    font-size: 16px;
 }
 
 .table {

@@ -1,0 +1,725 @@
+{% extends "base.html" %}
+
+{% block title %}Все накладные - PizzBurg{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header">
+        <a href="{{ url_for('list_supplies') }}" class="back-link">← Назад к списку</a>
+        <h1>Все накладные</h1>
+        <p class="subtitle">{{ drafts|length }} накладных для обработки</p>
+    </div>
+
+    {% if drafts %}
+    {% for draft in drafts %}
+    <div class="supply-card" data-draft-id="{{ draft.id }}">
+        <div class="supply-header">
+            <h2>📦 {{ draft.supplier_name or 'Накладная' }} #{{ draft.id }}</h2>
+            <button type="button" class="btn btn-sm btn-danger btn-delete-draft" data-id="{{ draft.id }}">
+                🗑️ Удалить
+            </button>
+        </div>
+
+        <div class="supply-info">
+            <div class="info-row">
+                <span class="label">Поставщик:</span>
+                <span class="value">{{ draft.supplier_name or 'Не указан' }}</span>
+            </div>
+            <div class="info-row">
+                <span class="label">Дата накладной:</span>
+                <span class="value">{{ draft.invoice_date or 'Не указана' }}</span>
+            </div>
+            {% if draft.linked_expense_draft_id %}
+            <div class="info-row">
+                <span class="label">Связано с расходом:</span>
+                <span class="value"><span class="badge bg-success">🔗 #{{ draft.linked_expense_draft_id }}</span></span>
+            </div>
+            {% endif %}
+        </div>
+
+        <h3>Товары ({{ draft['items']|length }})</h3>
+
+        <div class="items-table">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Название (OCR)</th>
+                        <th>Ингредиент Poster</th>
+                        <th>Кол-во</th>
+                        <th>Ед.</th>
+                        <th>Цена</th>
+                        <th>Сумма</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in draft['items'] %}
+                    <tr class="item-row {% if item.poster_ingredient_id %}matched{% else %}unmatched{% endif %}" data-item-id="{{ item.id }}" data-draft-id="{{ draft.id }}">
+                        <td>{{ loop.index }}</td>
+                        <td class="item-name">{{ item.item_name }}</td>
+                        <td class="ingredient-cell">
+                            {% if item.poster_ingredient_id %}
+                            <span class="matched-ingredient">✅ {{ item.poster_ingredient_name }}</span>
+                            {% else %}
+                            <input type="text" class="ingredient-search" placeholder="Поиск ингредиента..."
+                                   data-item-id="{{ item.id }}">
+                            <div class="search-results" style="display: none;"></div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <input type="number" class="qty-input" value="{{ item.quantity }}" step="0.1" min="0"
+                                   data-item-id="{{ item.id }}">
+                        </td>
+                        <td>{{ item.unit }}</td>
+                        <td>
+                            <input type="number" class="price-input" value="{{ item.price_per_unit }}" step="1" min="0"
+                                   data-item-id="{{ item.id }}">
+                        </td>
+                        <td class="item-total">{{ "{:,.0f}".format(item.total or 0) }}₸</td>
+                        <td>
+                            <button type="button" class="btn btn-xs btn-danger btn-delete-item" data-item-id="{{ item.id }}" title="Удалить строку">×</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="6" class="text-right"><strong>Итого по накладной:</strong></td>
+                        {% set items_total = namespace(sum=0) %}
+                        {% for item in draft['items'] %}
+                            {% set items_total.sum = items_total.sum + (item.total or 0) %}
+                        {% endfor %}
+                        <td class="amount draft-total" data-draft-id="{{ draft.id }}">{{ "{:,.0f}".format(items_total.sum) }}₸</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+        {% set unmatched_count = draft['items']|selectattr('poster_ingredient_id', 'none')|list|length %}
+        {% if unmatched_count > 0 %}
+        <div class="alert alert-warning draft-warning" data-draft-id="{{ draft.id }}">
+            ⚠️ Не привязано: {{ unmatched_count }} из {{ draft['items']|length }} товаров
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="grand-total-section">
+        <div class="grand-total">
+            {% set grand_total = namespace(sum=0) %}
+            {% for draft in drafts %}
+                {% for item in draft['items'] %}
+                    {% set grand_total.sum = grand_total.sum + (item.total or 0) %}
+                {% endfor %}
+            {% endfor %}
+            <strong>Общая сумма всех накладных:</strong>
+            <span id="grand-total" class="amount">{{ "{:,.0f}".format(grand_total.sum) }}₸</span>
+        </div>
+    </div>
+
+    <div class="actions-fixed">
+        <button type="button" class="btn btn-success btn-lg" id="process-all">
+            ✅ Создать все поставки в Poster ({{ drafts|length }})
+        </button>
+    </div>
+
+    {% else %}
+    <div class="empty-state">
+        <p>Нет черновиков для обработки</p>
+        <a href="{{ url_for('list_supplies') }}" class="btn btn-primary">← Вернуться к списку</a>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+    padding-bottom: 100px;
+}
+
+.header {
+    margin-bottom: 30px;
+}
+
+.back-link {
+    color: #007bff;
+    text-decoration: none;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+h1 {
+    margin: 10px 0 5px;
+}
+
+.subtitle {
+    color: #666;
+    margin: 0;
+}
+
+h2 {
+    margin: 0;
+    font-size: 1.3em;
+}
+
+h3 {
+    margin: 20px 0 10px;
+    font-size: 1.1em;
+    color: #555;
+}
+
+.supply-card {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 30px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.supply-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #007bff;
+}
+
+.supply-info {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    margin-bottom: 15px;
+}
+
+.info-row {
+    display: flex;
+    margin-bottom: 8px;
+}
+
+.info-row:last-child {
+    margin-bottom: 0;
+}
+
+.label {
+    font-weight: 600;
+    width: 180px;
+    color: #666;
+}
+
+.value {
+    flex: 1;
+}
+
+.amount {
+    font-weight: 600;
+    font-family: monospace;
+    font-size: 1.1em;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table th, .table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.table th {
+    background: #f5f5f5;
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+.item-row.unmatched {
+    background: #fff3cd;
+}
+
+.item-row.matched {
+    background: #d4edda;
+}
+
+.item-name {
+    max-width: 180px;
+    font-size: 0.9em;
+}
+
+.ingredient-cell {
+    position: relative;
+    min-width: 220px;
+}
+
+.ingredient-search {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.search-result-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+    font-size: 0.9em;
+}
+
+.search-result-item:hover, .search-result-item.active {
+    background: #e3f2fd;
+}
+
+.search-result-item:last-child {
+    border-bottom: none;
+}
+
+.text-muted {
+    color: #6c757d;
+    font-size: 0.85em;
+}
+
+.matched-ingredient {
+    color: #28a745;
+    font-weight: 500;
+    font-size: 0.9em;
+}
+
+.qty-input, .price-input {
+    width: 70px;
+    padding: 4px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    text-align: right;
+    font-size: 0.9em;
+}
+
+.text-right {
+    text-align: right;
+}
+
+.btn {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-lg {
+    padding: 15px 30px;
+    font-size: 18px;
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+.btn-xs {
+    padding: 2px 8px;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.btn-success {
+    background: #28a745;
+    color: white;
+}
+
+.btn-primary {
+    background: #007bff;
+    color: white;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.alert {
+    padding: 12px 15px;
+    border-radius: 5px;
+    margin-top: 10px;
+    font-size: 0.9em;
+}
+
+.alert-warning {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    color: #856404;
+}
+
+.badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.bg-success {
+    background: #28a745;
+    color: white;
+}
+
+.grand-total-section {
+    background: #e8f5e9;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.grand-total {
+    font-size: 1.3em;
+    text-align: center;
+}
+
+.grand-total .amount {
+    font-size: 1.5em;
+    color: #28a745;
+    margin-left: 15px;
+}
+
+.actions-fixed {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: white;
+    padding: 15px 20px;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+    text-align: center;
+    z-index: 50;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 50px;
+    color: #666;
+}
+
+.item-total {
+    font-family: monospace;
+}
+
+.btn-delete-item {
+    opacity: 0.5;
+}
+
+.btn-delete-item:hover {
+    opacity: 1;
+}
+</style>
+
+<script>
+const items = {{ items|tojson }};
+let searchTimeout = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Ingredient search
+    document.querySelectorAll('.ingredient-search').forEach(input => {
+        const itemId = input.dataset.itemId;
+        const resultsDiv = input.nextElementSibling;
+        let selectedIndex = -1;
+
+        input.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            const query = this.value.toLowerCase().trim();
+            selectedIndex = -1;
+
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                const matches = items.filter(item =>
+                    item.name.toLowerCase().includes(query)
+                ).slice(0, 10);
+
+                if (matches.length === 0) {
+                    resultsDiv.innerHTML = '<div class="search-result-item text-muted">Ничего не найдено</div>';
+                } else {
+                    resultsDiv.innerHTML = matches.map((item, i) =>
+                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}" data-account-id="${item.poster_account_id || ''}" data-account-name="${item.poster_account_name || ''}" data-index="${i}">
+                            ${item.name}
+                            ${item.poster_account_name ? `<small class="text-muted">(${item.poster_account_name})</small>` : ''}
+                        </div>`
+                    ).join('');
+                }
+
+                resultsDiv.style.display = 'block';
+            }, 150);
+        });
+
+        // Keyboard navigation
+        input.addEventListener('keydown', function(e) {
+            const resultItems = resultsDiv.querySelectorAll('.search-result-item[data-id]');
+            if (resultItems.length === 0) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIndex = Math.min(selectedIndex + 1, resultItems.length - 1);
+                updateSelection(resultItems);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIndex = Math.max(selectedIndex - 1, 0);
+                updateSelection(resultItems);
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                if (selectedIndex >= 0 && resultItems[selectedIndex]) {
+                    e.preventDefault();
+                    selectIngredient(resultItems[selectedIndex], input, itemId);
+                } else if (resultItems.length === 1) {
+                    e.preventDefault();
+                    selectIngredient(resultItems[0], input, itemId);
+                }
+            } else if (e.key === 'Escape') {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        function updateSelection(items) {
+            items.forEach((item, i) => {
+                item.classList.toggle('active', i === selectedIndex);
+            });
+            if (selectedIndex >= 0) {
+                items[selectedIndex].scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        resultsDiv.addEventListener('click', function(e) {
+            const resultItem = e.target.closest('.search-result-item');
+            if (!resultItem || !resultItem.dataset.id) return;
+            selectIngredient(resultItem, input, itemId);
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!input.contains(e.target) && !resultsDiv.contains(e.target)) {
+                resultsDiv.style.display = 'none';
+            }
+        });
+    });
+
+    async function selectIngredient(resultItem, inputEl, itemId) {
+        const ingredientId = parseInt(resultItem.dataset.id);
+        const ingredientName = resultItem.dataset.name;
+        const accountId = resultItem.dataset.accountId ? parseInt(resultItem.dataset.accountId) : null;
+        const accountName = resultItem.dataset.accountName || '';
+
+        const response = await fetch(`/supplies/update-item/${itemId}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                poster_ingredient_id: ingredientId,
+                poster_ingredient_name: ingredientName,
+                poster_account_id: accountId
+            })
+        });
+
+        if (response.ok) {
+            const cell = inputEl.parentElement;
+            const displayName = accountName ? `${ingredientName} <small>(${accountName})</small>` : ingredientName;
+            cell.innerHTML = `<span class="matched-ingredient">✅ ${displayName}</span>`;
+
+            const row = cell.closest('tr');
+            row.classList.remove('unmatched');
+            row.classList.add('matched');
+
+            // Update draft warning
+            const draftId = row.dataset.draftId;
+            updateDraftWarning(draftId);
+
+            // Move to next unmatched input in ANY draft
+            const nextUnmatched = document.querySelector('.item-row.unmatched .ingredient-search');
+            if (nextUnmatched) {
+                nextUnmatched.focus();
+            }
+        }
+    }
+
+    function updateDraftWarning(draftId) {
+        const card = document.querySelector(`.supply-card[data-draft-id="${draftId}"]`);
+        const unmatchedCount = card.querySelectorAll('.item-row.unmatched').length;
+        const totalCount = card.querySelectorAll('.item-row').length;
+        const warning = card.querySelector('.draft-warning');
+
+        if (unmatchedCount === 0) {
+            if (warning) warning.remove();
+        } else if (warning) {
+            warning.innerHTML = `⚠️ Не привязано: ${unmatchedCount} из ${totalCount} товаров`;
+        }
+    }
+
+    // Quantity/price updates
+    document.querySelectorAll('.qty-input, .price-input').forEach(input => {
+        input.addEventListener('change', async function() {
+            const itemId = this.dataset.itemId;
+            const row = this.closest('tr');
+            const draftId = row.dataset.draftId;
+            const qty = parseFloat(row.querySelector('.qty-input').value) || 0;
+            const price = parseFloat(row.querySelector('.price-input').value) || 0;
+            const total = qty * price;
+
+            row.querySelector('.item-total').textContent = total.toLocaleString('ru-RU') + '₸';
+
+            await fetch(`/supplies/update-item/${itemId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    quantity: qty,
+                    price_per_unit: price
+                })
+            });
+
+            updateDraftTotal(draftId);
+            updateGrandTotal();
+        });
+    });
+
+    function updateDraftTotal(draftId) {
+        const card = document.querySelector(`.supply-card[data-draft-id="${draftId}"]`);
+        let total = 0;
+        card.querySelectorAll('.item-total').forEach(cell => {
+            const value = parseFloat(cell.textContent.replace(/[^\d]/g, '')) || 0;
+            total += value;
+        });
+        card.querySelector('.draft-total').textContent = total.toLocaleString('ru-RU') + '₸';
+    }
+
+    function updateGrandTotal() {
+        let total = 0;
+        document.querySelectorAll('.draft-total').forEach(cell => {
+            const value = parseFloat(cell.textContent.replace(/[^\d]/g, '')) || 0;
+            total += value;
+        });
+        document.getElementById('grand-total').textContent = total.toLocaleString('ru-RU') + '₸';
+    }
+
+    // Delete item
+    document.querySelectorAll('.btn-delete-item').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            if (!confirm('Удалить эту строку?')) return;
+
+            const itemId = this.dataset.itemId;
+            const row = this.closest('tr');
+            const draftId = row.dataset.draftId;
+
+            const response = await fetch(`/supplies/delete-item/${itemId}`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                row.remove();
+                updateDraftTotal(draftId);
+                updateGrandTotal();
+                updateDraftWarning(draftId);
+            }
+        });
+    });
+
+    // Delete draft
+    document.querySelectorAll('.btn-delete-draft').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            if (!confirm('Удалить всю накладную?')) return;
+
+            const id = this.dataset.id;
+            const response = await fetch(`/supplies/delete/${id}`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                const card = document.querySelector(`.supply-card[data-draft-id="${id}"]`);
+                card.remove();
+                updateGrandTotal();
+
+                // Update button count
+                const remainingCards = document.querySelectorAll('.supply-card').length;
+                const processBtn = document.getElementById('process-all');
+                if (remainingCards === 0) {
+                    processBtn.parentElement.remove();
+                } else {
+                    processBtn.textContent = `✅ Создать все поставки в Poster (${remainingCards})`;
+                }
+            }
+        });
+    });
+
+    // Process all supplies
+    document.getElementById('process-all')?.addEventListener('click', async function() {
+        // Check for unmatched items
+        const unmatchedCount = document.querySelectorAll('.item-row.unmatched').length;
+        if (unmatchedCount > 0) {
+            alert(`⚠️ Ещё не привязано ${unmatchedCount} товаров.\nПривяжите все товары к ингредиентам Poster.`);
+            return;
+        }
+
+        if (!confirm('Создать все поставки в Poster?')) return;
+
+        this.disabled = true;
+        this.textContent = '⏳ Создаю поставки...';
+
+        try {
+            const response = await fetch('/supplies/process-all', {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                alert(`✅ Все поставки созданы!\nОбработано: ${result.processed}`);
+                window.location.href = '/supplies';
+            } else {
+                let msg = `Обработано: ${result.processed}\nОшибок: ${result.failed}`;
+                if (result.errors.length > 0) {
+                    msg += '\n\nОшибки:\n' + result.errors.join('\n');
+                }
+                alert(msg);
+
+                if (result.processed > 0) {
+                    window.location.reload();
+                } else {
+                    this.disabled = false;
+                    this.textContent = `✅ Создать все поставки в Poster (${document.querySelectorAll('.supply-card').length})`;
+                }
+            }
+        } catch (e) {
+            alert('❌ Ошибка: ' + e.message);
+            this.disabled = false;
+            this.textContent = `✅ Создать все поставки в Poster (${document.querySelectorAll('.supply-card').length})`;
+        }
+    });
+});
+</script>
+{% endblock %}
