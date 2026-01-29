@@ -1166,8 +1166,56 @@ def view_supply(draft_id):
         flash('Черновик не найден', 'error')
         return redirect(url_for('list_supplies'))
 
-    # Load items for matching
-    items = load_items_from_csv()
+    # Load items from ALL Poster accounts (not just CSV)
+    items = []
+    try:
+        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if accounts:
+            from poster_client import PosterClient
+
+            # Sort accounts: primary first (PizzBurg takes priority for deduplication)
+            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
+
+            seen_names = set()
+
+            for acc in accounts_sorted:
+                try:
+                    poster_client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                    for ing in ingredients:
+                        name = ing.get('ingredient_name', '')
+                        name_lower = name.lower()
+
+                        # Skip if already seen (primary account takes priority)
+                        if name_lower in seen_names:
+                            continue
+                        seen_names.add(name_lower)
+
+                        items.append({
+                            'id': int(ing.get('ingredient_id', 0)),
+                            'name': name,
+                            'type': 'ingredient',
+                            'poster_account_id': acc['id'],
+                            'poster_account_name': acc['account_name']
+                        })
+
+                    loop.close()
+                except Exception as e:
+                    print(f"Error loading from account {acc['account_name']}: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error loading from Poster API: {e}")
+        # Fallback to CSV
+        items = load_items_from_csv()
 
     return render_template('supply_detail.html', draft=draft, items=items)
 
@@ -1182,7 +1230,7 @@ def delete_supply(draft_id):
 
 @app.route('/supplies/update-item/<int:item_id>', methods=['POST'])
 def update_supply_item(item_id):
-    """Update supply draft item (ingredient matching, quantity, price)"""
+    """Update supply draft item (ingredient matching, quantity, price, poster_account_id)"""
     db = get_database()
     data = request.get_json() or {}
 
@@ -1191,6 +1239,8 @@ def update_supply_item(item_id):
         update_fields['poster_ingredient_id'] = data['poster_ingredient_id']
     if 'poster_ingredient_name' in data:
         update_fields['poster_ingredient_name'] = data['poster_ingredient_name']
+    if 'poster_account_id' in data:
+        update_fields['poster_account_id'] = data['poster_account_id']
     if 'quantity' in data:
         update_fields['quantity'] = data['quantity']
     if 'price_per_unit' in data:
