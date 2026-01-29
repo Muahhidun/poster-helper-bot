@@ -95,6 +95,16 @@ export const Dashboard: React.FC = () => {
 
         <div className="grid grid-cols-2 gap-3 mb-6">
           <Link
+            to="/shift-closing"
+            className="p-4 rounded-lg text-center font-medium shadow-sm col-span-2"
+            style={{
+              backgroundColor: '#22c55e',
+              color: '#ffffff',
+            }}
+          >
+            💰 Закрытие смены
+          </Link>
+          <Link
             to="/supplies/new"
             className="p-4 rounded-lg text-center font-medium shadow-sm col-span-2"
             style={{

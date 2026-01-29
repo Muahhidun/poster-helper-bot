@@ -1665,6 +1665,204 @@ def search_suppliers():
 
 
 # ========================================
+# Shift Closing API (Закрытие смены)
+# ========================================
+
+@app.route('/api/shift-closing/poster-data')
+def api_shift_closing_poster_data():
+    """Get Poster data for shift closing (sales, bonuses, cash, card payments)"""
+    date = request.args.get('date')  # Format: YYYYMMDD
+
+    try:
+        from poster_client import PosterClient
+        db = get_database()
+        accounts = db.get_accounts(g.user_id)
+
+        if not accounts:
+            return jsonify({'error': 'No Poster accounts configured'}), 400
+
+        # Use primary account
+        account = next((acc for acc in accounts if acc.get('is_primary')), accounts[0])
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def get_poster_data():
+            client = PosterClient(
+                telegram_user_id=g.user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                if date is None:
+                    date_param = datetime.now().strftime("%Y%m%d")
+                else:
+                    date_param = date
+
+                # Get transactions for the day (sales data)
+                result = await client._request('GET', 'dash.getTransactions', params={
+                    'dateFrom': date_param,
+                    'dateTo': date_param
+                })
+
+                transactions = result.get('response', [])
+
+                # Filter only closed orders (status='2')
+                closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
+
+                # Calculate totals
+                total_cash = 0      # Наличные
+                total_card = 0      # Картой (безнал в Poster)
+                total_sum = 0       # Общая сумма заказов
+                bonus_total = 0     # Бонусы (онлайн-оплата)
+
+                for tx in closed_transactions:
+                    cash = int(tx.get('payed_cash', 0))
+                    card = int(tx.get('payed_card', 0))
+                    total = int(tx.get('payed_sum', 0))
+                    bonus = int(tx.get('payed_bonus', 0))
+
+                    total_cash += cash
+                    total_card += card
+                    total_sum += total
+                    bonus_total += bonus
+
+                # Trade total = cash + card (without bonuses)
+                trade_total = total_cash + total_card
+
+                # Try to get shift start balance from finance API
+                shift_start = 0
+                try:
+                    # Get today's finance report for cash drawer opening balance
+                    finance_result = await client._request('GET', 'finance.getReport', params={
+                        'dateFrom': date_param,
+                        'dateTo': date_param
+                    })
+                    # Parse shift start if available
+                    report = finance_result.get('response', {})
+                    if isinstance(report, dict):
+                        shift_start = int(report.get('cash_shift_open', 0))
+                except Exception as e:
+                    print(f"Could not get shift start: {e}")
+                    shift_start = 0
+
+                return {
+                    'success': True,
+                    'date': date_param,
+                    'total_sum': total_sum,              # Общая сумма (включая бонусы) - в тийинах
+                    'trade_total': trade_total,          # Торговля за день (без бонусов) - в тийинах
+                    'bonus': bonus_total,                # Бонусы (онлайн-оплата) - в тийинах
+                    'poster_cash': total_cash,           # Наличка в Poster - в тийинах
+                    'poster_card': total_card,           # Безнал в Poster (картой) - в тийинах
+                    'shift_start': shift_start,          # Остаток на начало смены - в тийинах
+                    'transactions_count': len(closed_transactions)
+                }
+
+            finally:
+                await client.close()
+
+        data = loop.run_until_complete(get_poster_data())
+        loop.close()
+
+        return jsonify(data)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/shift-closing/calculate', methods=['POST'])
+def api_shift_closing_calculate():
+    """Calculate shift closing totals based on input data"""
+    data = request.json
+
+    try:
+        # Input values (all in tenge, whole numbers)
+        wolt = float(data.get('wolt', 0))
+        halyk = float(data.get('halyk', 0))
+        kaspi = float(data.get('kaspi', 0))
+        kaspi_cafe = float(data.get('kaspi_cafe', 0))  # Deducted from Kaspi
+        cash_bills = float(data.get('cash_bills', 0))
+        cash_coins = float(data.get('cash_coins', 0))
+        shift_start = float(data.get('shift_start', 0))
+        deposits = float(data.get('deposits', 0))
+        expenses = float(data.get('expenses', 0))
+        cash_to_leave = float(data.get('cash_to_leave', 15000))
+
+        # Poster data (from API, in tiyins - convert to tenge)
+        poster_trade = float(data.get('poster_trade', 0)) / 100  # С учётом скидок
+        poster_bonus = float(data.get('poster_bonus', 0)) / 100  # Онлайн-оплата
+        poster_card = float(data.get('poster_card', 0)) / 100    # Картой (для проверки)
+
+        # Calculations
+        # 1. Итого безнал факт = Wolt + Halyk + (Kaspi - Kaspi от Cafe)
+        fact_cashless = wolt + halyk + (kaspi - kaspi_cafe)
+
+        # 2. Фактический = безнал + наличка (бумажная + мелочь)
+        fact_total = fact_cashless + cash_bills + cash_coins
+
+        # 3. Итого фактический = Фактический - Смена + Расходы - Внесения
+        fact_adjusted = fact_total - shift_start - deposits + expenses
+
+        # 4. Итого Poster = Торговля - Бонусы (но trade_total уже без бонусов!)
+        # Значит: poster_total = poster_trade (которая уже "С учётом скидок")
+        poster_total = poster_trade - poster_bonus
+
+        # 5. Итого день = Итого фактический - Итого Poster
+        day_result = fact_adjusted - poster_total
+
+        # 6. Смена оставили = бумажные оставить + мелочь
+        shift_left = cash_to_leave + cash_coins
+
+        # 7. Инкассация = Бумажные - оставить бумажными + расходы
+        # Или: вся наличка - то что оставили
+        collection = cash_bills - cash_to_leave + expenses
+
+        # 8. Разница безнала (для проверки)
+        cashless_diff = fact_cashless - poster_card
+
+        return jsonify({
+            'success': True,
+            'calculations': {
+                # Input echo
+                'wolt': wolt,
+                'halyk': halyk,
+                'kaspi': kaspi,
+                'kaspi_cafe': kaspi_cafe,
+                'cash_bills': cash_bills,
+                'cash_coins': cash_coins,
+                'shift_start': shift_start,
+                'deposits': deposits,
+                'expenses': expenses,
+                'cash_to_leave': cash_to_leave,
+
+                # Poster data
+                'poster_trade': poster_trade,
+                'poster_bonus': poster_bonus,
+                'poster_card': poster_card,
+
+                # Calculated values
+                'fact_cashless': fact_cashless,      # Итого безнал факт
+                'fact_total': fact_total,            # Фактический
+                'fact_adjusted': fact_adjusted,      # Итого фактический
+                'poster_total': poster_total,        # Итого Poster
+                'day_result': day_result,            # ИТОГО ДЕНЬ (излишек/недостача)
+                'shift_left': shift_left,            # Смена оставили
+                'collection': collection,            # Инкассация
+                'cashless_diff': cashless_diff,      # Разница безнала
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ========================================
 # Serve Mini App static files
 # ========================================
 
