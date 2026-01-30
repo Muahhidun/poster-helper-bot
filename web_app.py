@@ -249,8 +249,11 @@ def validate_api_request():
     if request.path.startswith('/api/'):
         init_data = request.headers.get('X-Telegram-Init-Data', '')
 
-        # Validate init data
-        if not validate_telegram_web_app_data(init_data, TELEGRAM_TOKEN):
+        # If no init_data provided, use default user (for web interface)
+        if not init_data:
+            g.user_id = TELEGRAM_USER_ID
+        # Validate init data if provided
+        elif not validate_telegram_web_app_data(init_data, TELEGRAM_TOKEN):
             # In development, allow without validation
             if not TELEGRAM_TOKEN:
                 g.user_id = TELEGRAM_USER_ID
@@ -1662,6 +1665,16 @@ def search_suppliers():
         suppliers = [s for s in suppliers if query in s['name'].lower()]
 
     return jsonify(suppliers[:20])
+
+
+# ========================================
+# Shift Closing Web Interface (Закрытие смены)
+# ========================================
+
+@app.route('/shift-closing')
+def shift_closing():
+    """Show shift closing page"""
+    return render_template('shift_closing.html')
 
 
 # ========================================
