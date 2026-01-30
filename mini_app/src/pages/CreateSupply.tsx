@@ -54,6 +54,7 @@ export const CreateSupply: React.FC = () => {
   const [searchResults, setSearchResults] = useState<PosterItem[]>([])
   const [lastSupplyItems, setLastSupplyItems] = useState<LastSupplyItem[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   // Track raw input strings for quantity, price and sum to allow partial expressions
   const [inputValues, setInputValues] = useState<Record<number, { quantity?: string; price?: string; sum?: string }>>({})
   // Track last edited field for each item to determine what to recalculate when sum changes
@@ -489,6 +490,7 @@ export const CreateSupply: React.FC = () => {
     }
 
     setError(null)
+    setIsSubmitting(true)
     webApp?.MainButton?.showProgress()
 
     try {
@@ -502,13 +504,18 @@ export const CreateSupply: React.FC = () => {
 
       webApp?.HapticFeedback?.notificationOccurred('success')
       webApp?.MainButton?.hideProgress()
+      setIsSubmitting(false)
       navigate('/supplies')
     } catch (err) {
       webApp?.HapticFeedback?.notificationOccurred('error')
       setError(err instanceof Error ? err.message : 'Ошибка создания поставки')
       webApp?.MainButton?.hideProgress()
+      setIsSubmitting(false)
     }
   }
+
+  // Check if we're in Telegram or regular browser
+  const isInTelegram = !!webApp?.MainButton
 
   // Setup main button
   useEffect(() => {
@@ -548,7 +555,7 @@ export const CreateSupply: React.FC = () => {
 
   return (
     <div style={{ backgroundColor: themeParams.bg_color || '#ffffff' }} className="min-h-screen pb-24">
-      <Header title="Новая поставка" />
+      <Header title="Новая поставка" showBack={!isInTelegram} />
 
       <div className="p-4">
         {error && (
@@ -954,6 +961,27 @@ export const CreateSupply: React.FC = () => {
               {items.length} {items.length === 1 ? 'товар' : 'товаров'}
             </div>
           </div>
+        )}
+
+        {/* Fallback submit button for desktop (when not in Telegram) */}
+        {!isInTelegram && (
+          <button
+            onClick={handleSubmit}
+            disabled={!selectedSupplier || !selectedAccount || items.length === 0 || isSubmitting}
+            className="w-full mt-6 p-4 rounded-lg font-semibold text-lg transition-opacity"
+            style={{
+              backgroundColor: (selectedSupplier && selectedAccount && items.length > 0)
+                ? (themeParams.button_color || '#3b82f6')
+                : '#9ca3af',
+              color: themeParams.button_text_color || '#ffffff',
+              opacity: isSubmitting ? 0.7 : 1,
+              cursor: (selectedSupplier && selectedAccount && items.length > 0 && !isSubmitting)
+                ? 'pointer'
+                : 'not-allowed',
+            }}
+          >
+            {isSubmitting ? 'Создание...' : 'Создать поставку'}
+          </button>
         )}
       </div>
     </div>
