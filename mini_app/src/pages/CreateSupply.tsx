@@ -514,8 +514,8 @@ export const CreateSupply: React.FC = () => {
     }
   }
 
-  // Check if we're in Telegram or regular browser
-  const isInTelegram = !!webApp?.MainButton
+  // Check if we're actually in Telegram (has real init data, not just the SDK loaded)
+  const isInTelegram = !!(webApp?.initData && webApp.initData.length > 0)
 
   // Setup main button
   useEffect(() => {
