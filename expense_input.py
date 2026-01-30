@@ -627,20 +627,62 @@ async def create_transactions_in_poster(
     return success_count, error_count, errors
 
 
+def extract_supplier_name_from_purpose(purpose: str) -> str:
+    """
+    Извлечь имя поставщика из назначения платежа.
+
+    Примеры:
+    - "ИП ЕРЖАНОВА. Оплата с Kaspi QR" → "ИП ЕРЖАНОВА"
+    - "ИнариН. Оплата с Kaspi QR" → "ИнариН"
+    - "Yaposha Market. Оплата с Kaspi QR" → "Yaposha Market"
+    - "Мясной магазин. Оплата" → "Мясной магазин"
+    - "Перевод собственных средств на карту Kaspi" → ""
+    """
+    if not purpose:
+        return ""
+
+    purpose = purpose.strip()
+
+    # Паттерны которые означают "не поставщик"
+    skip_patterns = [
+        "перевод собственных",
+        "за профессиональные",
+        "за научные",
+        "за технические",
+    ]
+    purpose_lower = purpose.lower()
+    for pattern in skip_patterns:
+        if pattern in purpose_lower:
+            return ""
+
+    # Ищем паттерн "Имя. Оплата" или "Имя. Что-то"
+    # Разделитель - точка с пробелом или просто точка
+    if ". " in purpose:
+        name = purpose.split(". ")[0].strip()
+        return name
+    elif "." in purpose and not purpose.endswith("."):
+        # Если есть точка, но нет пробела после - пробуем разделить
+        parts = purpose.split(".")
+        if len(parts) >= 2 and len(parts[0]) > 2:
+            return parts[0].strip()
+
+    return ""
+
+
 def parse_kaspi_xlsx(file_path: str, telegram_user_id: int = None) -> List[ExpenseItem]:
     """
     Парсинг выписки Kaspi из XLSX файла
 
     Колонки:
-    - № документа (A)
-    - Дата операции (B)
-    - Дебет (C) - расход
-    - Кредит (D) - приход
-    - Наименование бенефициара (E)
-    - ИИК бенефициара (F)
-    - БИК банка (G)
-    - КНП (H)
-    - Назначение платежа (I)
+    - № документа (A/1)
+    - Дата операции (B/2)
+    - Дебет (C/3) - расход
+    - Кредит (D/4) - приход
+    - Наименование бенефициара (E/5)
+    - ИИК бенефициара (F/6)
+    - БИК банка (G/7)
+    - КНП (H/8)
+    - Назначение платежа (I/9) - ТУТ ИМЕНА ПОСТАВЩИКОВ!
 
     Args:
         file_path: Путь к XLSX файлу
@@ -653,7 +695,7 @@ def parse_kaspi_xlsx(file_path: str, telegram_user_id: int = None) -> List[Expen
 
     logger.info(f"📄 Парсинг Kaspi выписки: {file_path}")
 
-    # Загружаем алиасы поставщиков если есть user_id
+    # Загружаем функцию поиска алиасов поставщиков
     supplier_aliases_lookup = None
     if telegram_user_id:
         try:
@@ -697,8 +739,8 @@ def parse_kaspi_xlsx(file_path: str, telegram_user_id: int = None) -> List[Expen
             date_cell = row[1]
             debit = row[2]  # Расход
             credit = row[3]  # Приход
-            beneficiary = row[4]  # Наименование бенефициара
-            purpose = row[8]  # Назначение платежа
+            beneficiary = row[4]  # Наименование бенефициара / отправителя
+            purpose = row[8]  # Назначение платежа (здесь имена поставщиков!)
 
             # Пропускаем если нет дебета (не расход)
             if not debit or debit == 0:
@@ -713,36 +755,63 @@ def parse_kaspi_xlsx(file_path: str, telegram_user_id: int = None) -> List[Expen
             if amount <= 0:
                 continue
 
-            # Формируем описание
+            # Извлекаем данные
             beneficiary_str = str(beneficiary or "").strip()
             purpose_str = str(purpose or "").strip()
 
-            # Формируем описание
-            # Если есть "Оплата с Kaspi QR" - берём имя бенефициара
-            if "kaspi qr" in purpose_str.lower() or "оплата с kaspi" in purpose_str.lower():
-                description = beneficiary_str if beneficiary_str else purpose_str
-            else:
-                description = f"{beneficiary_str}: {purpose_str}" if beneficiary_str else purpose_str
+            # Убираем технические данные из beneficiary
+            beneficiary_clean = beneficiary_str
+            beneficiary_clean = beneficiary_clean.replace("АО \"KASPI BANK\"", "").strip()
+            beneficiary_clean = beneficiary_clean.replace("ИИН/БИН", "").strip()
+            # Убираем ИИН/БИН номера (971240001315 и т.д.)
+            beneficiary_clean = re.sub(r'\d{12}', '', beneficiary_clean).strip()
+            beneficiary_clean = beneficiary_clean.strip()
 
-            # Убираем лишнее из описания
-            description = description.replace("АО \"KASPI BANK\"", "").strip()
-            description = description.replace("ИИН/БИН", "").strip()
-            if description.startswith(":"):
-                description = description[1:].strip()
+            # 1. Извлекаем имя поставщика из "Назначение платежа"
+            #    Например: "ИП ЕРЖАНОВА. Оплата с Kaspi QR" → "ИП ЕРЖАНОВА"
+            supplier_from_purpose = extract_supplier_name_from_purpose(purpose_str)
 
-            # Ищем поставщика по алиасу
+            # 2. Определяем что использовать как имя поставщика для поиска алиаса
+            #    Приоритет: purpose > beneficiary
+            search_name = supplier_from_purpose if supplier_from_purpose else beneficiary_clean
+
+            # 3. Ищем поставщика по алиасу
             supplier_id = None
             supplier_name = None
+            matched_alias = None
 
-            if supplier_aliases_lookup and beneficiary_str:
-                supplier_match = supplier_aliases_lookup(telegram_user_id, beneficiary_str)
+            if supplier_aliases_lookup and search_name:
+                # Пробуем найти по полному имени
+                supplier_match = supplier_aliases_lookup(telegram_user_id, search_name)
                 if supplier_match:
                     supplier_id = supplier_match['poster_supplier_id']
                     supplier_name = supplier_match['poster_supplier_name']
-                    logger.info(f"🏪 Найден поставщик: {beneficiary_str} → {supplier_name}")
+                    matched_alias = search_name
+                    logger.info(f"🏪 Найден поставщик: '{search_name}' → {supplier_name}")
 
-            # Определяем тип
-            # Если нашли поставщика по алиасу - это поставка
+                # Если не нашли и есть beneficiary - пробуем по нему
+                if not supplier_id and beneficiary_clean and beneficiary_clean != search_name:
+                    supplier_match = supplier_aliases_lookup(telegram_user_id, beneficiary_clean)
+                    if supplier_match:
+                        supplier_id = supplier_match['poster_supplier_id']
+                        supplier_name = supplier_match['poster_supplier_name']
+                        matched_alias = beneficiary_clean
+                        logger.info(f"🏪 Найден поставщик по бенефициару: '{beneficiary_clean}' → {supplier_name}")
+
+            # 4. Формируем description
+            #    Если нашли поставщика - используем его имя из Poster
+            #    Иначе - используем извлечённое имя или beneficiary
+            if supplier_name:
+                description = supplier_name
+            elif supplier_from_purpose:
+                description = supplier_from_purpose
+            elif beneficiary_clean:
+                description = beneficiary_clean
+            else:
+                description = purpose_str[:50] if purpose_str else f"Расход {doc_num}"
+
+            # 5. Определяем тип
+            #    Если нашли поставщика по алиасу - это поставка
             if supplier_id:
                 expense_type = ExpenseType.SUPPLY
             else:
