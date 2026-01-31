@@ -6,11 +6,9 @@
 <div class="container">
     <div class="page-header">
         <h1>Черновики поставок</h1>
-        {% if drafts %}
-        <a href="{{ url_for('view_all_supplies') }}" class="btn btn-lg btn-success">
-            📋 Открыть все накладные
-        </a>
-        {% endif %}
+        <button type="button" class="btn btn-primary" id="add-supply-btn">
+            ➕ Добавить поставку
+        </button>
     </div>
 
     {% if pending_supplies %}
@@ -27,63 +25,91 @@
     </div>
     {% endif %}
 
-    {% if drafts %}
-    <div class="table-responsive">
-        <table class="table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Поставщик</th>
-                    <th>Дата</th>
-                    <th>Товаров</th>
-                    <th>Сумма</th>
-                    <th>Статус</th>
-                    <th>Действия</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for draft in drafts %}
-                <tr class="draft-row">
-                    <td>#{{ draft.id }}</td>
-                    <td>{{ draft.supplier_name or 'Не указан' }}</td>
-                    <td>{{ draft.invoice_date or '-' }}</td>
-                    <td>-</td>
-                    <td class="amount">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</td>
-                    <td>
+    <div class="supplies-list" id="supplies-list">
+        {% for draft in drafts %}
+        <div class="supply-card" data-id="{{ draft.id }}">
+            <div class="supply-header">
+                <div class="supply-info">
+                    <div class="supplier-row">
+                        <label>Поставщик:</label>
+                        <input type="text" class="supplier-input" value="{{ draft.supplier_name or '' }}"
+                               data-id="{{ draft.id }}" placeholder="Название поставщика">
+                    </div>
+                    <div class="meta-row">
+                        <span class="amount">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</span>
+                        <span class="date">{{ draft.invoice_date or 'Сегодня' }}</span>
+                        <select class="source-select" data-id="{{ draft.id }}">
+                            <option value="cash" {% if draft.source != 'kaspi' %}selected{% endif %}>Наличка</option>
+                            <option value="kaspi" {% if draft.source == 'kaspi' %}selected{% endif %}>Kaspi Pay</option>
+                        </select>
                         {% if draft.linked_expense_draft_id %}
-                        <span class="badge bg-success">🔗 Связано</span>
-                        {% else %}
-                        <span class="badge bg-secondary">Новый</span>
+                        <span class="badge bg-success">🔗 Расход #{{ draft.linked_expense_draft_id }}</span>
                         {% endif %}
-                    </td>
-                    <td class="actions">
-                        <a href="{{ url_for('view_supply', draft_id=draft.id) }}" class="btn btn-sm btn-primary">
-                            📝 Редактировать
-                        </a>
-                        <button type="button" class="btn btn-sm btn-danger btn-delete" data-id="{{ draft.id }}">
-                            🗑️
-                        </button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                    </div>
+                </div>
+                <div class="supply-actions">
+                    <button type="button" class="btn btn-sm btn-success btn-process" data-id="{{ draft.id }}"
+                            title="Создать в Poster">
+                        ✅ Создать
+                    </button>
+                    <button type="button" class="btn btn-sm btn-danger btn-delete-supply" data-id="{{ draft.id }}">
+                        🗑️
+                    </button>
+                </div>
+            </div>
+
+            <div class="supply-items">
+                <div class="items-header">
+                    <span>Товары</span>
+                    <div class="add-item-search">
+                        <input type="text" class="item-search-input" data-draft-id="{{ draft.id }}"
+                               placeholder="🔍 Поиск ингредиента...">
+                        <div class="search-results"></div>
+                    </div>
+                </div>
+
+                <table class="items-table">
+                    <thead>
+                        <tr>
+                            <th>Ингредиент</th>
+                            <th>Отдел</th>
+                            <th>Кол-во</th>
+                            <th>Цена</th>
+                            <th>Сумма</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody class="items-tbody" data-draft-id="{{ draft.id }}">
+                        <!-- Items will be loaded dynamically -->
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td colspan="4" class="text-right"><strong>Итого:</strong></td>
+                            <td class="items-total">0₸</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
     </div>
 
-    <div class="summary">
-        <p>Всего черновиков: {{ drafts|length }}</p>
+    {% if not drafts %}
+    <div class="empty-state">
+        <p>Нет черновиков поставок</p>
+        <p>Нажмите "Добавить поставку" или отметьте расход как поставку во вкладке Расходы.</p>
+    </div>
+    {% endif %}
+
+    <div class="summary" {% if not drafts %}style="display:none"{% endif %}>
+        <p>Всего черновиков: <span id="total-drafts">{{ drafts|length }}</span></p>
         {% set total = namespace(sum=0) %}
         {% for draft in drafts %}
             {% set total.sum = total.sum + (draft.total_sum or 0) %}
         {% endfor %}
-        <p><strong>Общая сумма: {{ "{:,.0f}".format(total.sum) }}₸</strong></p>
+        <p><strong>Общая сумма: <span id="total-sum">{{ "{:,.0f}".format(total.sum) }}</span>₸</strong></p>
     </div>
-    {% else %}
-    <div class="empty-state">
-        <p>Нет черновиков поставок</p>
-        <p>Отправьте фото накладной в бота (режим "📦 Поставки"), чтобы создать черновик.</p>
-    </div>
-    {% endif %}
 </div>
 
 <style>
@@ -100,100 +126,22 @@
     margin-bottom: 20px;
 }
 
-h1 {
-    margin: 0;
-}
-
-.btn-lg {
-    padding: 12px 24px;
-    font-size: 16px;
-}
-
-.table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 20px;
-}
-
-.table th, .table td {
-    padding: 12px;
-    text-align: left;
-    border-bottom: 1px solid #ddd;
-}
-
-.table th {
-    background: #f5f5f5;
-    font-weight: 600;
-}
-
-.draft-row:hover {
-    background: #f9f9f9;
-}
-
-.amount {
-    font-weight: 600;
-    font-family: monospace;
-}
-
-.actions {
-    white-space: nowrap;
-}
+h1 { margin: 0; }
 
 .btn {
-    padding: 5px 10px;
+    padding: 8px 16px;
     border: none;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 13px;
-    text-decoration: none;
-    display: inline-block;
-}
-
-.btn-primary {
-    background: #007bff;
-    color: white;
-}
-
-.btn-danger {
-    background: #dc3545;
-    color: white;
-}
-
-.btn:hover {
-    opacity: 0.9;
-}
-
-.badge {
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-}
-
-.bg-success {
-    background: #28a745;
-    color: white;
-}
-
-.bg-secondary {
-    background: #6c757d;
-    color: white;
-}
-
-.summary {
-    background: #f5f5f5;
-    padding: 15px;
     border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
 }
 
-.summary p {
-    margin: 5px 0;
-}
-
-.empty-state {
-    text-align: center;
-    padding: 50px;
-    color: #666;
-}
+.btn-primary { background: #007bff; color: white; }
+.btn-success { background: #28a745; color: white; }
+.btn-danger { background: #dc3545; color: white; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn:hover { opacity: 0.9; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .alert {
     padding: 15px;
@@ -206,29 +154,643 @@ h1 {
     border: 1px solid #bee5eb;
     color: #0c5460;
 }
+
+.supply-card {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    overflow: hidden;
+}
+
+.supply-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 15px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #ddd;
+}
+
+.supply-info { flex: 1; }
+
+.supplier-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.supplier-row label {
+    font-weight: 600;
+    color: #666;
+}
+
+.supplier-input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 16px;
+    font-weight: 600;
+    max-width: 300px;
+}
+
+.meta-row {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.amount {
+    font-weight: 600;
+    font-family: monospace;
+    font-size: 1.1em;
+    color: #28a745;
+}
+
+.date { color: #666; }
+
+.source-select {
+    padding: 4px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: white;
+}
+
+.badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+.bg-success { background: #28a745; color: white; }
+
+.supply-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.supply-items {
+    padding: 15px;
+}
+
+.items-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.items-header span {
+    font-weight: 600;
+    color: #333;
+}
+
+.add-item-search {
+    position: relative;
+    width: 300px;
+}
+
+.item-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 250px;
+    overflow-y: auto;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.search-result-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.search-result-item:hover, .search-result-item.active {
+    background: #e3f2fd;
+}
+
+.search-result-item .account-tag {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: #e0e0e0;
+    color: #666;
+}
+
+.items-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.items-table th, .items-table td {
+    padding: 8px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.items-table th {
+    font-weight: 600;
+    color: #666;
+    font-size: 12px;
+}
+
+.items-table tbody tr:hover {
+    background: #f9f9f9;
+}
+
+.item-input {
+    width: 80px;
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    text-align: right;
+    font-family: monospace;
+}
+
+.item-input.qty { width: 70px; }
+.item-input.price { width: 80px; }
+.item-input.sum { width: 90px; font-weight: 600; }
+
+.ingredient-name {
+    font-weight: 500;
+}
+
+.account-badge {
+    font-size: 10px;
+    padding: 2px 5px;
+    border-radius: 3px;
+    background: #e0e0e0;
+    color: #666;
+    margin-left: 5px;
+}
+
+.btn-delete-item {
+    padding: 3px 8px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #dc3545;
+}
+
+.btn-delete-item:hover {
+    background: #fee;
+    border-radius: 3px;
+}
+
+.text-right { text-align: right; }
+
+.items-total {
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.summary {
+    background: #f5f5f5;
+    padding: 15px;
+    border-radius: 5px;
+    margin-top: 20px;
+}
+
+.summary p { margin: 5px 0; }
+
+.empty-state {
+    text-align: center;
+    padding: 50px;
+    color: #666;
+}
+
+/* Saved animation */
+.saved {
+    animation: flash-green 0.3s;
+}
+
+@keyframes flash-green {
+    0% { background-color: #d4edda; }
+    100% { background-color: transparent; }
+}
 </style>
 
 <script>
+// Ingredients data from server
+const ingredients = {{ items|tojson|safe if items else '[]' }};
+const posterAccounts = {{ poster_accounts|tojson|safe if poster_accounts else '[]' }};
+
+// Supply draft items (loaded from server)
+const supplyItems = {};  // { draftId: [items] }
+
+// Initial load of items for each draft
+{% for draft in drafts %}
+supplyItems[{{ draft.id }}] = {{ (draft.items or [])|tojson|safe }};
+{% endfor %}
+
+let searchTimeout = null;
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Delete supply draft
-    document.querySelectorAll('.btn-delete').forEach(btn => {
+    // Render initial items
+    Object.keys(supplyItems).forEach(draftId => {
+        renderItems(parseInt(draftId));
+    });
+
+    // Add new supply button
+    document.getElementById('add-supply-btn').addEventListener('click', async function() {
+        try {
+            const response = await fetch('/supplies/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            });
+            const result = await response.json();
+            if (result.success) {
+                window.location.reload();
+            } else {
+                alert('Ошибка: ' + (result.error || 'Unknown'));
+            }
+        } catch (e) {
+            console.error('Error:', e);
+        }
+    });
+
+    // Supplier name change
+    document.querySelectorAll('.supplier-input').forEach(input => {
+        input.addEventListener('change', async function() {
+            const draftId = this.dataset.id;
+            await updateSupplyDraft(draftId, { supplier_name: this.value });
+            this.classList.add('saved');
+            setTimeout(() => this.classList.remove('saved'), 300);
+        });
+    });
+
+    // Source select change
+    document.querySelectorAll('.source-select').forEach(select => {
+        select.addEventListener('change', async function() {
+            const draftId = this.dataset.id;
+            await updateSupplyDraft(draftId, { source: this.value });
+        });
+    });
+
+    // Delete supply button
+    document.querySelectorAll('.btn-delete-supply').forEach(btn => {
         btn.addEventListener('click', async function() {
             if (!confirm('Удалить этот черновик поставки?')) return;
-
-            const id = this.dataset.id;
-            try {
-                const response = await fetch(`/supplies/delete/${id}`, {
-                    method: 'POST'
-                });
-
-                if (response.ok) {
-                    this.closest('tr').remove();
-                }
-            } catch (e) {
-                console.error('Error:', e);
+            const draftId = this.dataset.id;
+            const response = await fetch(`/supplies/delete/${draftId}`, { method: 'POST' });
+            if (response.ok) {
+                this.closest('.supply-card').remove();
+                updateTotals();
             }
         });
     });
+
+    // Process supply button
+    document.querySelectorAll('.btn-process').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const draftId = this.dataset.id;
+            const items = supplyItems[draftId] || [];
+
+            if (items.length === 0) {
+                alert('Добавьте хотя бы один товар');
+                return;
+            }
+
+            const unmatched = items.filter(i => !i.poster_ingredient_id);
+            if (unmatched.length > 0) {
+                alert(`Не все товары привязаны к ингредиентам (${unmatched.length} из ${items.length})`);
+                return;
+            }
+
+            if (!confirm('Создать поставку в Poster?')) return;
+
+            this.disabled = true;
+            this.textContent = '⏳...';
+
+            try {
+                const response = await fetch(`/supplies/process/${draftId}`, { method: 'POST' });
+                const result = await response.json();
+
+                if (result.success) {
+                    const supplies = result.supplies || [{ supply_id: result.supply_id }];
+                    const msg = supplies.map(s =>
+                        `✅ ${s.account_name || 'Poster'}: #${s.supply_id} (${s.items_count} товаров, ${s.total}₸)`
+                    ).join('\n');
+                    alert('Поставки созданы!\n\n' + msg);
+                    this.closest('.supply-card').remove();
+                    updateTotals();
+                } else {
+                    alert('Ошибка: ' + result.error);
+                    this.disabled = false;
+                    this.textContent = '✅ Создать';
+                }
+            } catch (e) {
+                alert('Ошибка: ' + e.message);
+                this.disabled = false;
+                this.textContent = '✅ Создать';
+            }
+        });
+    });
+
+    // Ingredient search
+    document.querySelectorAll('.item-search-input').forEach(input => {
+        const resultsDiv = input.nextElementSibling;
+        let selectedIndex = -1;
+
+        input.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            const query = this.value.toLowerCase().trim();
+            selectedIndex = -1;
+
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                const matches = ingredients.filter(ing =>
+                    ing.name.toLowerCase().includes(query)
+                ).slice(0, 15);
+
+                if (matches.length === 0) {
+                    resultsDiv.innerHTML = '<div class="search-result-item" style="color:#999">Ничего не найдено</div>';
+                } else {
+                    resultsDiv.innerHTML = matches.map((ing, i) => `
+                        <div class="search-result-item" data-index="${i}"
+                             data-id="${ing.id}"
+                             data-name="${ing.name}"
+                             data-account-id="${ing.poster_account_id || ''}"
+                             data-account-name="${ing.poster_account_name || ''}">
+                            <span>${ing.name}</span>
+                            ${ing.poster_account_name ? `<span class="account-tag">${ing.poster_account_name}</span>` : ''}
+                        </div>
+                    `).join('');
+                }
+                resultsDiv.style.display = 'block';
+            }, 100);
+        });
+
+        // Keyboard navigation
+        input.addEventListener('keydown', function(e) {
+            const items = resultsDiv.querySelectorAll('.search-result-item[data-id]');
+            if (items.length === 0) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+                updateSelection(items);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIndex = Math.max(selectedIndex - 1, 0);
+                updateSelection(items);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (selectedIndex >= 0 && items[selectedIndex]) {
+                    selectIngredient(items[selectedIndex], input);
+                } else if (items.length === 1) {
+                    selectIngredient(items[0], input);
+                }
+            } else if (e.key === 'Escape') {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        function updateSelection(items) {
+            items.forEach((item, i) => {
+                item.classList.toggle('active', i === selectedIndex);
+            });
+        }
+
+        // Click selection
+        resultsDiv.addEventListener('click', function(e) {
+            const item = e.target.closest('.search-result-item[data-id]');
+            if (item) selectIngredient(item, input);
+        });
+
+        // Close on outside click
+        document.addEventListener('click', function(e) {
+            if (!input.contains(e.target) && !resultsDiv.contains(e.target)) {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        async function selectIngredient(item, inputEl) {
+            const draftId = inputEl.dataset.draftId;
+            const ingredientId = parseInt(item.dataset.id);
+            const ingredientName = item.dataset.name;
+            const accountId = item.dataset.accountId ? parseInt(item.dataset.accountId) : null;
+            const accountName = item.dataset.accountName || '';
+
+            // Add item to server
+            const response = await fetch(`/supplies/add-item/${draftId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    poster_ingredient_id: ingredientId,
+                    poster_ingredient_name: ingredientName,
+                    name: ingredientName,
+                    quantity: 0,
+                    price: 0,
+                    poster_account_id: accountId
+                })
+            });
+
+            const result = await response.json();
+            if (result.success) {
+                // Add to local array
+                if (!supplyItems[draftId]) supplyItems[draftId] = [];
+                supplyItems[draftId].push({
+                    id: result.item_id,
+                    item_name: ingredientName,
+                    poster_ingredient_id: ingredientId,
+                    poster_ingredient_name: ingredientName,
+                    poster_account_id: accountId,
+                    poster_account_name: accountName,
+                    quantity: 0,
+                    price_per_unit: 0,
+                    total: 0
+                });
+
+                // Re-render items
+                renderItems(parseInt(draftId));
+
+                // Focus on quantity input of new item
+                setTimeout(() => {
+                    const tbody = document.querySelector(`.items-tbody[data-draft-id="${draftId}"]`);
+                    const lastRow = tbody.querySelector('tr:last-child');
+                    if (lastRow) {
+                        const qtyInput = lastRow.querySelector('.item-input.qty');
+                        if (qtyInput) qtyInput.focus();
+                    }
+                }, 50);
+            }
+
+            // Clear search
+            inputEl.value = '';
+            resultsDiv.style.display = 'none';
+        }
+    });
 });
+
+function renderItems(draftId) {
+    const tbody = document.querySelector(`.items-tbody[data-draft-id="${draftId}"]`);
+    if (!tbody) return;
+
+    const items = supplyItems[draftId] || [];
+
+    if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="color:#999;text-align:center">Нет товаров. Найдите ингредиент в поиске выше.</td></tr>';
+        updateItemsTotal(draftId, 0);
+        return;
+    }
+
+    tbody.innerHTML = items.map((item, i) => `
+        <tr data-item-id="${item.id}">
+            <td>
+                <span class="ingredient-name">${item.poster_ingredient_name || item.item_name}</span>
+            </td>
+            <td>
+                ${item.poster_account_name ? `<span class="account-badge">${item.poster_account_name}</span>` : '-'}
+            </td>
+            <td>
+                <input type="number" class="item-input qty" value="${item.quantity || 0}"
+                       data-item-id="${item.id}" data-draft-id="${draftId}" step="0.1" min="0">
+            </td>
+            <td>
+                <input type="number" class="item-input price" value="${item.price_per_unit || 0}"
+                       data-item-id="${item.id}" data-draft-id="${draftId}" step="1" min="0">
+            </td>
+            <td>
+                <input type="number" class="item-input sum" value="${(item.quantity || 0) * (item.price_per_unit || 0)}"
+                       data-item-id="${item.id}" data-draft-id="${draftId}" step="1" min="0" readonly>
+            </td>
+            <td>
+                <button type="button" class="btn-delete-item" data-item-id="${item.id}" data-draft-id="${draftId}">🗑️</button>
+            </td>
+        </tr>
+    `).join('');
+
+    // Attach event listeners
+    tbody.querySelectorAll('.item-input.qty, .item-input.price').forEach(input => {
+        input.addEventListener('change', async function() {
+            const itemId = parseInt(this.dataset.itemId);
+            const draftId = parseInt(this.dataset.draftId);
+            const row = this.closest('tr');
+            const qty = parseFloat(row.querySelector('.qty').value) || 0;
+            const price = parseFloat(row.querySelector('.price').value) || 0;
+            const sum = qty * price;
+
+            // Update sum display
+            row.querySelector('.sum').value = sum;
+
+            // Update local data
+            const item = supplyItems[draftId].find(i => i.id === itemId);
+            if (item) {
+                item.quantity = qty;
+                item.price_per_unit = price;
+                item.total = sum;
+            }
+
+            // Update server
+            await fetch(`/supplies/update-item/${itemId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ quantity: qty, price_per_unit: price })
+            });
+
+            // Update totals
+            updateItemsTotal(draftId);
+            updateTotals();
+        });
+
+        // Smart field navigation with Enter
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const row = this.closest('tr');
+                if (this.classList.contains('qty')) {
+                    row.querySelector('.price').focus();
+                } else if (this.classList.contains('price')) {
+                    // Move to next row qty or search
+                    const nextRow = row.nextElementSibling;
+                    if (nextRow) {
+                        nextRow.querySelector('.qty').focus();
+                    } else {
+                        // Focus search input
+                        const card = row.closest('.supply-card');
+                        card.querySelector('.item-search-input').focus();
+                    }
+                }
+            }
+        });
+    });
+
+    tbody.querySelectorAll('.btn-delete-item').forEach(btn => {
+        btn.addEventListener('click', async function() {
+            const itemId = parseInt(this.dataset.itemId);
+            const draftId = parseInt(this.dataset.draftId);
+
+            await fetch(`/supplies/delete-item/${itemId}`, { method: 'POST' });
+
+            // Remove from local array
+            supplyItems[draftId] = supplyItems[draftId].filter(i => i.id !== itemId);
+
+            // Re-render
+            renderItems(draftId);
+            updateTotals();
+        });
+    });
+
+    // Update total
+    updateItemsTotal(draftId);
+}
+
+function updateItemsTotal(draftId, forceTotal) {
+    const items = supplyItems[draftId] || [];
+    const total = forceTotal !== undefined ? forceTotal : items.reduce((sum, i) => sum + (i.quantity || 0) * (i.price_per_unit || 0), 0);
+
+    const card = document.querySelector(`.supply-card[data-id="${draftId}"]`);
+    if (card) {
+        card.querySelector('.items-total').textContent = total.toLocaleString('ru-RU') + '₸';
+        card.querySelector('.amount').textContent = total.toLocaleString('ru-RU') + '₸';
+    }
+}
+
+async function updateSupplyDraft(draftId, fields) {
+    await fetch(`/supplies/update/${draftId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(fields)
+    });
+}
+
+function updateTotals() {
+    const cards = document.querySelectorAll('.supply-card');
+    document.getElementById('total-drafts').textContent = cards.length;
+
+    let totalSum = 0;
+    Object.values(supplyItems).forEach(items => {
+        items.forEach(item => {
+            totalSum += (item.quantity || 0) * (item.price_per_unit || 0);
+        });
+    });
+    document.getElementById('total-sum').textContent = totalSum.toLocaleString('ru-RU');
+}
 </script>
 {% endblock %}

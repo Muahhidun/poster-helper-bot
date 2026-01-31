@@ -654,6 +654,30 @@ class UserDatabase:
             # Column probably already exists
             logger.info(f"✅ Supply items migration: poster_account_id column already exists or error: {e}")
 
+        # Also add account_id and source to supply_drafts
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                try:
+                    cursor.execute("ALTER TABLE supply_drafts ADD COLUMN account_id INTEGER")
+                except Exception:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE supply_drafts ADD COLUMN source TEXT DEFAULT 'cash'")
+                except Exception:
+                    pass
+            else:
+                cursor.execute("ALTER TABLE supply_drafts ADD COLUMN IF NOT EXISTS account_id INTEGER")
+                cursor.execute("ALTER TABLE supply_drafts ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'cash'")
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Supply drafts migration: added account_id and source columns")
+        except Exception as e:
+            logger.info(f"✅ Supply drafts migration: columns already exist or error: {e}")
+
     def get_user(self, telegram_user_id: int) -> Optional[Dict]:
         """Get user by Telegram ID"""
         conn = self._get_connection()
@@ -2282,7 +2306,9 @@ class UserDatabase:
         items: list,
         total_sum: float = None,
         linked_expense_draft_id: int = None,
-        ocr_text: str = None
+        ocr_text: str = None,
+        account_id: int = None,
+        source: str = 'cash'
     ) -> int:
         """
         Сохранить черновик поставки с позициями
@@ -2295,6 +2321,8 @@ class UserDatabase:
             total_sum: Общая сумма
             linked_expense_draft_id: ID связанного черновика расхода
             ocr_text: Распознанный OCR текст
+            account_id: ID счёта списания
+            source: Источник (cash, kaspi)
 
         Returns:
             ID созданного черновика поставки или 0 при ошибке
@@ -2307,17 +2335,17 @@ class UserDatabase:
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT INTO supply_drafts
-                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text))
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text, account_id, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text, account_id, source))
                 supply_draft_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO supply_drafts
-                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text, account_id, source)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text))
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, ocr_text, account_id, source))
                 supply_draft_id = cursor.fetchone()[0]
 
             # Insert supply draft items
@@ -2350,6 +2378,156 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to save supply draft: {e}")
             return 0
+
+    def create_empty_supply_draft(
+        self,
+        telegram_user_id: int,
+        supplier_name: str = "",
+        invoice_date: str = None,
+        total_sum: float = 0,
+        linked_expense_draft_id: int = None,
+        account_id: int = None,
+        source: str = 'cash'
+    ) -> Optional[int]:
+        """
+        Создать пустой черновик поставки (без товаров) - для ручного ввода
+
+        Returns:
+            ID созданного черновика или None при ошибке
+        """
+        from datetime import datetime
+        if not invoice_date:
+            invoice_date = datetime.now().strftime("%Y-%m-%d")
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO supply_drafts
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source))
+                supply_draft_id = cursor.lastrowid
+            else:
+                cursor.execute("""
+                    INSERT INTO supply_drafts
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source))
+                supply_draft_id = cursor.fetchone()[0]
+
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Created empty supply draft #{supply_draft_id} for user {telegram_user_id}")
+            return supply_draft_id
+
+        except Exception as e:
+            logger.error(f"Failed to create empty supply draft: {e}")
+            return None
+
+    def update_supply_draft(self, supply_draft_id: int, **kwargs) -> bool:
+        """
+        Обновить черновик поставки
+
+        Args:
+            supply_draft_id: ID черновика
+            **kwargs: Поля для обновления (supplier_name, invoice_date, total_sum, account_id, source)
+        """
+        if not kwargs:
+            return False
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
+                query = f"UPDATE supply_drafts SET {set_clause} WHERE id = ?"
+                cursor.execute(query, list(kwargs.values()) + [supply_draft_id])
+            else:
+                set_clause = ", ".join([f"{k} = %s" for k in kwargs.keys()])
+                query = f"UPDATE supply_drafts SET {set_clause} WHERE id = %s"
+                cursor.execute(query, list(kwargs.values()) + [supply_draft_id])
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update supply draft: {e}")
+            return False
+
+    def add_supply_draft_item(
+        self,
+        supply_draft_id: int,
+        item_name: str = "",
+        quantity: float = 0,
+        unit: str = "шт",
+        price_per_unit: float = 0,
+        poster_ingredient_id: int = None,
+        poster_ingredient_name: str = None,
+        poster_account_id: int = None
+    ) -> Optional[int]:
+        """
+        Добавить позицию в черновик поставки
+
+        Returns:
+            ID созданной позиции или None при ошибке
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            total = quantity * price_per_unit
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO supply_draft_items
+                    (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
+                     poster_ingredient_id, poster_ingredient_name, poster_account_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
+                      poster_ingredient_id, poster_ingredient_name, poster_account_id))
+                item_id = cursor.lastrowid
+            else:
+                cursor.execute("""
+                    INSERT INTO supply_draft_items
+                    (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
+                     poster_ingredient_id, poster_ingredient_name, poster_account_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
+                      poster_ingredient_id, poster_ingredient_name, poster_account_id))
+                item_id = cursor.fetchone()[0]
+
+            conn.commit()
+            conn.close()
+            return item_id
+
+        except Exception as e:
+            logger.error(f"Failed to add supply draft item: {e}")
+            return None
+
+    def delete_supply_draft_item(self, item_id: int) -> bool:
+        """Удалить позицию из черновика поставки"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM supply_draft_items WHERE id = ?", (item_id,))
+            else:
+                cursor.execute("DELETE FROM supply_draft_items WHERE id = %s", (item_id,))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete supply draft item: {e}")
+            return False
 
     def get_supply_drafts(self, telegram_user_id: int, status: str = "pending") -> list:
         """

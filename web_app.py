@@ -988,13 +988,44 @@ def list_expenses():
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
 def toggle_expense_type(draft_id):
-    """Toggle expense type between transaction and supply"""
+    """Toggle expense type between transaction and supply.
+    When switching to supply, auto-create a supply draft.
+    When switching back to transaction, delete the linked supply draft.
+    """
     db = get_database()
     data = request.get_json() or {}
     new_type = data.get('expense_type', 'transaction')
 
+    # Get current expense draft to check linked supply
+    all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+    expense_draft = next((d for d in all_drafts if d['id'] == draft_id), None)
+
+    if not expense_draft:
+        return jsonify({'success': False, 'error': 'Draft not found'})
+
+    supply_draft_id = None
+
+    if new_type == 'supply':
+        # Create supply draft linked to this expense
+        from datetime import datetime
+        supply_draft_id = db.create_empty_supply_draft(
+            telegram_user_id=TELEGRAM_USER_ID,
+            supplier_name=expense_draft.get('description', ''),
+            invoice_date=datetime.now().strftime("%Y-%m-%d"),
+            total_sum=expense_draft.get('amount', 0),
+            linked_expense_draft_id=draft_id,
+            account_id=expense_draft.get('account_id'),
+            source=expense_draft.get('source', 'cash')
+        )
+    else:
+        # Switching to transaction - find and delete linked supply draft
+        supply_drafts = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+        linked_supply = next((s for s in supply_drafts if s.get('linked_expense_draft_id') == draft_id), None)
+        if linked_supply:
+            db.delete_supply_draft(linked_supply['id'])
+
     success = db.update_expense_draft(draft_id, expense_type=new_type)
-    return jsonify({'success': success})
+    return jsonify({'success': success, 'supply_draft_id': supply_draft_id})
 
 
 @app.route('/expenses/update/<int:draft_id>', methods=['POST'])
@@ -1269,14 +1300,78 @@ def process_drafts():
 
 @app.route('/supplies')
 def list_supplies():
-    """Show supply drafts for user"""
+    """Show supply drafts for user with ingredients for search"""
     db = get_database()
-    drafts = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+
+    # Load items for each draft
+    drafts = []
+    for draft_raw in drafts_raw:
+        draft = db.get_supply_draft_with_items(draft_raw['id'])
+        if draft:
+            drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking
     pending_supplies = db.get_pending_supply_items(TELEGRAM_USER_ID)
 
-    return render_template('supplies.html', drafts=drafts, pending_supplies=pending_supplies)
+    # Load ingredients from ALL Poster accounts for search
+    items = []
+    poster_accounts_list = []
+
+    try:
+        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if accounts:
+            from poster_client import PosterClient
+
+            # Build poster accounts list
+            for acc in accounts:
+                poster_accounts_list.append({
+                    'id': acc['id'],
+                    'name': acc['account_name'],
+                    'is_primary': acc.get('is_primary', False)
+                })
+
+            # Load ingredients with deduplication
+            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
+            seen_names = set()
+
+            for acc in accounts_sorted:
+                try:
+                    poster_client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                    for ing in ingredients:
+                        name = ing.get('ingredient_name', '')
+                        # Don't deduplicate - show from all accounts with account tag
+                        items.append({
+                            'id': int(ing.get('ingredient_id', 0)),
+                            'name': name,
+                            'type': 'ingredient',
+                            'poster_account_id': acc['id'],
+                            'poster_account_name': acc.get('account_name', '')
+                        })
+
+                    loop.run_until_complete(poster_client.close())
+                    loop.close()
+                except Exception as e:
+                    print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
+
+    except Exception as e:
+        print(f"Error loading ingredients: {e}")
+
+    return render_template('supplies.html',
+                          drafts=drafts,
+                          pending_supplies=pending_supplies,
+                          items=items,
+                          poster_accounts=poster_accounts_list)
 
 
 @app.route('/supplies/all')
@@ -1340,6 +1435,85 @@ def view_all_supplies():
         print(f"Error loading ingredients: {e}")
 
     return render_template('supplies_all.html', drafts=drafts, items=items)
+
+
+@app.route('/supplies/create', methods=['POST'])
+def create_supply_draft():
+    """Create empty supply draft for manual entry"""
+    db = get_database()
+    data = request.get_json() or {}
+    from datetime import datetime
+
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TELEGRAM_USER_ID,
+        supplier_name=data.get('supplier_name', ''),
+        invoice_date=data.get('invoice_date') or datetime.now().strftime("%Y-%m-%d"),
+        total_sum=data.get('total_sum', 0),
+        linked_expense_draft_id=data.get('linked_expense_draft_id'),
+        account_id=data.get('account_id'),
+        source=data.get('source', 'cash')
+    )
+
+    if draft_id:
+        return jsonify({'success': True, 'id': draft_id})
+    return jsonify({'success': False, 'error': 'Failed to create draft'})
+
+
+@app.route('/supplies/update/<int:draft_id>', methods=['POST'])
+def update_supply_draft(draft_id):
+    """Update supply draft fields"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    update_fields = {}
+    if 'supplier_name' in data:
+        update_fields['supplier_name'] = str(data['supplier_name'])
+    if 'invoice_date' in data:
+        update_fields['invoice_date'] = str(data['invoice_date'])
+    if 'total_sum' in data:
+        try:
+            update_fields['total_sum'] = float(data['total_sum'])
+        except (ValueError, TypeError):
+            pass
+    if 'account_id' in data:
+        update_fields['account_id'] = int(data['account_id']) if data['account_id'] else None
+    if 'source' in data:
+        update_fields['source'] = str(data['source'])
+
+    if update_fields:
+        success = db.update_supply_draft(draft_id, **update_fields)
+        return jsonify({'success': success})
+    return jsonify({'success': False, 'error': 'No fields to update'})
+
+
+@app.route('/supplies/add-item/<int:draft_id>', methods=['POST'])
+def add_supply_item(draft_id):
+    """Add item to supply draft"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name=data.get('item_name', data.get('name', '')),
+        quantity=float(data.get('quantity', 0)),
+        unit=data.get('unit', 'шт'),
+        price_per_unit=float(data.get('price', data.get('price_per_unit', 0))),
+        poster_ingredient_id=data.get('poster_ingredient_id') or data.get('id'),
+        poster_ingredient_name=data.get('poster_ingredient_name') or data.get('name'),
+        poster_account_id=data.get('poster_account_id')
+    )
+
+    if item_id:
+        return jsonify({'success': True, 'item_id': item_id})
+    return jsonify({'success': False, 'error': 'Failed to add item'})
+
+
+@app.route('/supplies/delete-item/<int:item_id>', methods=['POST'])
+def delete_supply_item(item_id):
+    """Delete item from supply draft"""
+    db = get_database()
+    success = db.delete_supply_draft_item(item_id)
+    return jsonify({'success': success})
 
 
 @app.route('/supplies/process-all', methods=['POST'])
@@ -1586,7 +1760,10 @@ def delete_supply_item(item_id):
 
 @app.route('/supplies/process/<int:draft_id>', methods=['POST'])
 def process_supply(draft_id):
-    """Process supply draft - create supply in Poster"""
+    """Process supply draft - create supply in Poster (multi-account support)
+
+    Items can have different poster_account_id, so we create separate supplies for each account.
+    """
     db = get_database()
     draft = db.get_supply_draft_with_items(draft_id)
 
@@ -1603,84 +1780,118 @@ def process_supply(draft_id):
             'error': f'Не все товары привязаны к ингредиентам ({len(unmatched)} из {len(items)})'
         })
 
+    if not items:
+        return jsonify({'success': False, 'error': 'Нет товаров в поставке'})
+
     try:
         from poster_client import PosterClient
+        from collections import defaultdict
 
-        accounts = db.get_accounts(TELEGRAM_USER_ID)
-        if not accounts:
+        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if not poster_accounts:
             return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
 
-        account = accounts[0]
+        # Build account lookup
+        accounts_by_id = {acc['id']: acc for acc in poster_accounts}
+        primary_account = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
+
+        # Group items by poster_account_id
+        items_by_account = defaultdict(list)
+        for item in items:
+            acc_id = item.get('poster_account_id') or primary_account['id']
+            items_by_account[acc_id].append(item)
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        async def create_supply_in_poster():
-            client = PosterClient(
-                telegram_user_id=TELEGRAM_USER_ID,
-                poster_token=account['poster_token'],
-                poster_user_id=account['poster_user_id'],
-                poster_base_url=account['poster_base_url']
-            )
+        async def create_supplies_in_poster():
+            created_supplies = []
 
-            try:
-                # Get suppliers list
-                suppliers = await client.get_suppliers()
+            for poster_account_id, account_items in items_by_account.items():
+                account = accounts_by_id.get(poster_account_id, primary_account)
 
-                # Find or create supplier
-                supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
-                supplier_id = None
-
-                for s in suppliers:
-                    if supplier_name.lower() in s.get('supplier_name', '').lower():
-                        supplier_id = int(s['supplier_id'])
-                        break
-
-                if not supplier_id and suppliers:
-                    supplier_id = int(suppliers[0]['supplier_id'])
-
-                # Get accounts
-                poster_accounts = await client.get_accounts()
-                account_id = None
-
-                for acc in poster_accounts:
-                    if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
-                        account_id = int(acc['account_id'])
-                        break
-
-                if not account_id and poster_accounts:
-                    account_id = int(poster_accounts[0]['account_id'])
-
-                # Prepare ingredients
-                ingredients = []
-                for item in items:
-                    ingredients.append({
-                        'id': item['poster_ingredient_id'],
-                        'num': float(item['quantity']),
-                        'price': float(item['price_per_unit'])
-                    })
-
-                # Create supply
-                supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
-
-                supply_id = await client.create_supply(
-                    supplier_id=supplier_id,
-                    storage_id=1,
-                    date=f"{supply_date} 12:00:00",
-                    ingredients=ingredients,
-                    account_id=account_id,
-                    comment=f"Накладная от {draft.get('supplier_name', 'поставщика')}"
+                client = PosterClient(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
                 )
 
-                return supply_id
+                try:
+                    # Get suppliers list for this account
+                    suppliers = await client.get_suppliers()
+                    supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
+                    supplier_id = None
 
-            finally:
-                await client.close()
+                    for s in suppliers:
+                        if supplier_name.lower() in s.get('supplier_name', '').lower():
+                            supplier_id = int(s['supplier_id'])
+                            break
 
-        supply_id = loop.run_until_complete(create_supply_in_poster())
+                    if not supplier_id and suppliers:
+                        supplier_id = int(suppliers[0]['supplier_id'])
+
+                    # Get finance accounts for this Poster account
+                    finance_accounts = await client.get_accounts()
+
+                    # Use account_id from draft if set, otherwise auto-detect
+                    account_id = draft.get('account_id')
+                    if not account_id:
+                        source = draft.get('source', 'cash')
+                        if source == 'kaspi':
+                            for acc in finance_accounts:
+                                if 'kaspi' in acc.get('name', '').lower():
+                                    account_id = int(acc['account_id'])
+                                    break
+                        else:
+                            for acc in finance_accounts:
+                                if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                    account_id = int(acc['account_id'])
+                                    break
+
+                    if not account_id and finance_accounts:
+                        account_id = int(finance_accounts[0]['account_id'])
+
+                    # Prepare ingredients for this account
+                    ingredients = []
+                    for item in account_items:
+                        ingredients.append({
+                            'id': item['poster_ingredient_id'],
+                            'num': float(item['quantity']),
+                            'price': float(item['price_per_unit'])
+                        })
+
+                    # Create supply
+                    supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
+
+                    supply_id = await client.create_supply(
+                        supplier_id=supplier_id,
+                        storage_id=1,
+                        date=f"{supply_date} 12:00:00",
+                        ingredients=ingredients,
+                        account_id=account_id,
+                        comment=f"Накладная от {supplier_name}"
+                    )
+
+                    if supply_id:
+                        account_total = sum(i['quantity'] * i['price_per_unit'] for i in account_items)
+                        created_supplies.append({
+                            'supply_id': supply_id,
+                            'account_name': account['account_name'],
+                            'items_count': len(account_items),
+                            'total': account_total
+                        })
+                        print(f"✅ Created supply #{supply_id} in {account['account_name']}: {len(account_items)} items, {account_total}₸")
+
+                finally:
+                    await client.close()
+
+            return created_supplies
+
+        created_supplies = loop.run_until_complete(create_supplies_in_poster())
         loop.close()
 
-        if supply_id:
+        if created_supplies:
             # Mark draft as processed
             db.mark_supply_draft_processed(draft_id)
 
@@ -1688,7 +1899,13 @@ def process_supply(draft_id):
             if draft.get('linked_expense_draft_id'):
                 db.mark_drafts_processed([draft['linked_expense_draft_id']])
 
-            return jsonify({'success': True, 'supply_id': supply_id})
+            # Format response
+            supply_ids = [s['supply_id'] for s in created_supplies]
+            return jsonify({
+                'success': True,
+                'supply_id': supply_ids[0] if len(supply_ids) == 1 else supply_ids,
+                'supplies': created_supplies
+            })
         else:
             return jsonify({'success': False, 'error': 'Не удалось создать поставку'})
 
