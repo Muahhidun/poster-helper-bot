@@ -24,120 +24,306 @@
             <span class="legend-item"><span class="dot none"></span> Не найдено в Poster</span>
         </div>
 
-        {% if drafts or True %}
-        <table class="table">
-            <thead>
-                <tr>
-                    <th><input type="checkbox" id="select-all"></th>
-                    <th>✓</th>
-                    <th>Сумма</th>
-                    <th>Описание</th>
-                    <th>Тип</th>
-                    <th>Категория</th>
-                    <th>Счёт списания</th>
-                    <th>Отдел</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody id="drafts-tbody">
-                {% for draft in drafts %}
-                <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
-                    data-id="{{ draft.id }}"
-                    data-amount="{{ draft.amount|int }}"
-                    data-description="{{ draft.description }}"
-                    data-category="{{ draft.category or '' }}"
-                    data-account-id="{{ draft.account_id or '' }}"
-                    data-poster-account-id="{{ draft.poster_account_id or '' }}"
-                    data-completion-status="{{ draft.completion_status or 'pending' }}">
-                    <td>
-                        <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
-                    </td>
-                    <td class="completion-status">
-                        <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
-                            {% if draft.completion_status == 'completed' %}✅
-                            {% elif draft.completion_status == 'partial' %}🟡
-                            {% else %}⚪{% endif %}
-                        </button>
-                    </td>
-                    <td class="amount">
-                        <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                               data-id="{{ draft.id }}" step="1" min="0">
-                    </td>
-                    <td class="description">
-                        <input type="text" class="edit-description" value="{{ draft.description }}"
-                               data-id="{{ draft.id }}">
-                    </td>
-                    <td class="type">
-                        <button type="button" class="btn-type"
-                                data-id="{{ draft.id }}"
-                                data-type="{{ draft.expense_type }}">
-                            {% if draft.expense_type == 'supply' %}
-                                📦 поставка
-                            {% else %}
-                                💰 транзакция
-                            {% endif %}
-                        </button>
-                    </td>
-                    <td class="category">
-                        <div class="autocomplete-wrapper">
-                            <input type="text" class="edit-category"
-                                   value="{{ draft.category or '' }}"
-                                   data-id="{{ draft.id }}"
-                                   placeholder="Категория..."
-                                   autocomplete="off">
-                            <div class="autocomplete-results"></div>
-                        </div>
-                    </td>
-                    <td class="account">
-                        <select class="edit-account" data-id="{{ draft.id }}" data-source="{{ draft.source }}" data-poster-account-id="{{ draft.poster_account_id or '' }}">
-                            {% for acc in accounts %}
-                            {% if not draft.poster_account_id or acc.poster_account_id == draft.poster_account_id %}
-                            <option value="{{ acc.account_id }}"
-                                    data-name="{{ acc.name|lower }}"
-                                    data-poster-account-id="{{ acc.poster_account_id }}"
-                                    {% if draft.account_id == acc.account_id %}selected
-                                    {% elif not draft.account_id and draft.source == 'kaspi' and 'kaspi' in acc.name|lower %}selected
-                                    {% elif not draft.account_id and draft.source != 'kaspi' and ('закуп' in acc.name|lower or 'оставил' in acc.name|lower) %}selected
-                                    {% endif %}>
-                                {{ acc.name }}
-                            </option>
-                            {% endif %}
-                            {% endfor %}
-                        </select>
-                    </td>
-                    <td class="poster-account">
-                        <select class="edit-poster-account" data-id="{{ draft.id }}">
-                            {% for pa in poster_accounts %}
-                            <option value="{{ pa.id }}"
-                                    {% if draft.poster_account_id == pa.id %}selected
-                                    {% elif not draft.poster_account_id and pa.is_primary %}selected
-                                    {% endif %}>
-                                {{ pa.name }}
-                            </option>
-                            {% endfor %}
-                        </select>
-                    </td>
-                    <td class="actions">
-                        <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% endif %}
+        <!-- Section: Наличка (Cash) -->
+        <div class="account-section" data-account-type="cash">
+            <h2 class="section-header">💵 Наличка</h2>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" class="select-all-section" data-section="cash"></th>
+                        <th>✓</th>
+                        <th>Сумма</th>
+                        <th>Описание</th>
+                        <th>Тип</th>
+                        <th>Категория</th>
+                        <th>Отдел</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="drafts-tbody-cash" data-account-type="cash">
+                    {% for draft in drafts %}
+                    {% set account_name = '' %}
+                    {% for acc in accounts if acc.account_id == draft.account_id %}
+                        {% set account_name = acc.name|lower %}
+                    {% endfor %}
+                    {% if 'kaspi' not in (account_name or draft.source|default('')|lower) and 'халык' not in account_name and 'halyk' not in account_name %}
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                        data-id="{{ draft.id }}"
+                        data-amount="{{ draft.amount|int }}"
+                        data-description="{{ draft.description }}"
+                        data-category="{{ draft.category or '' }}"
+                        data-account-id="{{ draft.account_id or '' }}"
+                        data-poster-account-id="{{ draft.poster_account_id or '' }}"
+                        data-completion-status="{{ draft.completion_status or 'pending' }}"
+                        data-account-type="cash">
+                        <td>
+                            <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
+                        </td>
+                        <td class="completion-status">
+                            <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
+                                {% if draft.completion_status == 'completed' %}✅
+                                {% elif draft.completion_status == 'partial' %}🟡
+                                {% else %}⚪{% endif %}
+                            </button>
+                        </td>
+                        <td class="amount">
+                            <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
+                                   data-id="{{ draft.id }}" step="1" min="0">
+                        </td>
+                        <td class="description">
+                            <input type="text" class="edit-description" value="{{ draft.description }}"
+                                   data-id="{{ draft.id }}">
+                        </td>
+                        <td class="type">
+                            <button type="button" class="btn-type"
+                                    data-id="{{ draft.id }}"
+                                    data-type="{{ draft.expense_type }}">
+                                {% if draft.expense_type == 'supply' %}
+                                    📦 поставка
+                                {% else %}
+                                    💰 транзакция
+                                {% endif %}
+                            </button>
+                        </td>
+                        <td class="category">
+                            <div class="autocomplete-wrapper">
+                                <input type="text" class="edit-category"
+                                       value="{{ draft.category or '' }}"
+                                       data-id="{{ draft.id }}"
+                                       placeholder="Категория..."
+                                       autocomplete="off">
+                                <div class="autocomplete-results"></div>
+                            </div>
+                        </td>
+                        <td class="poster-account">
+                            <select class="edit-poster-account" data-id="{{ draft.id }}">
+                                {% for pa in poster_accounts %}
+                                <option value="{{ pa.id }}"
+                                        {% if draft.poster_account_id == pa.id %}selected
+                                        {% elif not draft.poster_account_id and pa.is_primary %}selected
+                                        {% endif %}>
+                                    {{ pa.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td class="actions">
+                            <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="section-summary" id="summary-cash">
+                <span class="sum">0₸</span>
+            </div>
+        </div>
+
+        <!-- Section: Kaspi Pay -->
+        <div class="account-section" data-account-type="kaspi">
+            <h2 class="section-header">📱 Kaspi Pay</h2>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
+                        <th>✓</th>
+                        <th>Сумма</th>
+                        <th>Описание</th>
+                        <th>Тип</th>
+                        <th>Категория</th>
+                        <th>Отдел</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="drafts-tbody-kaspi" data-account-type="kaspi">
+                    {% for draft in drafts %}
+                    {% set account_name = '' %}
+                    {% for acc in accounts if acc.account_id == draft.account_id %}
+                        {% set account_name = acc.name|lower %}
+                    {% endfor %}
+                    {% if 'kaspi' in (account_name or draft.source|default('')|lower) %}
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                        data-id="{{ draft.id }}"
+                        data-amount="{{ draft.amount|int }}"
+                        data-description="{{ draft.description }}"
+                        data-category="{{ draft.category or '' }}"
+                        data-account-id="{{ draft.account_id or '' }}"
+                        data-poster-account-id="{{ draft.poster_account_id or '' }}"
+                        data-completion-status="{{ draft.completion_status or 'pending' }}"
+                        data-account-type="kaspi">
+                        <td>
+                            <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
+                        </td>
+                        <td class="completion-status">
+                            <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
+                                {% if draft.completion_status == 'completed' %}✅
+                                {% elif draft.completion_status == 'partial' %}🟡
+                                {% else %}⚪{% endif %}
+                            </button>
+                        </td>
+                        <td class="amount">
+                            <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
+                                   data-id="{{ draft.id }}" step="1" min="0">
+                        </td>
+                        <td class="description">
+                            <input type="text" class="edit-description" value="{{ draft.description }}"
+                                   data-id="{{ draft.id }}">
+                        </td>
+                        <td class="type">
+                            <button type="button" class="btn-type"
+                                    data-id="{{ draft.id }}"
+                                    data-type="{{ draft.expense_type }}">
+                                {% if draft.expense_type == 'supply' %}
+                                    📦 поставка
+                                {% else %}
+                                    💰 транзакция
+                                {% endif %}
+                            </button>
+                        </td>
+                        <td class="category">
+                            <div class="autocomplete-wrapper">
+                                <input type="text" class="edit-category"
+                                       value="{{ draft.category or '' }}"
+                                       data-id="{{ draft.id }}"
+                                       placeholder="Категория..."
+                                       autocomplete="off">
+                                <div class="autocomplete-results"></div>
+                            </div>
+                        </td>
+                        <td class="poster-account">
+                            <select class="edit-poster-account" data-id="{{ draft.id }}">
+                                {% for pa in poster_accounts %}
+                                <option value="{{ pa.id }}"
+                                        {% if draft.poster_account_id == pa.id %}selected
+                                        {% elif not draft.poster_account_id and pa.is_primary %}selected
+                                        {% endif %}>
+                                    {{ pa.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td class="actions">
+                            <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="section-summary" id="summary-kaspi">
+                <span class="sum">0₸</span>
+            </div>
+        </div>
+
+        <!-- Section: Халык -->
+        <div class="account-section" data-account-type="halyk">
+            <h2 class="section-header">🏦 Халык</h2>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" class="select-all-section" data-section="halyk"></th>
+                        <th>✓</th>
+                        <th>Сумма</th>
+                        <th>Описание</th>
+                        <th>Тип</th>
+                        <th>Категория</th>
+                        <th>Отдел</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="drafts-tbody-halyk" data-account-type="halyk">
+                    {% for draft in drafts %}
+                    {% set account_name = '' %}
+                    {% for acc in accounts if acc.account_id == draft.account_id %}
+                        {% set account_name = acc.name|lower %}
+                    {% endfor %}
+                    {% if 'халык' in account_name or 'halyk' in account_name %}
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                        data-id="{{ draft.id }}"
+                        data-amount="{{ draft.amount|int }}"
+                        data-description="{{ draft.description }}"
+                        data-category="{{ draft.category or '' }}"
+                        data-account-id="{{ draft.account_id or '' }}"
+                        data-poster-account-id="{{ draft.poster_account_id or '' }}"
+                        data-completion-status="{{ draft.completion_status or 'pending' }}"
+                        data-account-type="halyk">
+                        <td>
+                            <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
+                        </td>
+                        <td class="completion-status">
+                            <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
+                                {% if draft.completion_status == 'completed' %}✅
+                                {% elif draft.completion_status == 'partial' %}🟡
+                                {% else %}⚪{% endif %}
+                            </button>
+                        </td>
+                        <td class="amount">
+                            <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
+                                   data-id="{{ draft.id }}" step="1" min="0">
+                        </td>
+                        <td class="description">
+                            <input type="text" class="edit-description" value="{{ draft.description }}"
+                                   data-id="{{ draft.id }}">
+                        </td>
+                        <td class="type">
+                            <button type="button" class="btn-type"
+                                    data-id="{{ draft.id }}"
+                                    data-type="{{ draft.expense_type }}">
+                                {% if draft.expense_type == 'supply' %}
+                                    📦 поставка
+                                {% else %}
+                                    💰 транзакция
+                                {% endif %}
+                            </button>
+                        </td>
+                        <td class="category">
+                            <div class="autocomplete-wrapper">
+                                <input type="text" class="edit-category"
+                                       value="{{ draft.category or '' }}"
+                                       data-id="{{ draft.id }}"
+                                       placeholder="Категория..."
+                                       autocomplete="off">
+                                <div class="autocomplete-results"></div>
+                            </div>
+                        </td>
+                        <td class="poster-account">
+                            <select class="edit-poster-account" data-id="{{ draft.id }}">
+                                {% for pa in poster_accounts %}
+                                <option value="{{ pa.id }}"
+                                        {% if draft.poster_account_id == pa.id %}selected
+                                        {% elif not draft.poster_account_id and pa.is_primary %}selected
+                                        {% endif %}>
+                                    {{ pa.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td class="actions">
+                            <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="section-summary" id="summary-halyk">
+                <span class="sum">0₸</span>
+            </div>
+        </div>
 
         <div class="summary">
             <p>Всего: <span id="total-count">{{ drafts|length }}</span> записей</p>
             <p>💰 Транзакций: <span id="transaction-count">{{ drafts|selectattr('expense_type', 'equalto', 'transaction')|list|length }}</span></p>
             <p>📦 Поставок: <span id="supply-count">{{ drafts|selectattr('expense_type', 'equalto', 'supply')|list|length }}</span></p>
-            <p><strong>Сумма: <span id="total-sum">{{ "{:,.0f}".format(drafts|sum(attribute='amount')) }}</span>₸</strong></p>
+            <p><strong>Общая сумма: <span id="total-sum">{{ "{:,.0f}".format(drafts|sum(attribute='amount')) }}</span>₸</strong></p>
         </div>
     </form>
 
     {% if not drafts %}
     <div class="empty-state">
         <p>Нет черновиков расходов</p>
-        <p>Нажмите "Добавить строку" для ручного ввода или отправьте фото/Kaspi выписку в бота.</p>
+        <p>Добавьте расход в нужную секцию или отправьте фото/Kaspi выписку в бота.</p>
     </div>
     {% endif %}
 </div>
@@ -309,14 +495,6 @@ h1 {
     border-radius: 3px;
 }
 
-.edit-account {
-    padding: 4px 6px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    background: white;
-    width: 140px;
-}
-
 .edit-poster-account {
     padding: 4px 6px;
     border: 1px solid #ddd;
@@ -387,6 +565,55 @@ h1 {
     border-radius: 3px;
 }
 
+/* Account sections */
+.account-section {
+    margin-bottom: 30px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.section-header {
+    margin: 0;
+    padding: 12px 16px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #e0e0e0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.account-section[data-account-type="cash"] .section-header {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.account-section[data-account-type="kaspi"] .section-header {
+    background: #fff3e0;
+    color: #e65100;
+}
+
+.account-section[data-account-type="halyk"] .section-header {
+    background: #e3f2fd;
+    color: #1565c0;
+}
+
+.account-section .table {
+    margin-bottom: 0;
+}
+
+.section-summary {
+    padding: 8px 16px;
+    background: #fafafa;
+    border-top: 1px solid #e0e0e0;
+    text-align: right;
+    font-weight: 600;
+}
+
+.section-summary .sum {
+    font-size: 14px;
+    color: #333;
+}
+
 .summary {
     background: #f5f5f5;
     padding: 15px;
@@ -416,13 +643,11 @@ h1 {
 /* Responsive */
 @media (max-width: 1200px) {
     .edit-description { width: 120px; }
-    .edit-account { width: 120px; }
     .edit-poster-account { width: 110px; }
 }
 
 @media (max-width: 900px) {
     .edit-description { width: 100px; }
-    .edit-account { width: 100px; }
     .edit-poster-account { width: 90px; }
 }
 </style>
@@ -607,8 +832,8 @@ function updateRowSyncStatus(row) {
     const amount = parseFloat(row.querySelector('.edit-amount').value) || 0;
     const description = row.querySelector('.edit-description').value;
     const category = row.querySelector('.edit-category').value;
-    const accountSelect = row.querySelector('.edit-account');
-    const accountId = accountSelect ? accountSelect.value : null;
+    // Get account_id from row dataset (set based on section)
+    const accountId = row.dataset.accountId || null;
     const posterAccountSelect = row.querySelector('.edit-poster-account');
     const posterAccountId = posterAccountSelect ? posterAccountSelect.value : null;
 
@@ -638,12 +863,41 @@ function updateAllSyncStatus() {
     });
 }
 
+// Map account type to account_id (will be set from accounts data)
+const accountTypeMap = {
+    cash: null,
+    kaspi: null,
+    halyk: null
+};
+
+// Find account IDs for each type
+accounts.forEach(acc => {
+    const name = (acc.name || '').toLowerCase();
+    if (name.includes('kaspi')) {
+        if (!accountTypeMap.kaspi) accountTypeMap.kaspi = acc.account_id;
+    } else if (name.includes('халык') || name.includes('halyk')) {
+        if (!accountTypeMap.halyk) accountTypeMap.halyk = acc.account_id;
+    } else if (name.includes('наличк') || name.includes('закуп') || name.includes('cash')) {
+        if (!accountTypeMap.cash) accountTypeMap.cash = acc.account_id;
+    }
+});
+
+// Fallback: if cash not found, use first non-kaspi/non-halyk account
+if (!accountTypeMap.cash) {
+    const cashAcc = accounts.find(acc => {
+        const name = (acc.name || '').toLowerCase();
+        return !name.includes('kaspi') && !name.includes('халык') && !name.includes('halyk');
+    });
+    if (cashAcc) accountTypeMap.cash = cashAcc.account_id;
+}
+
+console.log('Account type mapping:', accountTypeMap);
+
 document.addEventListener('DOMContentLoaded', function() {
     // Initial sync status check
     updateAllSyncStatus();
 
-    // Select all checkbox
-    const selectAll = document.getElementById('select-all');
+    // Section checkboxes
     const countSpan = document.getElementById('count');
 
     function updateCount() {
@@ -657,6 +911,9 @@ document.addEventListener('DOMContentLoaded', function() {
         let transactions = 0;
         let supplies = 0;
 
+        // Section totals
+        const sectionTotals = { cash: 0, kaspi: 0, halyk: 0 };
+
         rows.forEach(row => {
             const amount = parseFloat(row.querySelector('.edit-amount').value) || 0;
             total += amount;
@@ -665,20 +922,38 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 transactions++;
             }
+            // Add to section total
+            const accountType = row.dataset.accountType || 'cash';
+            if (sectionTotals.hasOwnProperty(accountType)) {
+                sectionTotals[accountType] += amount;
+            }
         });
 
         document.getElementById('total-count').textContent = rows.length;
         document.getElementById('transaction-count').textContent = transactions;
         document.getElementById('supply-count').textContent = supplies;
         document.getElementById('total-sum').textContent = total.toLocaleString('ru-RU');
+
+        // Update section summaries
+        for (const [type, sum] of Object.entries(sectionTotals)) {
+            const summaryEl = document.querySelector(`#summary-${type} .sum`);
+            if (summaryEl) {
+                summaryEl.textContent = sum.toLocaleString('ru-RU') + '₸';
+            }
+        }
     }
 
-    if (selectAll) {
-        selectAll.addEventListener('change', function() {
-            document.querySelectorAll('.draft-checkbox').forEach(cb => cb.checked = this.checked);
+    // Section select-all checkboxes
+    document.querySelectorAll('.select-all-section').forEach(cb => {
+        cb.addEventListener('change', function() {
+            const section = this.dataset.section;
+            const tbody = document.getElementById(`drafts-tbody-${section}`);
+            if (tbody) {
+                tbody.querySelectorAll('.draft-checkbox').forEach(dcb => dcb.checked = this.checked);
+            }
             updateCount();
         });
-    }
+    });
 
     document.addEventListener('change', function(e) {
         if (e.target.classList.contains('draft-checkbox')) {
@@ -686,8 +961,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Add empty row at the bottom initially
-    ensureEmptyRow();
+    // Add empty row at the bottom of each section initially
+    ensureEmptyRowInAllSections();
+    updateSummary();
 
     // Toggle type buttons - use event delegation
     document.addEventListener('click', async function(e) {
@@ -780,18 +1056,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, true);
 
-    // Detect when user fills an empty row -> ensure new empty row exists
+    // Detect when user fills an empty row -> ensure new empty row exists in that section
     document.addEventListener('input', function(e) {
         if (e.target.classList.contains('edit-amount') || e.target.classList.contains('edit-description')) {
             const row = e.target.closest('tr');
             const tbody = row?.parentElement;
             if (!tbody) return;
 
-            // Check if this is the last row
+            // Check if this is the last row in this section
             const rows = tbody.querySelectorAll('.draft-row');
             if (rows.length > 0 && rows[rows.length - 1] === row) {
-                // User is filling the last row, ensure there's a new empty row
-                ensureEmptyRow();
+                // User is filling the last row, ensure there's a new empty row in this section
+                const accountType = tbody.dataset.accountType || 'cash';
+                ensureEmptyRowInSection(accountType);
             }
         }
     });
@@ -818,17 +1095,7 @@ document.addEventListener('DOMContentLoaded', function() {
             updateRowSyncStatus(input.closest('tr'));
         }
 
-        // Account select
-        if (e.target.classList.contains('edit-account')) {
-            const select = e.target;
-            const id = select.dataset.id;
-            await updateField(id, 'account_id', select.value);
-            select.classList.add('saved');
-            setTimeout(() => select.classList.remove('saved'), 300);
-            updateRowSyncStatus(select.closest('tr'));
-        }
-
-        // Poster account select
+        // Poster account select (department change)
         if (e.target.classList.contains('edit-poster-account')) {
             const select = e.target;
             const id = select.dataset.id;
@@ -836,32 +1103,7 @@ document.addEventListener('DOMContentLoaded', function() {
             await updateField(id, 'poster_account_id', posterAccountId);
             select.classList.add('saved');
             setTimeout(() => select.classList.remove('saved'), 300);
-
-            // Update finance accounts dropdown to show only accounts from selected poster account
             const row = select.closest('tr');
-            const accountSelect = row.querySelector('.edit-account');
-            if (accountSelect) {
-                const currentValue = accountSelect.value;
-                accountSelect.innerHTML = '';
-                accounts.forEach(acc => {
-                    if (acc.poster_account_id == posterAccountId) {
-                        const option = document.createElement('option');
-                        option.value = acc.account_id;
-                        option.textContent = acc.name;
-                        option.dataset.name = (acc.name || '').toLowerCase();
-                        option.dataset.posterAccountId = acc.poster_account_id;
-                        if (acc.account_id == currentValue) {
-                            option.selected = true;
-                        }
-                        accountSelect.appendChild(option);
-                    }
-                });
-                // If no match, select first
-                if (!accountSelect.value && accountSelect.options.length > 0) {
-                    accountSelect.selectedIndex = 0;
-                    await updateField(id, 'account_id', accountSelect.value);
-                }
-            }
             updateRowSyncStatus(row);
         }
     });
@@ -1011,20 +1253,27 @@ async function updateField(id, field, value) {
     }
 }
 
-// Create new row dynamically
-async function addNewRow(focusAmount = true) {
+// Create new row dynamically for a specific section
+async function addNewRow(accountType = 'cash', focusAmount = true) {
     try {
+        // Get account_id for this section
+        const accountId = accountTypeMap[accountType];
+
         const response = await fetch('/expenses/create', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({})
+            body: JSON.stringify({ account_id: accountId })
         });
 
         const result = await response.json();
         if (result.success) {
+            // Add account_type to the draft for createRowElement
+            result.draft.account_type = accountType;
             const newRow = createRowElement(result.draft);
-            const tbody = document.getElementById('drafts-tbody');
-            tbody.appendChild(newRow);
+            const tbody = document.getElementById(`drafts-tbody-${accountType}`);
+            if (tbody) {
+                tbody.appendChild(newRow);
+            }
 
             if (focusAmount) {
                 const amountInput = newRow.querySelector('.edit-amount');
@@ -1043,9 +1292,9 @@ async function addNewRow(focusAmount = true) {
     }
 }
 
-// Ensure there's always an empty row at the bottom
-function ensureEmptyRow() {
-    const tbody = document.getElementById('drafts-tbody');
+// Ensure there's always an empty row at the bottom of a section
+function ensureEmptyRowInSection(accountType) {
+    const tbody = document.getElementById(`drafts-tbody-${accountType}`);
     if (!tbody) return;
 
     // Check if last row is empty (amount = 0 and description empty)
@@ -1061,14 +1310,22 @@ function ensureEmptyRow() {
         }
     }
 
-    // Add new empty row
-    addNewRow(false);
+    // Add new empty row in this section
+    addNewRow(accountType, false);
+}
+
+// Ensure empty rows in all sections
+function ensureEmptyRowInAllSections() {
+    ['cash', 'kaspi', 'halyk'].forEach(type => {
+        ensureEmptyRowInSection(type);
+    });
 }
 
 // Create row element from draft data
 function createRowElement(draft) {
     const tr = document.createElement('tr');
     const completionStatus = draft.completion_status || 'pending';
+    const accountType = draft.account_type || 'cash';
     tr.className = 'draft-row ' + (draft.expense_type === 'supply' ? 'supply' : 'transaction') + ' ' + completionStatus;
     tr.dataset.id = draft.id;
     tr.dataset.amount = draft.amount || 0;
@@ -1077,16 +1334,7 @@ function createRowElement(draft) {
     tr.dataset.accountId = draft.account_id || '';
     tr.dataset.posterAccountId = draft.poster_account_id || '';
     tr.dataset.completionStatus = completionStatus;
-
-    // Build accounts options - filtered by poster_account_id or show all if not set
-    let accountOptions = '';
-    const posterAccId = draft.poster_account_id || (posterAccounts.length > 0 ? posterAccounts.find(p => p.is_primary)?.id : null);
-    accounts.forEach(acc => {
-        if (!posterAccId || acc.poster_account_id == posterAccId) {
-            const selected = acc.account_id == draft.account_id ? 'selected' : '';
-            accountOptions += `<option value="${acc.account_id}" data-name="${(acc.name||'').toLowerCase()}" data-poster-account-id="${acc.poster_account_id}" ${selected}>${acc.name}</option>`;
-        }
-    });
+    tr.dataset.accountType = accountType;
 
     // Build poster accounts options
     let posterAccountOptions = '';
@@ -1132,11 +1380,6 @@ function createRowElement(draft) {
                        autocomplete="off">
                 <div class="autocomplete-results"></div>
             </div>
-        </td>
-        <td class="account">
-            <select class="edit-account" data-id="${draft.id}" data-source="${draft.source || ''}" data-poster-account-id="${draft.poster_account_id || ''}">
-                ${accountOptions}
-            </select>
         </td>
         <td class="poster-account">
             <select class="edit-poster-account" data-id="${draft.id}">
