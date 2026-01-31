@@ -8,9 +8,6 @@
 
     <form id="drafts-form" method="POST">
         <div class="drafts-actions">
-            <button type="button" class="btn btn-primary" id="add-row-btn">
-                ➕ Добавить строку
-            </button>
             <button type="submit" formaction="{{ url_for('process_drafts') }}" class="btn btn-success">
                 ✅ Создать выбранные транзакции
             </button>
@@ -687,11 +684,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.target.classList.contains('draft-checkbox')) {
             updateCount();
         }
-    });
-
-    // Add new row button
-    document.getElementById('add-row-btn').addEventListener('click', async function() {
-        await addNewRow();
     });
 
     // Add empty row at the bottom initially

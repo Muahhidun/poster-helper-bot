@@ -900,17 +900,17 @@ def delete_template(template_name):
 
 @app.route('/expenses')
 def list_expenses():
-    """Show expense drafts for user - all from today"""
-    from datetime import datetime, timedelta
+    """Show expense drafts for user - only today's drafts"""
+    from datetime import datetime, timedelta, timezone
 
     db = get_database()
     # Load ALL drafts (not just pending) to show completion status
     drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
-    # Filter to show only today's drafts (or all pending)
-    today = datetime.now().strftime("%Y-%m-%d")
-    drafts = [d for d in drafts if d.get('status') == 'pending' or
-              (d.get('created_at') and str(d['created_at'])[:10] == today)]
+    # Filter to show only today's drafts (Kazakhstan time UTC+5)
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
+    drafts = [d for d in drafts if d.get('created_at') and str(d['created_at'])[:10] == today]
 
     # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
@@ -1343,13 +1343,24 @@ def process_drafts():
 
 @app.route('/supplies')
 def list_supplies():
-    """Show supply drafts for user with ingredients for search"""
+    """Show supply drafts for user with ingredients for search - only today's"""
+    from datetime import datetime, timedelta, timezone
+
     db = get_database()
     drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+
+    # Filter to only today's drafts (Kazakhstan time UTC+5)
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
 
     # Load items for each draft and linked expense amount
     drafts = []
     for draft_raw in drafts_raw:
+        # Filter by today's date
+        created_at = str(draft_raw.get('created_at', ''))[:10]
+        if created_at != today:
+            continue
+
         draft = db.get_supply_draft_with_items(draft_raw['id'])
         if draft:
             # Get linked expense amount if available
