@@ -1750,14 +1750,6 @@ def update_supply_item(item_id):
     return jsonify({'success': success})
 
 
-@app.route('/supplies/delete-item/<int:item_id>', methods=['POST'])
-def delete_supply_item(item_id):
-    """Delete a supply draft item"""
-    db = get_database()
-    success = db.delete_supply_draft_item(item_id)
-    return jsonify({'success': success})
-
-
 @app.route('/supplies/process/<int:draft_id>', methods=['POST'])
 def process_supply(draft_id):
     """Process supply draft - create supply in Poster (multi-account support)
