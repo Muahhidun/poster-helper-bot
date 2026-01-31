@@ -489,9 +489,10 @@ function findSyncStatus(amount, description, category, accountId, posterAccountI
 
         let matches = 0;
 
-        // 1. Check amount
-        const tAmount = parseFloat(t.amount_from) || parseFloat(t.amount) || 0;
-        if (Math.abs(tAmount - amount) < 1) {
+        // 1. Check amount (Poster stores in kopecks/tiyn, divide by 100)
+        const tAmountRaw = parseFloat(t.amount) || 0;
+        const tAmount = Math.abs(tAmountRaw) / 100;  // Convert from kopecks and absolute value
+        if (Math.abs(tAmount - amount) < 10) {  // Allow 10₸ tolerance
             matches++;
         }
 
@@ -508,8 +509,8 @@ function findSyncStatus(amount, description, category, accountId, posterAccountI
             matches++;
         }
 
-        // 4. Check account
-        const tAccountName = (t.account_from_name || '').toLowerCase();
+        // 4. Check account (field is "account_name", not "account_from_name")
+        const tAccountName = (t.account_name || '').toLowerCase();
         if (accountName && tAccountName && (tAccountName.includes(accountName) || accountName.includes(tAccountName))) {
             matches++;
         }
@@ -549,9 +550,10 @@ function findSupplySyncStatus(expenseAmount, supplierName, category, accountName
 
     if (supplyTransactions.length === 0) return 0;
 
-    // Sum up all matching supply transaction amounts
+    // Sum up all matching supply transaction amounts (convert from kopecks)
     const totalSupplyAmount = supplyTransactions.reduce((sum, t) => {
-        return sum + (parseFloat(t.amount_from) || parseFloat(t.amount) || 0);
+        const amountRaw = parseFloat(t.amount) || 0;
+        return sum + Math.abs(amountRaw) / 100;  // Convert from kopecks
     }, 0);
 
     // Check category matches
@@ -570,10 +572,10 @@ function findSupplySyncStatus(expenseAmount, supplierName, category, accountName
         }
     }
 
-    // Check account matches
+    // Check account matches (field is "account_name")
     let accountMatches = false;
     for (const t of supplyTransactions) {
-        const tAccountName = (t.account_from_name || '').toLowerCase();
+        const tAccountName = (t.account_name || '').toLowerCase();
         if (accountName && tAccountName && (tAccountName.includes(accountName) || accountName.includes(tAccountName))) {
             accountMatches = true;
             break;
