@@ -402,14 +402,15 @@ h1 {
 }
 
 .btn-danger {
-    background: white;
+    background: #fef2f2;
     color: var(--accent-red);
-    border: 1px solid var(--border-color);
+    border: 1px solid #fecaca;
 }
 
 .btn-danger:hover {
-    background: #fef2f2;
+    background: #fee2e2;
     border-color: var(--accent-red);
+    color: #b91c1c;
 }
 
 .selected-count {
@@ -567,15 +568,15 @@ h1 {
     opacity: 0.7;
 }
 
-/* Editable inputs - clean, minimal */
+/* Editable inputs - with visible borders */
 .edit-amount,
 .edit-description,
 .edit-category {
     width: 100%;
     padding: 6px 10px;
-    border: 1px solid transparent;
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    background: transparent;
+    background: white;
     font-size: 14px;
     color: var(--text-primary);
     transition: all 0.15s;
@@ -599,7 +600,8 @@ h1 {
 .edit-amount:hover,
 .edit-description:hover,
 .edit-category:hover {
-    background: var(--bg-secondary);
+    border-color: #d1d5db;
+    background: #fafafa;
 }
 
 .edit-amount:focus,
@@ -614,9 +616,9 @@ h1 {
 /* Select dropdown */
 .edit-poster-account {
     padding: 6px 10px;
-    border: 1px solid transparent;
+    border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    background: transparent;
+    background: white;
     font-size: 14px;
     color: var(--text-primary);
     cursor: pointer;
@@ -624,12 +626,14 @@ h1 {
 }
 
 .edit-poster-account:hover {
-    background: var(--bg-secondary);
+    border-color: #d1d5db;
+    background: #fafafa;
 }
 
 .edit-poster-account:focus {
     outline: none;
     border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.1);
 }
 
 /* Completion button */
