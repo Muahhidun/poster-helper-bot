@@ -400,7 +400,7 @@ const supplyItems = {};  // { draftId: [items] }
 
 // Initial load of items for each draft
 {% for draft in drafts %}
-supplyItems[{{ draft.id }}] = {{ (draft.items or [])|tojson|safe }};
+supplyItems[{{ draft.id }}] = {{ (draft['items'] or [])|tojson|safe }};
 {% endfor %}
 
 let searchTimeout = null;
