@@ -2137,6 +2137,36 @@ class UserDatabase:
         conn.close()
         return [dict(row) for row in rows]
 
+    def get_expense_draft(self, draft_id: int) -> Optional[Dict]:
+        """
+        Получить один черновик расхода по ID
+
+        Args:
+            draft_id: ID черновика
+
+        Returns:
+            Черновик или None
+        """
+        conn = self._get_connection()
+
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM expense_drafts WHERE id = ?", (draft_id,))
+            row = cursor.fetchone()
+            if row:
+                columns = [desc[0] for desc in cursor.description]
+                result = dict(zip(columns, row))
+            else:
+                result = None
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT * FROM expense_drafts WHERE id = %s", (draft_id,))
+            row = cursor.fetchone()
+            result = dict(row) if row else None
+
+        conn.close()
+        return result
+
     def update_expense_draft(self, draft_id: int, **kwargs) -> bool:
         """
         Обновить черновик расхода

@@ -798,24 +798,38 @@ document.addEventListener('DOMContentLoaded', function() {
             const selectedPosterAccountId = posterAccountSelect ? parseInt(posterAccountSelect.value) : null;
 
             searchTimeout = setTimeout(() => {
-                // Filter categories by selected department (poster_account_id)
-                const matches = categories.filter(c => {
+                // Find ALL matching categories (don't strictly filter by department)
+                let matches = categories.filter(c => {
                     const name = c.category_name || c.name || '';
-                    const nameMatches = name.toLowerCase().includes(query);
+                    return name.toLowerCase().includes(query);
+                });
 
-                    // Filter by poster_account_id if selected
-                    if (selectedPosterAccountId && c.poster_account_id) {
-                        return nameMatches && c.poster_account_id == selectedPosterAccountId;
-                    }
-                    return nameMatches;
-                }).slice(0, 8);
+                // Sort: selected department first, then alphabetically
+                matches.sort((a, b) => {
+                    const aMatch = a.poster_account_id == selectedPosterAccountId ? 0 : 1;
+                    const bMatch = b.poster_account_id == selectedPosterAccountId ? 0 : 1;
+                    if (aMatch !== bMatch) return aMatch - bMatch;
+                    const aName = (a.category_name || a.name || '').toLowerCase();
+                    const bName = (b.category_name || b.name || '').toLowerCase();
+                    return aName.localeCompare(bName);
+                });
+
+                // Deduplicate by name (keep first, which is from selected department)
+                const seen = new Set();
+                matches = matches.filter(c => {
+                    const name = (c.category_name || c.name || '').toLowerCase();
+                    if (seen.has(name)) return false;
+                    seen.add(name);
+                    return true;
+                }).slice(0, 10);
 
                 if (matches.length === 0) {
                     resultsDiv.innerHTML = `<div class="autocomplete-item" data-name="${input.value}">➕ Добавить "${input.value}"</div>`;
                 } else {
                     resultsDiv.innerHTML = matches.map((c, i) => {
                         const name = c.category_name || c.name || '';
-                        const accountTag = c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
+                        const isOtherDept = selectedPosterAccountId && c.poster_account_id && c.poster_account_id != selectedPosterAccountId;
+                        const accountTag = isOtherDept && c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
                         return `<div class="autocomplete-item" data-name="${name}" data-index="${i}">${name}${accountTag}</div>`;
                     }).join('');
                 }
