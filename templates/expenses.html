@@ -30,14 +30,14 @@
             <table class="table">
                 <thead>
                     <tr>
-                        <th><input type="checkbox" class="select-all-section" data-section="cash"></th>
-                        <th>✓</th>
-                        <th>Сумма</th>
-                        <th>Описание</th>
-                        <th>Тип</th>
-                        <th>Категория</th>
-                        <th>Отдел</th>
-                        <th></th>
+                        <th style="width:40px"><input type="checkbox" class="select-all-section" data-section="cash"></th>
+                        <th style="width:40px">✓</th>
+                        <th class="sortable" data-sort="amount" data-section="cash">Сумма <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="description" data-section="cash">Описание <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="type" data-section="cash">Тип <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="category" data-section="cash">Категория <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="department" data-section="cash">Отдел <span class="sort-icon">↕</span></th>
+                        <th style="width:40px"></th>
                     </tr>
                 </thead>
                 <tbody id="drafts-tbody-cash" data-account-type="cash">
@@ -126,14 +126,14 @@
             <table class="table">
                 <thead>
                     <tr>
-                        <th><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
-                        <th>✓</th>
-                        <th>Сумма</th>
-                        <th>Описание</th>
-                        <th>Тип</th>
-                        <th>Категория</th>
-                        <th>Отдел</th>
-                        <th></th>
+                        <th style="width:40px"><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
+                        <th style="width:40px">✓</th>
+                        <th class="sortable" data-sort="amount" data-section="kaspi">Сумма <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="description" data-section="kaspi">Описание <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="type" data-section="kaspi">Тип <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="category" data-section="kaspi">Категория <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="department" data-section="kaspi">Отдел <span class="sort-icon">↕</span></th>
+                        <th style="width:40px"></th>
                     </tr>
                 </thead>
                 <tbody id="drafts-tbody-kaspi" data-account-type="kaspi">
@@ -222,14 +222,14 @@
             <table class="table">
                 <thead>
                     <tr>
-                        <th><input type="checkbox" class="select-all-section" data-section="halyk"></th>
-                        <th>✓</th>
-                        <th>Сумма</th>
-                        <th>Описание</th>
-                        <th>Тип</th>
-                        <th>Категория</th>
-                        <th>Отдел</th>
-                        <th></th>
+                        <th style="width:40px"><input type="checkbox" class="select-all-section" data-section="halyk"></th>
+                        <th style="width:40px">✓</th>
+                        <th class="sortable" data-sort="amount" data-section="halyk">Сумма <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="description" data-section="halyk">Описание <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="type" data-section="halyk">Тип <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="category" data-section="halyk">Категория <span class="sort-icon">↕</span></th>
+                        <th class="sortable" data-sort="department" data-section="halyk">Отдел <span class="sort-icon">↕</span></th>
+                        <th style="width:40px"></th>
                     </tr>
                 </thead>
                 <tbody id="drafts-tbody-halyk" data-account-type="halyk">
@@ -329,178 +329,361 @@
 </div>
 
 <style>
+/* Modern Notion-like Design */
+:root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f7f7f5;
+    --bg-hover: #f1f1ef;
+    --border-color: #e9e9e7;
+    --text-primary: #37352f;
+    --text-secondary: #6b6b6b;
+    --text-muted: #9b9b9b;
+    --accent-green: #0f7b6c;
+    --accent-orange: #d9730d;
+    --accent-blue: #0b6bcb;
+    --accent-red: #e03e3e;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
 .container {
-    max-width: 1400px;
+    max-width: 1600px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 24px 32px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--text-primary);
 }
 
 h1 {
-    margin-bottom: 20px;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 24px;
+    letter-spacing: -0.02em;
 }
 
+/* Action buttons */
 .drafts-actions {
     display: flex;
-    gap: 10px;
-    margin-bottom: 15px;
+    gap: 12px;
+    margin-bottom: 20px;
     align-items: center;
     flex-wrap: wrap;
 }
 
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-success {
+    background: var(--accent-green);
+    color: white;
+}
+
+.btn-success:hover {
+    background: #0a6b5f;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.btn-danger {
+    background: white;
+    color: var(--accent-red);
+    border: 1px solid var(--border-color);
+}
+
+.btn-danger:hover {
+    background: #fef2f2;
+    border-color: var(--accent-red);
+}
+
+.selected-count {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Sync legend */
 .sync-legend {
     display: flex;
     gap: 20px;
-    margin-bottom: 15px;
+    margin-bottom: 20px;
     font-size: 12px;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .legend-item {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
 }
 
 .dot {
-    width: 12px;
-    height: 12px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    display: inline-block;
 }
 
-.dot.green { background: #28a745; }
-.dot.yellow { background: #ffc107; }
-.dot.none { background: #e0e0e0; border: 1px solid #ccc; }
+.dot.green { background: var(--accent-green); }
+.dot.yellow { background: var(--accent-orange); }
+.dot.none { background: var(--border-color); }
 
-.btn {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 14px;
+/* Account sections */
+.account-section {
+    margin-bottom: 24px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
 }
 
-.btn-primary {
-    background: #007bff;
-    color: white;
+.section-header {
+    margin: 0;
+    padding: 14px 20px;
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border-color);
 }
 
-.btn-success {
-    background: #28a745;
-    color: white;
+.account-section[data-account-type="cash"] .section-header {
+    background: linear-gradient(to right, #ecfdf5, #f0fdf4);
+    color: var(--accent-green);
 }
 
-.btn-danger {
-    background: #dc3545;
-    color: white;
+.account-section[data-account-type="kaspi"] .section-header {
+    background: linear-gradient(to right, #fff7ed, #fffbeb);
+    color: var(--accent-orange);
 }
 
-.btn:hover {
-    opacity: 0.9;
+.account-section[data-account-type="halyk"] .section-header {
+    background: linear-gradient(to right, #eff6ff, #f0f9ff);
+    color: var(--accent-blue);
 }
 
-.selected-count {
-    margin-left: auto;
-    color: #666;
-}
-
+/* Table styles */
 .table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 20px;
-}
-
-.table th, .table td {
-    padding: 8px;
-    text-align: left;
-    border-bottom: 1px solid #ddd;
 }
 
 .table th {
-    background: #f5f5f5;
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 12px;
     font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
     white-space: nowrap;
+    position: relative;
+    user-select: none;
+}
+
+/* Sortable headers */
+.table th.sortable {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.table th.sortable:hover {
+    background: var(--bg-hover);
+}
+
+.table th .sort-icon {
+    margin-left: 4px;
+    opacity: 0.4;
+    font-size: 10px;
+}
+
+.table th.sort-asc .sort-icon,
+.table th.sort-desc .sort-icon {
+    opacity: 1;
+}
+
+.table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+.draft-row {
+    transition: background 0.1s;
 }
 
 .draft-row:hover {
-    background: #f9f9f9;
+    background: var(--bg-hover);
 }
 
-.draft-row.supply {
-    border-left: 4px solid #17a2b8;
+.draft-row:last-child td {
+    border-bottom: none;
 }
 
-.draft-row.transaction {
-    border-left: 4px solid #28a745;
+/* Row type indicators */
+.draft-row.supply td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent-blue);
 }
 
-/* Completion status styles */
+.draft-row.transaction td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+/* Status styles */
+.draft-row.sync-full {
+    background: #f0fdf4 !important;
+}
+
+.draft-row.sync-partial {
+    background: #fffbeb !important;
+}
+
 .draft-row.partial {
-    background: #fff8e6 !important;
-}
-
-.draft-row.partial .edit-description {
-    text-decoration: underline;
+    background: #fffbeb !important;
 }
 
 .draft-row.completed {
-    background: #e8f5e9 !important;
-    opacity: 0.85;
+    background: #f0fdf4 !important;
+    opacity: 0.7;
 }
 
+/* Editable inputs - clean, minimal */
+.edit-amount,
+.edit-description,
+.edit-category {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-size: 14px;
+    color: var(--text-primary);
+    transition: all 0.15s;
+}
+
+.edit-amount {
+    width: 100px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.edit-description {
+    width: 180px;
+}
+
+.edit-category {
+    width: 140px;
+}
+
+.edit-amount:hover,
+.edit-description:hover,
+.edit-category:hover {
+    background: var(--bg-secondary);
+}
+
+.edit-amount:focus,
+.edit-description:focus,
+.edit-category:focus {
+    outline: none;
+    background: white;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.1);
+}
+
+/* Select dropdown */
+.edit-poster-account {
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-size: 14px;
+    color: var(--text-primary);
+    cursor: pointer;
+    min-width: 120px;
+}
+
+.edit-poster-account:hover {
+    background: var(--bg-secondary);
+}
+
+.edit-poster-account:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+/* Completion button */
 .btn-completion {
     border: none;
     background: none;
     font-size: 18px;
     cursor: pointer;
-    padding: 4px;
-    border-radius: 4px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    transition: transform 0.1s;
 }
 
 .btn-completion:hover {
-    background: #f0f0f0;
+    background: var(--bg-hover);
+    transform: scale(1.1);
 }
 
-/* Sync status colors */
-.draft-row.sync-full {
-    background: #d4edda !important;
-}
-
-.draft-row.sync-partial {
-    background: #fff3cd !important;
-}
-
-/* Editable inputs */
-.edit-amount {
-    width: 90px;
-    padding: 4px 6px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    text-align: right;
-    font-family: monospace;
-    font-weight: 600;
-}
-
-.edit-description {
-    width: 160px;
-    padding: 4px 6px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-}
-
-.edit-category {
-    width: 110px;
-    padding: 4px 6px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-}
-
-.edit-poster-account {
-    padding: 4px 6px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
+/* Type button */
+.btn-type {
+    padding: 4px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
     background: white;
-    width: 130px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+    transition: all 0.15s;
+}
+
+.btn-type:hover {
+    background: var(--bg-secondary);
+    border-color: var(--text-muted);
+}
+
+/* Delete button */
+.btn-delete {
+    padding: 6px 8px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.4;
+    transition: all 0.15s;
+    border-radius: var(--radius-sm);
+}
+
+.draft-row:hover .btn-delete {
+    opacity: 1;
+}
+
+.btn-delete:hover {
+    background: #fef2f2;
+    color: var(--accent-red);
 }
 
 /* Autocomplete */
@@ -514,141 +697,99 @@ h1 {
     left: 0;
     right: 0;
     background: white;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    max-height: 200px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    max-height: 240px;
     overflow-y: auto;
     z-index: 100;
     display: none;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    min-width: 150px;
+    box-shadow: var(--shadow-md);
+    min-width: 180px;
 }
 
 .autocomplete-item {
-    padding: 8px 12px;
+    padding: 10px 14px;
     cursor: pointer;
+    font-size: 14px;
+    transition: background 0.1s;
 }
 
-.autocomplete-item:hover, .autocomplete-item.active {
-    background: #e3f2fd;
+.autocomplete-item:hover,
+.autocomplete-item.active {
+    background: var(--bg-hover);
 }
 
-.autocomplete-item.text-muted {
-    color: #999;
-    cursor: default;
-}
-
-.btn-type {
-    padding: 5px 10px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-    background: white;
-    cursor: pointer;
-    font-size: 12px;
-    white-space: nowrap;
-}
-
-.btn-type:hover {
-    background: #f0f0f0;
-}
-
-.btn-delete {
-    padding: 5px 10px;
-    border: none;
-    background: none;
-    cursor: pointer;
-    font-size: 16px;
-}
-
-.btn-delete:hover {
-    background: #fee;
-    border-radius: 3px;
-}
-
-/* Account sections */
-.account-section {
-    margin-bottom: 30px;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.section-header {
-    margin: 0;
-    padding: 12px 16px;
-    background: #f8f9fa;
-    border-bottom: 1px solid #e0e0e0;
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.account-section[data-account-type="cash"] .section-header {
-    background: #e8f5e9;
-    color: #2e7d32;
-}
-
-.account-section[data-account-type="kaspi"] .section-header {
-    background: #fff3e0;
-    color: #e65100;
-}
-
-.account-section[data-account-type="halyk"] .section-header {
-    background: #e3f2fd;
-    color: #1565c0;
-}
-
-.account-section .table {
-    margin-bottom: 0;
-}
-
+/* Section summary */
 .section-summary {
-    padding: 8px 16px;
-    background: #fafafa;
-    border-top: 1px solid #e0e0e0;
+    padding: 12px 20px;
+    background: var(--bg-secondary);
     text-align: right;
     font-weight: 600;
+    font-size: 14px;
+    color: var(--text-secondary);
 }
 
 .section-summary .sum {
-    font-size: 14px;
-    color: #333;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
 }
 
+/* Total summary */
 .summary {
-    background: #f5f5f5;
-    padding: 15px;
-    border-radius: 5px;
+    background: var(--bg-secondary);
+    padding: 20px 24px;
+    border-radius: var(--radius-lg);
+    display: flex;
+    gap: 32px;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 .summary p {
-    margin: 5px 0;
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-secondary);
 }
 
+.summary p strong {
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+/* Empty state */
 .empty-state {
     text-align: center;
-    padding: 50px;
-    color: #666;
+    padding: 60px 20px;
+    color: var(--text-muted);
 }
 
 /* Saved indicator */
 .saved {
-    animation: flash-green 0.3s;
+    animation: flash-save 0.3s ease;
 }
 
-@keyframes flash-green {
-    0% { background-color: #d4edda; }
+@keyframes flash-save {
+    0% { background-color: #d1fae5; }
     100% { background-color: transparent; }
+}
+
+/* Checkbox styling */
+input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent-blue);
 }
 
 /* Responsive */
 @media (max-width: 1200px) {
-    .edit-description { width: 120px; }
-    .edit-poster-account { width: 110px; }
+    .container { padding: 16px; }
+    .edit-description { width: 140px; }
 }
 
 @media (max-width: 900px) {
     .edit-description { width: 100px; }
-    .edit-poster-account { width: 90px; }
+    .edit-category { width: 100px; }
 }
 </style>
 
@@ -1046,17 +1187,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Auto-select '0' on focus for amount fields
+    // Clear '0' on focus for amount fields - user expects empty field to type into
     document.addEventListener('focus', function(e) {
         if (e.target.classList.contains('edit-amount')) {
             const input = e.target;
-            if (input.value === '0' || input.value === '') {
-                setTimeout(() => input.select(), 10);
+            if (input.value === '0') {
+                input.value = '';
             }
         }
     }, true);
 
     // Detect when user fills an empty row -> ensure new empty row exists in that section
+    // Debounced to prevent multiple rapid calls
+    let ensureRowTimeout = null;
     document.addEventListener('input', function(e) {
         if (e.target.classList.contains('edit-amount') || e.target.classList.contains('edit-description')) {
             const row = e.target.closest('tr');
@@ -1068,7 +1211,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (rows.length > 0 && rows[rows.length - 1] === row) {
                 // User is filling the last row, ensure there's a new empty row in this section
                 const accountType = tbody.dataset.accountType || 'cash';
-                ensureEmptyRowInSection(accountType);
+
+                // Debounce the call
+                clearTimeout(ensureRowTimeout);
+                ensureRowTimeout = setTimeout(() => {
+                    ensureEmptyRowInSection(accountType);
+                }, 300);
             }
         }
     });
@@ -1253,8 +1401,17 @@ async function updateField(id, field, value) {
     }
 }
 
+// Track pending row creations to prevent duplicates
+const pendingRowCreation = { cash: false, kaspi: false, halyk: false };
+
 // Create new row dynamically for a specific section
 async function addNewRow(accountType = 'cash', focusAmount = true) {
+    // Prevent duplicate row creation
+    if (pendingRowCreation[accountType]) {
+        return null;
+    }
+    pendingRowCreation[accountType] = true;
+
     try {
         // Get account_id for this section
         const accountId = accountTypeMap[accountType];
@@ -1289,6 +1446,8 @@ async function addNewRow(accountType = 'cash', focusAmount = true) {
     } catch (e) {
         console.error('Error:', e);
         return null;
+    } finally {
+        pendingRowCreation[accountType] = false;
     }
 }
 
@@ -1415,5 +1574,125 @@ function updateSummaryGlobal() {
     document.getElementById('supply-count').textContent = supplies;
     document.getElementById('total-sum').textContent = total.toLocaleString('ru-RU');
 }
+
+// ============ SORTING FUNCTIONALITY ============
+
+// Track sort state per section: { cash: { column: 'amount', direction: 'asc' }, ... }
+const sortState = {
+    cash: { column: null, direction: null },
+    kaspi: { column: null, direction: null },
+    halyk: { column: null, direction: null }
+};
+
+// Get value for sorting from a row
+function getSortValue(row, column) {
+    switch (column) {
+        case 'amount':
+            return parseFloat(row.querySelector('.edit-amount')?.value) || 0;
+        case 'description':
+            return (row.querySelector('.edit-description')?.value || '').toLowerCase();
+        case 'type':
+            const typeBtn = row.querySelector('.btn-type');
+            return typeBtn ? typeBtn.dataset.type : '';
+        case 'category':
+            return (row.querySelector('.edit-category')?.value || '').toLowerCase();
+        case 'department':
+            const select = row.querySelector('.edit-poster-account');
+            return select ? (select.options[select.selectedIndex]?.text || '').toLowerCase() : '';
+        default:
+            return '';
+    }
+}
+
+// Sort rows in a section
+function sortSection(section, column) {
+    const state = sortState[section];
+    const tbody = document.getElementById(`drafts-tbody-${section}`);
+    if (!tbody) return;
+
+    // Determine new direction: none -> asc -> desc -> none
+    let newDirection;
+    if (state.column !== column) {
+        newDirection = 'asc';
+    } else if (state.direction === 'asc') {
+        newDirection = 'desc';
+    } else if (state.direction === 'desc') {
+        newDirection = null;
+    } else {
+        newDirection = 'asc';
+    }
+
+    // Update state
+    state.column = newDirection ? column : null;
+    state.direction = newDirection;
+
+    // Update header icons
+    updateSortIcons(section, column, newDirection);
+
+    // Get all rows (excluding empty rows at the end)
+    const rows = Array.from(tbody.querySelectorAll('.draft-row'));
+
+    // Separate empty rows (amount=0 and no description) to keep them at the end
+    const emptyRows = [];
+    const dataRows = [];
+    rows.forEach(row => {
+        const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
+        const desc = (row.querySelector('.edit-description')?.value || '').trim();
+        if (amount === 0 && desc === '') {
+            emptyRows.push(row);
+        } else {
+            dataRows.push(row);
+        }
+    });
+
+    // Sort data rows if direction is set
+    if (newDirection) {
+        dataRows.sort((a, b) => {
+            const aVal = getSortValue(a, column);
+            const bVal = getSortValue(b, column);
+
+            let comparison;
+            if (typeof aVal === 'number' && typeof bVal === 'number') {
+                comparison = aVal - bVal;
+            } else {
+                comparison = String(aVal).localeCompare(String(bVal), 'ru');
+            }
+
+            return newDirection === 'desc' ? -comparison : comparison;
+        });
+    }
+
+    // Re-append rows in sorted order (data rows first, then empty rows)
+    [...dataRows, ...emptyRows].forEach(row => tbody.appendChild(row));
+}
+
+// Update sort icons in headers
+function updateSortIcons(section, activeColumn, direction) {
+    const sectionEl = document.querySelector(`.account-section[data-account-type="${section}"]`);
+    if (!sectionEl) return;
+
+    sectionEl.querySelectorAll('th.sortable').forEach(th => {
+        const col = th.dataset.sort;
+        const icon = th.querySelector('.sort-icon');
+
+        th.classList.remove('sort-asc', 'sort-desc');
+
+        if (col === activeColumn && direction) {
+            th.classList.add(`sort-${direction}`);
+            icon.textContent = direction === 'asc' ? '↑' : '↓';
+        } else {
+            icon.textContent = '↕';
+        }
+    });
+}
+
+// Add click handlers to sortable headers
+document.querySelectorAll('th.sortable').forEach(th => {
+    th.addEventListener('click', function() {
+        const section = this.dataset.section;
+        const column = this.dataset.sort;
+        sortSection(section, column);
+    });
+});
 </script>
 {% endblock %}
