@@ -257,6 +257,13 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Migration: add completion_status column for tracking expense completion
+            # Values: 'pending' (not done), 'partial' (in Poster but not paid), 'completed' (fully done)
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN completion_status TEXT DEFAULT 'pending'")
+            except Exception:
+                pass  # Column already exists
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
@@ -499,6 +506,12 @@ class UserDatabase:
             # Migration: add poster_account_id column if not exists (for multi-account support: PizzBurg, PizzBurg Cafe)
             try:
                 cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS poster_account_id INTEGER")
+            except Exception:
+                pass  # Column already exists
+
+            # Migration: add completion_status column for tracking expense completion
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS completion_status TEXT DEFAULT 'pending'")
             except Exception:
                 pass  # Column already exists
 

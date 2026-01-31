@@ -32,6 +32,7 @@
             <thead>
                 <tr>
                     <th><input type="checkbox" id="select-all"></th>
+                    <th>✓</th>
                     <th>Сумма</th>
                     <th>Описание</th>
                     <th>Тип</th>
@@ -43,15 +44,23 @@
             </thead>
             <tbody id="drafts-tbody">
                 {% for draft in drafts %}
-                <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %}"
+                <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                     data-id="{{ draft.id }}"
                     data-amount="{{ draft.amount|int }}"
                     data-description="{{ draft.description }}"
                     data-category="{{ draft.category or '' }}"
                     data-account-id="{{ draft.account_id or '' }}"
-                    data-poster-account-id="{{ draft.poster_account_id or '' }}">
+                    data-poster-account-id="{{ draft.poster_account_id or '' }}"
+                    data-completion-status="{{ draft.completion_status or 'pending' }}">
                     <td>
                         <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
+                    </td>
+                    <td class="completion-status">
+                        <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
+                            {% if draft.completion_status == 'completed' %}✅
+                            {% elif draft.completion_status == 'partial' %}🟡
+                            {% else %}⚪{% endif %}
+                        </button>
                     </td>
                     <td class="amount">
                         <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
@@ -242,6 +251,33 @@ h1 {
     border-left: 4px solid #28a745;
 }
 
+/* Completion status styles */
+.draft-row.partial {
+    background: #fff8e6 !important;
+}
+
+.draft-row.partial .edit-description {
+    text-decoration: underline;
+}
+
+.draft-row.completed {
+    background: #e8f5e9 !important;
+    opacity: 0.85;
+}
+
+.btn-completion {
+    border: none;
+    background: none;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.btn-completion:hover {
+    background: #f0f0f0;
+}
+
 /* Sync status colors */
 .draft-row.sync-full {
     background: #d4edda !important;
@@ -401,7 +437,7 @@ const accounts = {{ accounts|tojson|safe if accounts else '[]' }};
 const posterAccounts = {{ poster_accounts|tojson|safe if poster_accounts else '[]' }};
 const posterTransactions = {{ poster_transactions|tojson|safe if poster_transactions else '[]' }};
 
-console.log('Loaded categories:', categories.length);
+console.log('Loaded categories:', categories.length, categories);
 console.log('Loaded accounts:', accounts.length);
 console.log('Loaded poster accounts:', posterAccounts.length);
 console.log('Loaded poster transactions:', posterTransactions.length);
@@ -675,6 +711,38 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (response.ok) {
                     e.target.closest('tr').remove();
                     updateSummary();
+                }
+            } catch (err) {
+                console.error('Error:', err);
+            }
+        }
+
+        // Completion status toggle: pending → partial → completed → pending
+        if (e.target.classList.contains('btn-completion')) {
+            const btn = e.target;
+            const id = btn.dataset.id;
+            const currentStatus = btn.dataset.status || 'pending';
+
+            // Cycle through statuses
+            const nextStatus = currentStatus === 'pending' ? 'partial' :
+                              currentStatus === 'partial' ? 'completed' : 'pending';
+            const statusIcons = { pending: '⚪', partial: '🟡', completed: '✅' };
+
+            try {
+                const response = await fetch(`/expenses/update/${id}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ completion_status: nextStatus })
+                });
+
+                if (response.ok) {
+                    btn.dataset.status = nextStatus;
+                    btn.textContent = statusIcons[nextStatus];
+
+                    const row = btn.closest('tr');
+                    row.classList.remove('pending', 'partial', 'completed');
+                    row.classList.add(nextStatus);
+                    row.dataset.completionStatus = nextStatus;
                 }
             } catch (err) {
                 console.error('Error:', err);
@@ -980,13 +1048,15 @@ function ensureEmptyRow() {
 // Create row element from draft data
 function createRowElement(draft) {
     const tr = document.createElement('tr');
-    tr.className = 'draft-row ' + (draft.expense_type === 'supply' ? 'supply' : 'transaction');
+    const completionStatus = draft.completion_status || 'pending';
+    tr.className = 'draft-row ' + (draft.expense_type === 'supply' ? 'supply' : 'transaction') + ' ' + completionStatus;
     tr.dataset.id = draft.id;
     tr.dataset.amount = draft.amount || 0;
     tr.dataset.description = draft.description || '';
     tr.dataset.category = draft.category || '';
     tr.dataset.accountId = draft.account_id || '';
     tr.dataset.posterAccountId = draft.poster_account_id || '';
+    tr.dataset.completionStatus = completionStatus;
 
     // Build accounts options - filtered by poster_account_id or show all if not set
     let accountOptions = '';
@@ -1005,9 +1075,18 @@ function createRowElement(draft) {
         posterAccountOptions += `<option value="${pa.id}" ${selected}>${pa.name}</option>`;
     });
 
+    // Completion status icon
+    const statusIcons = { pending: '⚪', partial: '🟡', completed: '✅' };
+    const statusIcon = statusIcons[completionStatus] || '⚪';
+
     tr.innerHTML = `
         <td>
             <input type="checkbox" name="draft_ids" value="${draft.id}" class="draft-checkbox">
+        </td>
+        <td class="completion-status">
+            <button type="button" class="btn-completion" data-id="${draft.id}" data-status="${completionStatus}" title="Статус выполнения">
+                ${statusIcon}
+            </button>
         </td>
         <td class="amount">
             <input type="number" class="edit-amount" value="${draft.amount || 0}"

@@ -900,11 +900,17 @@ def delete_template(template_name):
 
 @app.route('/expenses')
 def list_expenses():
-    """Show expense drafts for user"""
+    """Show expense drafts for user - all from today"""
     from datetime import datetime, timedelta
 
     db = get_database()
-    drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
+    # Load ALL drafts (not just pending) to show completion status
+    drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+
+    # Filter to show only today's drafts (or all pending)
+    today = datetime.now().strftime("%Y-%m-%d")
+    drafts = [d for d in drafts if d.get('status') == 'pending' or
+              (d.get('created_at') and str(d['created_at'])[:10] == today)]
 
     # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
@@ -950,13 +956,19 @@ def list_expenses():
                     try:
                         # Load categories from each account with poster_account info
                         cats = await client.get_categories()
+                        print(f"Loaded {len(cats)} categories from {acc['account_name']}")
                         for c in cats:
+                            # Only include expense categories (type=1), not income (type=0)
+                            cat_type = c.get('type', '1')
+                            if str(cat_type) != '1':
+                                continue
                             cat_name = c.get('category_name', '').lower()
                             # Add poster account info
                             c['poster_account_id'] = acc['id']
                             c['poster_account_name'] = acc['account_name']
                             # Add all categories (not deduplicated) so user can filter by department
                             all_categories.append(c)
+                            print(f"  Category: {c.get('category_name')} (type={cat_type})")
 
                         # Load finance accounts with poster_account info
                         accs = await client.get_accounts()
@@ -1063,6 +1075,9 @@ def update_expense(draft_id):
 
     if 'poster_account_id' in data:
         update_fields['poster_account_id'] = int(data['poster_account_id']) if data['poster_account_id'] else None
+
+    if 'completion_status' in data and data['completion_status'] in ('pending', 'partial', 'completed'):
+        update_fields['completion_status'] = data['completion_status']
 
     if not update_fields:
         return jsonify({'success': False, 'error': 'No fields to update'})
