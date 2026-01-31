@@ -251,6 +251,12 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Migration: add poster_account_id column if not exists (for multi-account support: PizzBurg, PizzBurg Cafe)
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN poster_account_id INTEGER")
+            except Exception:
+                pass  # Column already exists
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
@@ -487,6 +493,12 @@ class UserDatabase:
             # Migration: add account_id column if not exists
             try:
                 cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS account_id INTEGER")
+            except Exception:
+                pass  # Column already exists
+
+            # Migration: add poster_account_id column if not exists (for multi-account support: PizzBurg, PizzBurg Cafe)
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS poster_account_id INTEGER")
             except Exception:
                 pass  # Column already exists
 
@@ -2155,6 +2167,52 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to delete expense draft: {e}")
             return False
+
+    def create_expense_draft(
+        self,
+        telegram_user_id: int,
+        amount: float = 0,
+        description: str = "",
+        expense_type: str = "transaction",
+        category: str = None,
+        source: str = "cash",
+        account_id: int = None,
+        poster_account_id: int = None
+    ) -> Optional[int]:
+        """
+        Создать один черновик расхода (для ручного ввода)
+
+        Returns:
+            ID созданного черновика или None при ошибке
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO expense_drafts
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id))
+                draft_id = cursor.lastrowid
+            else:
+                cursor.execute("""
+                    INSERT INTO expense_drafts
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id))
+                draft_id = cursor.fetchone()[0]
+
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Created expense draft #{draft_id} for user {telegram_user_id}")
+            return draft_id
+
+        except Exception as e:
+            logger.error(f"Failed to create expense draft: {e}")
+            return None
 
     def delete_expense_drafts_bulk(self, draft_ids: list) -> int:
         """Удалить несколько черновиков"""

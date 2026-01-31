@@ -901,45 +901,89 @@ def delete_template(template_name):
 @app.route('/expenses')
 def list_expenses():
     """Show expense drafts for user"""
+    from datetime import datetime, timedelta
+
     db = get_database()
     drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
 
-    # Load categories and accounts for editing
+    # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
-    accounts = []
+    accounts = []  # Finance accounts (Kaspi, Cash, etc.)
+    poster_accounts_list = []  # Business accounts (PizzBurg, PizzBurg Cafe)
+    poster_transactions = []  # Transactions from Poster for sync check
 
     try:
         from poster_client import PosterClient
         poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
 
         if poster_accounts:
-            account = poster_accounts[0]
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            async def load_data():
-                client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
-                    poster_token=account['poster_token'],
-                    poster_user_id=account['poster_user_id'],
-                    poster_base_url=account['poster_base_url']
-                )
-                try:
-                    cats = await client.get_categories()
-                    accs = await client.get_accounts()
-                    return cats, accs
-                finally:
-                    await client.close()
+            # Build poster_accounts_list for template
+            for acc in poster_accounts:
+                poster_accounts_list.append({
+                    'id': acc['id'],
+                    'name': acc['account_name'],
+                    'is_primary': acc.get('is_primary', False)
+                })
 
-            categories, accounts = loop.run_until_complete(load_data())
+            async def load_data():
+                all_categories = []
+                all_accounts = []
+                all_transactions = []
+
+                # Get date range for transactions (last 30 days)
+                date_to = datetime.now()
+                date_from = date_to - timedelta(days=30)
+                date_from_str = date_from.strftime("%Y%m%d")
+                date_to_str = date_to.strftime("%Y%m%d")
+
+                for acc in poster_accounts:
+                    client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+                    try:
+                        # Load categories (same across accounts usually)
+                        if not all_categories:
+                            cats = await client.get_categories()
+                            all_categories = cats
+
+                        # Load finance accounts with poster_account info
+                        accs = await client.get_accounts()
+                        for a in accs:
+                            a['poster_account_id'] = acc['id']
+                            a['poster_account_name'] = acc['account_name']
+                        all_accounts.extend(accs)
+
+                        # Load transactions for sync check
+                        transactions = await client.get_transactions(date_from_str, date_to_str)
+                        for t in transactions:
+                            t['poster_account_id'] = acc['id']
+                            t['poster_account_name'] = acc['account_name']
+                        all_transactions.extend(transactions)
+
+                    finally:
+                        await client.close()
+
+                return all_categories, all_accounts, all_transactions
+
+            categories, accounts, poster_transactions = loop.run_until_complete(load_data())
             loop.close()
     except Exception as e:
         print(f"Error loading categories/accounts: {e}")
+        import traceback
+        traceback.print_exc()
 
     return render_template('expenses.html',
                           drafts=drafts,
                           categories=categories,
-                          accounts=accounts)
+                          accounts=accounts,
+                          poster_accounts=poster_accounts_list,
+                          poster_transactions=poster_transactions)
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
@@ -979,6 +1023,9 @@ def update_expense(draft_id):
 
     if 'account_id' in data:
         update_fields['account_id'] = int(data['account_id']) if data['account_id'] else None
+
+    if 'poster_account_id' in data:
+        update_fields['poster_account_id'] = int(data['poster_account_id']) if data['poster_account_id'] else None
 
     if not update_fields:
         return jsonify({'success': False, 'error': 'No fields to update'})
@@ -1057,9 +1104,38 @@ def delete_drafts():
     return redirect(url_for('list_expenses'))
 
 
+@app.route('/expenses/create', methods=['POST'])
+def create_expense():
+    """Create empty expense draft for manual entry"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    # Get default poster_account_id (primary account)
+    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    default_poster_account_id = None
+    if poster_accounts:
+        primary = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
+        default_poster_account_id = primary['id']
+
+    draft_id = db.create_expense_draft(
+        telegram_user_id=TELEGRAM_USER_ID,
+        amount=data.get('amount', 0),
+        description=data.get('description', ''),
+        expense_type=data.get('expense_type', 'transaction'),
+        category=data.get('category'),
+        source=data.get('source', 'cash'),
+        account_id=data.get('account_id'),
+        poster_account_id=data.get('poster_account_id', default_poster_account_id)
+    )
+
+    if draft_id:
+        return jsonify({'success': True, 'id': draft_id})
+    return jsonify({'success': False, 'error': 'Failed to create draft'})
+
+
 @app.route('/expenses/process', methods=['POST'])
 def process_drafts():
-    """Process selected drafts - create transactions in Poster"""
+    """Process selected drafts - create transactions in Poster (multi-account support)"""
     draft_ids = request.form.getlist('draft_ids', type=int)
 
     if not draft_ids:
@@ -1082,79 +1158,95 @@ def process_drafts():
     # Create transactions in Poster
     try:
         from poster_client import PosterClient
-        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
 
-        if not accounts:
+        if not poster_accounts:
             flash('Нет подключенных аккаунтов Poster', 'error')
             return redirect(url_for('list_expenses'))
 
-        account = accounts[0]
+        # Build account lookup by id
+        accounts_by_id = {acc['id']: acc for acc in poster_accounts}
+
+        # Get primary account for defaults
+        primary_account = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
+
+        # Group transactions by poster_account_id
+        transactions_by_account = {}
+        for t in transactions:
+            acc_id = t.get('poster_account_id') or primary_account['id']
+            if acc_id not in transactions_by_account:
+                transactions_by_account[acc_id] = []
+            transactions_by_account[acc_id].append(t)
 
         # Run async code in sync context
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        async def create_transactions():
-            client = PosterClient(
-                telegram_user_id=TELEGRAM_USER_ID,
-                poster_token=account['poster_token'],
-                poster_user_id=account['poster_user_id'],
-                poster_base_url=account['poster_base_url']
-            )
+        async def create_all_transactions():
+            total_success = 0
+            all_processed_ids = []
 
-            try:
-                poster_accounts = await client.get_accounts()
-                categories = await client.get_categories()
+            for poster_account_id, account_transactions in transactions_by_account.items():
+                account = accounts_by_id.get(poster_account_id, primary_account)
 
-                # Build category map
-                category_map = {cat.get('category_name', ''): int(cat.get('category_id', 1)) for cat in categories}
-                if "Прочее" not in category_map and category_map:
-                    category_map["Прочее"] = list(category_map.values())[0]
+                client = PosterClient(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
 
-                success = 0
-                processed_ids = []
+                try:
+                    finance_accounts = await client.get_accounts()
+                    categories = await client.get_categories()
 
-                for draft in transactions:
-                    # Find account: prefer manually selected, then auto-detect by source
-                    account_id = draft.get('account_id')
+                    # Build category map
+                    category_map = {cat.get('category_name', ''): int(cat.get('category_id', 1)) for cat in categories}
+                    if "Прочее" not in category_map and category_map:
+                        category_map["Прочее"] = list(category_map.values())[0]
 
-                    if not account_id:
-                        # Auto-detect based on source
-                        if draft['source'] == 'kaspi':
-                            for acc in poster_accounts:
-                                if 'kaspi' in acc.get('name', '').lower():
-                                    account_id = int(acc['account_id'])
-                                    break
-                        else:
-                            for acc in poster_accounts:
-                                if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
-                                    account_id = int(acc['account_id'])
-                                    break
+                    for draft in account_transactions:
+                        # Find finance account: prefer manually selected, then auto-detect by source
+                        account_id = draft.get('account_id')
 
-                    if not account_id and poster_accounts:
-                        account_id = int(poster_accounts[0]['account_id'])
+                        if not account_id:
+                            # Auto-detect based on source
+                            if draft['source'] == 'kaspi':
+                                for acc in finance_accounts:
+                                    if 'kaspi' in acc.get('name', '').lower():
+                                        account_id = int(acc['account_id'])
+                                        break
+                            else:
+                                for acc in finance_accounts:
+                                    if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                        account_id = int(acc['account_id'])
+                                        break
 
-                    cat_id = category_map.get(draft.get('category'), category_map.get("Прочее", 1))
+                        if not account_id and finance_accounts:
+                            account_id = int(finance_accounts[0]['account_id'])
 
-                    try:
-                        await client.create_transaction(
-                            transaction_type=0,
-                            category_id=cat_id,
-                            account_from_id=account_id,
-                            amount=int(draft['amount']),
-                            comment=draft['description']
-                        )
-                        success += 1
-                        processed_ids.append(draft['id'])
-                    except Exception as e:
-                        print(f"Error creating transaction: {e}")
+                        cat_id = category_map.get(draft.get('category'), category_map.get("Прочее", 1))
 
-                return success, processed_ids
+                        try:
+                            await client.create_transaction(
+                                transaction_type=0,
+                                category_id=cat_id,
+                                account_from_id=account_id,
+                                amount=int(draft['amount']),
+                                comment=draft['description']
+                            )
+                            total_success += 1
+                            all_processed_ids.append(draft['id'])
+                            print(f"✅ Created transaction in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
+                        except Exception as e:
+                            print(f"Error creating transaction in {account['account_name']}: {e}")
 
-            finally:
-                await client.close()
+                finally:
+                    await client.close()
 
-        success, processed_ids = loop.run_until_complete(create_transactions())
+            return total_success, all_processed_ids
+
+        success, processed_ids = loop.run_until_complete(create_all_transactions())
         loop.close()
 
         # Mark as processed
@@ -1165,6 +1257,8 @@ def process_drafts():
 
     except Exception as e:
         flash(f'Ошибка: {str(e)}', 'error')
+        import traceback
+        traceback.print_exc()
 
     return redirect(url_for('list_expenses'))
 
