@@ -1057,6 +1057,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }, true);
 
     // Detect when user fills an empty row -> ensure new empty row exists in that section
+    // Debounced to prevent multiple rapid calls
+    let ensureRowTimeout = null;
     document.addEventListener('input', function(e) {
         if (e.target.classList.contains('edit-amount') || e.target.classList.contains('edit-description')) {
             const row = e.target.closest('tr');
@@ -1068,7 +1070,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (rows.length > 0 && rows[rows.length - 1] === row) {
                 // User is filling the last row, ensure there's a new empty row in this section
                 const accountType = tbody.dataset.accountType || 'cash';
-                ensureEmptyRowInSection(accountType);
+
+                // Debounce the call
+                clearTimeout(ensureRowTimeout);
+                ensureRowTimeout = setTimeout(() => {
+                    ensureEmptyRowInSection(accountType);
+                }, 300);
             }
         }
     });
@@ -1253,8 +1260,17 @@ async function updateField(id, field, value) {
     }
 }
 
+// Track pending row creations to prevent duplicates
+const pendingRowCreation = { cash: false, kaspi: false, halyk: false };
+
 // Create new row dynamically for a specific section
 async function addNewRow(accountType = 'cash', focusAmount = true) {
+    // Prevent duplicate row creation
+    if (pendingRowCreation[accountType]) {
+        return null;
+    }
+    pendingRowCreation[accountType] = true;
+
     try {
         // Get account_id for this section
         const accountId = accountTypeMap[accountType];
@@ -1289,6 +1305,8 @@ async function addNewRow(accountType = 'cash', focusAmount = true) {
     } catch (e) {
         console.error('Error:', e);
         return null;
+    } finally {
+        pendingRowCreation[accountType] = false;
     }
 }
 
