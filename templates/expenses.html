@@ -441,6 +441,27 @@ console.log('Loaded categories:', categories.length, categories);
 console.log('Loaded accounts:', accounts.length);
 console.log('Loaded poster accounts:', posterAccounts.length);
 console.log('Loaded poster transactions:', posterTransactions.length);
+// Debug: show structure of first expense transaction
+const firstExpense = posterTransactions.find(t => t.type == 0 || t.type == '0');
+if (firstExpense) console.log('Sample expense transaction:', firstExpense);
+
+// Map Poster system category names to human-readable names
+const categoryNameMap = {
+    'book_category_action_marketing': 'Маркетинг',
+    'book_category_action_banking_services': 'Банковские услуги и комиссии',
+    'book_category_action_household_expenses': 'Хозяйственные расходы',
+    'book_category_action_rent': 'Аренда',
+    'book_category_action_utility_bills': 'Коммунальные платежи',
+    'book_category_action_labour_cost': 'Зарплата',
+    'book_category_action_supplies': 'Поставки',
+    'book_category_action_actualization': 'Актуализация'
+};
+
+// Helper to get readable category name
+function getCategoryName(cat) {
+    const rawName = cat.category_name || cat.name || '';
+    return categoryNameMap[rawName] || rawName;
+}
 
 let searchTimeout = null;
 
@@ -597,6 +618,11 @@ function updateRowSyncStatus(row) {
     const expenseType = typeBtn ? typeBtn.dataset.type : 'transaction';
 
     const matches = findSyncStatus(amount, description, category, accountId, posterAccountId, expenseType);
+
+    // Debug: log first few rows
+    if (amount > 1000) {
+        console.log(`Sync check: ${amount}₸ "${description}" cat="${category}" => ${matches} matches`);
+    }
 
     row.classList.remove('sync-full', 'sync-partial');
     if (matches >= 4) {
@@ -868,8 +894,8 @@ document.addEventListener('DOMContentLoaded', function() {
             searchTimeout = setTimeout(() => {
                 // Find ALL matching categories (don't strictly filter by department)
                 let matches = categories.filter(c => {
-                    const name = c.category_name || c.name || '';
-                    return name.toLowerCase().includes(query);
+                    const displayName = getCategoryName(c);
+                    return displayName.toLowerCase().includes(query);
                 });
 
                 // Sort: selected department first, then alphabetically
@@ -877,17 +903,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     const aMatch = a.poster_account_id == selectedPosterAccountId ? 0 : 1;
                     const bMatch = b.poster_account_id == selectedPosterAccountId ? 0 : 1;
                     if (aMatch !== bMatch) return aMatch - bMatch;
-                    const aName = (a.category_name || a.name || '').toLowerCase();
-                    const bName = (b.category_name || b.name || '').toLowerCase();
+                    const aName = getCategoryName(a).toLowerCase();
+                    const bName = getCategoryName(b).toLowerCase();
                     return aName.localeCompare(bName);
                 });
 
-                // Deduplicate by name (keep first, which is from selected department)
+                // Deduplicate by display name (keep first, which is from selected department)
                 const seen = new Set();
                 matches = matches.filter(c => {
-                    const name = (c.category_name || c.name || '').toLowerCase();
-                    if (seen.has(name)) return false;
-                    seen.add(name);
+                    const displayName = getCategoryName(c).toLowerCase();
+                    if (seen.has(displayName)) return false;
+                    seen.add(displayName);
                     return true;
                 }).slice(0, 10);
 
@@ -895,10 +921,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     resultsDiv.innerHTML = `<div class="autocomplete-item" data-name="${input.value}">➕ Добавить "${input.value}"</div>`;
                 } else {
                     resultsDiv.innerHTML = matches.map((c, i) => {
-                        const name = c.category_name || c.name || '';
+                        const displayName = getCategoryName(c);
                         const isOtherDept = selectedPosterAccountId && c.poster_account_id && c.poster_account_id != selectedPosterAccountId;
                         const accountTag = isOtherDept && c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
-                        return `<div class="autocomplete-item" data-name="${name}" data-index="${i}">${name}${accountTag}</div>`;
+                        return `<div class="autocomplete-item" data-name="${displayName}" data-index="${i}">${displayName}${accountTag}</div>`;
                     }).join('');
                 }
                 resultsDiv.style.display = 'block';
