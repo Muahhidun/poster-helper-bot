@@ -680,10 +680,12 @@ def api_create_supply():
                 # Default to primary account
                 items_by_account[primary_account['id']].append(item)
 
-        # Prepare date
+        # Prepare date with Kazakhstan timezone (UTC+5)
         supply_date = data.get('date')
         if not supply_date:
-            supply_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            from datetime import timezone, timedelta
+            kz_tz = timezone(timedelta(hours=5))
+            supply_date = datetime.now(kz_tz).strftime('%Y-%m-%d %H:%M:%S')
 
         # Create supplies for each account
         created_supplies = []
@@ -713,8 +715,32 @@ def api_create_supply():
                     })
 
                 try:
+                    # Find supplier by name in THIS specific Poster account
+                    supplier_name = data['supplier_name']
+                    suppliers = await poster_client.get_suppliers()
+                    supplier_id = None
+
+                    # First try exact match
+                    for s in suppliers:
+                        if s.get('supplier_name', '').lower() == supplier_name.lower():
+                            supplier_id = int(s['supplier_id'])
+                            break
+
+                    # Then try partial match
+                    if not supplier_id:
+                        for s in suppliers:
+                            if supplier_name.lower() in s.get('supplier_name', '').lower():
+                                supplier_id = int(s['supplier_id'])
+                                break
+
+                    if not supplier_id:
+                        print(f"⚠️ Supplier '{supplier_name}' not found in {account['account_name']}, using ID from form")
+                        supplier_id = data['supplier_id']
+                    else:
+                        print(f"✅ Found supplier '{supplier_name}' -> ID={supplier_id} in {account['account_name']}")
+
                     supply_id = await poster_client.create_supply(
-                        supplier_id=data['supplier_id'],
+                        supplier_id=supplier_id,
                         storage_id=data.get('storage_id', 1),
                         date=supply_date,
                         ingredients=ingredients,
