@@ -36,7 +36,10 @@
                                data-id="{{ draft.id }}" placeholder="Название поставщика">
                     </div>
                     <div class="meta-row">
-                        <span class="amount">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</span>
+                        <span class="amount calculated-total">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</span>
+                        {% if draft.linked_expense_amount %}
+                        <span class="expense-amount" title="Сумма из расхода">/ {{ "{:,.0f}".format(draft.linked_expense_amount) }}₸</span>
+                        {% endif %}
                         <span class="date">{{ draft.invoice_date or 'Сегодня' }}</span>
                         <select class="source-select" data-id="{{ draft.id }}">
                             <option value="cash" {% if draft.source != 'kaspi' %}selected{% endif %}>Наличка</option>
@@ -208,6 +211,21 @@ h1 { margin: 0; }
     font-family: monospace;
     font-size: 1.1em;
     color: #28a745;
+}
+
+.expense-amount {
+    font-weight: 500;
+    font-family: monospace;
+    font-size: 0.95em;
+    color: #6c757d;
+}
+
+.calculated-total.match {
+    color: #28a745;
+}
+
+.calculated-total.mismatch {
+    color: #dc3545;
 }
 
 .date { color: #666; }
@@ -404,6 +422,27 @@ supplyItems[{{ draft.id }}] = {{ (draft['items'] or [])|tojson|safe }};
 {% endfor %}
 
 let searchTimeout = null;
+
+// Evaluate simple math expressions like "2.5*12" or "100/4"
+function evaluateExpression(str) {
+    if (!str || typeof str !== 'string') return parseFloat(str) || 0;
+
+    // Replace comma with dot for decimal
+    str = str.replace(',', '.');
+
+    // Check if it's a simple expression (contains operators)
+    if (/^[\d.]+[*\/+\-][\d.]+$/.test(str.trim())) {
+        try {
+            // Safe eval for simple math expressions
+            const result = Function('"use strict"; return (' + str + ')')();
+            return Math.round(result * 1000) / 1000; // Round to 3 decimal places
+        } catch (e) {
+            return parseFloat(str) || 0;
+        }
+    }
+
+    return parseFloat(str) || 0;
+}
 
 document.addEventListener('DOMContentLoaded', function() {
     // Render initial items
@@ -669,16 +708,16 @@ function renderItems(draftId) {
                 ${item.poster_account_name ? `<span class="account-badge">${item.poster_account_name}</span>` : '-'}
             </td>
             <td>
-                <input type="number" class="item-input qty" value="${item.quantity || 0}"
-                       data-item-id="${item.id}" data-draft-id="${draftId}" step="0.1" min="0">
+                <input type="text" class="item-input qty" value="${item.quantity || 0}"
+                       data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
             </td>
             <td>
-                <input type="number" class="item-input price" value="${item.price_per_unit || 0}"
-                       data-item-id="${item.id}" data-draft-id="${draftId}" step="1" min="0">
+                <input type="text" class="item-input price" value="${item.price_per_unit || 0}"
+                       data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
             </td>
             <td>
-                <input type="number" class="item-input sum" value="${(item.quantity || 0) * (item.price_per_unit || 0)}"
-                       data-item-id="${item.id}" data-draft-id="${draftId}" step="1" min="0" readonly>
+                <input type="text" class="item-input sum" value="${(item.quantity || 0) * (item.price_per_unit || 0)}"
+                       data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
             </td>
             <td>
                 <button type="button" class="btn-delete-item" data-item-id="${item.id}" data-draft-id="${draftId}">🗑️</button>
@@ -686,18 +725,51 @@ function renderItems(draftId) {
         </tr>
     `).join('');
 
-    // Attach event listeners
-    tbody.querySelectorAll('.item-input.qty, .item-input.price').forEach(input => {
+    // Attach event listeners for all three fields (qty, price, sum)
+    tbody.querySelectorAll('.item-input.qty, .item-input.price, .item-input.sum').forEach(input => {
+        // Focus - select all if value is 0
+        input.addEventListener('focus', function() {
+            if (this.value === '0' || this.value === '') {
+                setTimeout(() => this.select(), 10);
+            }
+        });
+
         input.addEventListener('change', async function() {
             const itemId = parseInt(this.dataset.itemId);
             const draftId = parseInt(this.dataset.draftId);
             const row = this.closest('tr');
-            const qty = parseFloat(row.querySelector('.qty').value) || 0;
-            const price = parseFloat(row.querySelector('.price').value) || 0;
-            const sum = qty * price;
+            const changedField = this.classList.contains('qty') ? 'qty' :
+                                 this.classList.contains('price') ? 'price' : 'sum';
 
-            // Update sum display
-            row.querySelector('.sum').value = sum;
+            // Evaluate expression if present (e.g., "2.5*12" -> 30)
+            const rawValue = this.value;
+            const evalValue = evaluateExpression(rawValue);
+            this.value = evalValue;
+
+            // Get all values
+            let qty = parseFloat(row.querySelector('.qty').value) || 0;
+            let price = parseFloat(row.querySelector('.price').value) || 0;
+            let sum = parseFloat(row.querySelector('.sum').value) || 0;
+
+            // Smart calculation - if 2 fields are filled, calculate the third
+            if (changedField === 'qty' || changedField === 'price') {
+                // Standard: qty * price = sum
+                if (qty > 0 && price > 0) {
+                    sum = qty * price;
+                    row.querySelector('.sum').value = Math.round(sum);
+                }
+            } else if (changedField === 'sum') {
+                // User entered sum directly
+                if (qty > 0 && sum > 0) {
+                    // Calculate price from qty and sum
+                    price = sum / qty;
+                    row.querySelector('.price').value = Math.round(price * 100) / 100;
+                } else if (price > 0 && sum > 0) {
+                    // Calculate qty from price and sum
+                    qty = sum / price;
+                    row.querySelector('.qty').value = Math.round(qty * 1000) / 1000;
+                }
+            }
 
             // Update local data
             const item = supplyItems[draftId].find(i => i.id === itemId);
@@ -727,6 +799,8 @@ function renderItems(draftId) {
                 if (this.classList.contains('qty')) {
                     row.querySelector('.price').focus();
                 } else if (this.classList.contains('price')) {
+                    row.querySelector('.sum').focus();
+                } else if (this.classList.contains('sum')) {
                     // Move to next row qty or search
                     const nextRow = row.nextElementSibling;
                     if (nextRow) {

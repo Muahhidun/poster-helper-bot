@@ -1332,11 +1332,16 @@ def list_supplies():
     db = get_database()
     drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
 
-    # Load items for each draft
+    # Load items for each draft and linked expense amount
     drafts = []
     for draft_raw in drafts_raw:
         draft = db.get_supply_draft_with_items(draft_raw['id'])
         if draft:
+            # Get linked expense amount if available
+            if draft.get('linked_expense_draft_id'):
+                expense = db.get_expense_draft(draft['linked_expense_draft_id'])
+                if expense:
+                    draft['linked_expense_amount'] = expense.get('amount', 0)
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking
