@@ -932,6 +932,7 @@ def list_expenses():
                 all_categories = []
                 all_accounts = []
                 all_transactions = []
+                seen_category_names = set()  # For deduplication
 
                 # Get date range for transactions (last 30 days)
                 date_to = datetime.now()
@@ -947,10 +948,15 @@ def list_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        # Load categories (same across accounts usually)
-                        if not all_categories:
-                            cats = await client.get_categories()
-                            all_categories = cats
+                        # Load categories from each account with poster_account info
+                        cats = await client.get_categories()
+                        for c in cats:
+                            cat_name = c.get('category_name', '').lower()
+                            # Add poster account info
+                            c['poster_account_id'] = acc['id']
+                            c['poster_account_name'] = acc['account_name']
+                            # Add all categories (not deduplicated) so user can filter by department
+                            all_categories.append(c)
 
                         # Load finance accounts with poster_account info
                         accs = await client.get_accounts()
@@ -1148,19 +1154,41 @@ def create_expense():
         primary = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
         default_poster_account_id = primary['id']
 
+    amount = data.get('amount', 0)
+    description = data.get('description', '')
+    expense_type = data.get('expense_type', 'transaction')
+    category = data.get('category')
+    source = data.get('source', 'cash')
+    account_id = data.get('account_id')
+    poster_account_id = data.get('poster_account_id', default_poster_account_id)
+
     draft_id = db.create_expense_draft(
         telegram_user_id=TELEGRAM_USER_ID,
-        amount=data.get('amount', 0),
-        description=data.get('description', ''),
-        expense_type=data.get('expense_type', 'transaction'),
-        category=data.get('category'),
-        source=data.get('source', 'cash'),
-        account_id=data.get('account_id'),
-        poster_account_id=data.get('poster_account_id', default_poster_account_id)
+        amount=amount,
+        description=description,
+        expense_type=expense_type,
+        category=category,
+        source=source,
+        account_id=account_id,
+        poster_account_id=poster_account_id
     )
 
     if draft_id:
-        return jsonify({'success': True, 'id': draft_id})
+        # Return full draft object for dynamic row creation
+        return jsonify({
+            'success': True,
+            'id': draft_id,
+            'draft': {
+                'id': draft_id,
+                'amount': amount,
+                'description': description,
+                'expense_type': expense_type,
+                'category': category,
+                'source': source,
+                'account_id': account_id,
+                'poster_account_id': poster_account_id
+            }
+        })
     return jsonify({'success': False, 'error': 'Failed to create draft'})
 
 

@@ -627,25 +627,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add new row button
     document.getElementById('add-row-btn').addEventListener('click', async function() {
-        try {
-            const response = await fetch('/expenses/create', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({})
-            });
-
-            const result = await response.json();
-            if (result.success) {
-                // Reload page to show new row
-                window.location.reload();
-            } else {
-                alert('Ошибка создания строки: ' + (result.error || 'Unknown'));
-            }
-        } catch (e) {
-            console.error('Error:', e);
-            alert('Ошибка: ' + e.message);
-        }
+        await addNewRow();
     });
+
+    // Add empty row at the bottom initially
+    ensureEmptyRow();
 
     // Toggle type buttons - use event delegation
     document.addEventListener('click', async function(e) {
@@ -692,6 +678,32 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } catch (err) {
                 console.error('Error:', err);
+            }
+        }
+    });
+
+    // Auto-select '0' on focus for amount fields
+    document.addEventListener('focus', function(e) {
+        if (e.target.classList.contains('edit-amount')) {
+            const input = e.target;
+            if (input.value === '0' || input.value === '') {
+                setTimeout(() => input.select(), 10);
+            }
+        }
+    }, true);
+
+    // Detect when user fills an empty row -> ensure new empty row exists
+    document.addEventListener('input', function(e) {
+        if (e.target.classList.contains('edit-amount') || e.target.classList.contains('edit-description')) {
+            const row = e.target.closest('tr');
+            const tbody = row?.parentElement;
+            if (!tbody) return;
+
+            // Check if this is the last row
+            const rows = tbody.querySelectorAll('.draft-row');
+            if (rows.length > 0 && rows[rows.length - 1] === row) {
+                // User is filling the last row, ensure there's a new empty row
+                ensureEmptyRow();
             }
         }
     });
@@ -780,10 +792,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
+            // Get selected poster account to filter categories
+            const row = input.closest('tr');
+            const posterAccountSelect = row?.querySelector('.edit-poster-account');
+            const selectedPosterAccountId = posterAccountSelect ? parseInt(posterAccountSelect.value) : null;
+
             searchTimeout = setTimeout(() => {
+                // Filter categories by selected department (poster_account_id)
                 const matches = categories.filter(c => {
                     const name = c.category_name || c.name || '';
-                    return name.toLowerCase().includes(query);
+                    const nameMatches = name.toLowerCase().includes(query);
+
+                    // Filter by poster_account_id if selected
+                    if (selectedPosterAccountId && c.poster_account_id) {
+                        return nameMatches && c.poster_account_id == selectedPosterAccountId;
+                    }
+                    return nameMatches;
                 }).slice(0, 8);
 
                 if (matches.length === 0) {
@@ -791,7 +815,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     resultsDiv.innerHTML = matches.map((c, i) => {
                         const name = c.category_name || c.name || '';
-                        return `<div class="autocomplete-item" data-name="${name}" data-index="${i}">${name}</div>`;
+                        const accountTag = c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
+                        return `<div class="autocomplete-item" data-name="${name}" data-index="${i}">${name}${accountTag}</div>`;
                     }).join('');
                 }
                 resultsDiv.style.display = 'block';
@@ -882,6 +907,157 @@ async function updateField(id, field, value) {
     } catch (e) {
         console.error('Error updating field:', e);
     }
+}
+
+// Create new row dynamically
+async function addNewRow(focusAmount = true) {
+    try {
+        const response = await fetch('/expenses/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            const newRow = createRowElement(result.draft);
+            const tbody = document.getElementById('drafts-tbody');
+            tbody.appendChild(newRow);
+
+            if (focusAmount) {
+                const amountInput = newRow.querySelector('.edit-amount');
+                if (amountInput) amountInput.focus();
+            }
+
+            updateSummaryGlobal();
+            return newRow;
+        } else {
+            console.error('Error creating row:', result.error);
+            return null;
+        }
+    } catch (e) {
+        console.error('Error:', e);
+        return null;
+    }
+}
+
+// Ensure there's always an empty row at the bottom
+function ensureEmptyRow() {
+    const tbody = document.getElementById('drafts-tbody');
+    if (!tbody) return;
+
+    // Check if last row is empty (amount = 0 and description empty)
+    const rows = tbody.querySelectorAll('.draft-row');
+    if (rows.length > 0) {
+        const lastRow = rows[rows.length - 1];
+        const amount = parseFloat(lastRow.querySelector('.edit-amount')?.value) || 0;
+        const desc = lastRow.querySelector('.edit-description')?.value?.trim() || '';
+
+        if (amount === 0 && desc === '') {
+            // Last row is already empty
+            return;
+        }
+    }
+
+    // Add new empty row
+    addNewRow(false);
+}
+
+// Create row element from draft data
+function createRowElement(draft) {
+    const tr = document.createElement('tr');
+    tr.className = 'draft-row ' + (draft.expense_type === 'supply' ? 'supply' : 'transaction');
+    tr.dataset.id = draft.id;
+    tr.dataset.amount = draft.amount || 0;
+    tr.dataset.description = draft.description || '';
+    tr.dataset.category = draft.category || '';
+    tr.dataset.accountId = draft.account_id || '';
+    tr.dataset.posterAccountId = draft.poster_account_id || '';
+
+    // Build accounts options - filtered by poster_account_id or show all if not set
+    let accountOptions = '';
+    const posterAccId = draft.poster_account_id || (posterAccounts.length > 0 ? posterAccounts.find(p => p.is_primary)?.id : null);
+    accounts.forEach(acc => {
+        if (!posterAccId || acc.poster_account_id == posterAccId) {
+            const selected = acc.account_id == draft.account_id ? 'selected' : '';
+            accountOptions += `<option value="${acc.account_id}" data-name="${(acc.name||'').toLowerCase()}" data-poster-account-id="${acc.poster_account_id}" ${selected}>${acc.name}</option>`;
+        }
+    });
+
+    // Build poster accounts options
+    let posterAccountOptions = '';
+    posterAccounts.forEach(pa => {
+        const selected = pa.id == draft.poster_account_id || (!draft.poster_account_id && pa.is_primary) ? 'selected' : '';
+        posterAccountOptions += `<option value="${pa.id}" ${selected}>${pa.name}</option>`;
+    });
+
+    tr.innerHTML = `
+        <td>
+            <input type="checkbox" name="draft_ids" value="${draft.id}" class="draft-checkbox">
+        </td>
+        <td class="amount">
+            <input type="number" class="edit-amount" value="${draft.amount || 0}"
+                   data-id="${draft.id}" step="1" min="0">
+        </td>
+        <td class="description">
+            <input type="text" class="edit-description" value="${draft.description || ''}"
+                   data-id="${draft.id}">
+        </td>
+        <td class="type">
+            <button type="button" class="btn-type"
+                    data-id="${draft.id}"
+                    data-type="${draft.expense_type || 'transaction'}">
+                ${draft.expense_type === 'supply' ? '📦 поставка' : '💰 транзакция'}
+            </button>
+        </td>
+        <td class="category">
+            <div class="autocomplete-wrapper">
+                <input type="text" class="edit-category"
+                       value="${draft.category || ''}"
+                       data-id="${draft.id}"
+                       placeholder="Категория..."
+                       autocomplete="off">
+                <div class="autocomplete-results"></div>
+            </div>
+        </td>
+        <td class="account">
+            <select class="edit-account" data-id="${draft.id}" data-source="${draft.source || ''}" data-poster-account-id="${draft.poster_account_id || ''}">
+                ${accountOptions}
+            </select>
+        </td>
+        <td class="poster-account">
+            <select class="edit-poster-account" data-id="${draft.id}">
+                ${posterAccountOptions}
+            </select>
+        </td>
+        <td class="actions">
+            <button type="button" class="btn-delete" data-id="${draft.id}" title="Удалить">🗑️</button>
+        </td>
+    `;
+
+    return tr;
+}
+
+function updateSummaryGlobal() {
+    const rows = document.querySelectorAll('.draft-row');
+    let total = 0;
+    let transactions = 0;
+    let supplies = 0;
+
+    rows.forEach(row => {
+        const amount = parseFloat(row.querySelector('.edit-amount').value) || 0;
+        total += amount;
+        if (row.classList.contains('supply')) {
+            supplies++;
+        } else {
+            transactions++;
+        }
+    });
+
+    document.getElementById('total-count').textContent = rows.length;
+    document.getElementById('transaction-count').textContent = transactions;
+    document.getElementById('supply-count').textContent = supplies;
+    document.getElementById('total-sum').textContent = total.toLocaleString('ru-RU');
 }
 </script>
 {% endblock %}
