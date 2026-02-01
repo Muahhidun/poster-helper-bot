@@ -1249,6 +1249,11 @@ def sync_expenses_from_poster():
                     finance_accounts = await client.get_accounts()
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
+                    # Debug: print account map
+                    print(f"📊 Finance accounts for {account['account_name']}:")
+                    for acc in finance_accounts:
+                        print(f"   - ID {acc.get('account_id')}: {acc.get('name')}")
+
                     for txn in transactions:
                         # Skip non-expense transactions (type 0 = expense)
                         if str(txn.get('type')) != '0':
@@ -1275,15 +1280,25 @@ def sync_expenses_from_poster():
                         description = comment if comment else category_name
 
                         # Determine source (cash/kaspi/halyk) from account name
+                        # Try both 'account_from_id' and 'account_from' fields
                         account_from_id = txn.get('account_from_id') or txn.get('account_from')
+
+                        # Also check 'account_name' field that might be directly in transaction
+                        txn_account_name = txn.get('account_name', '') or ''
+
                         finance_acc = account_map.get(str(account_from_id), {})
-                        finance_acc_name = (finance_acc.get('name') or '').lower()
+                        finance_acc_name = (finance_acc.get('name') or txn_account_name or '').lower()
+
+                        # Debug: print transaction details
+                        print(f"   Transaction #{txn_id}: account_from={account_from_id}, acc_name='{finance_acc_name}', desc='{description}'")
 
                         source = 'cash'
                         if 'kaspi' in finance_acc_name:
                             source = 'kaspi'
                         elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
                             source = 'halyk'
+
+                        print(f"   -> source detected: {source}")
 
                         # Create draft
                         draft_id = db.create_expense_draft(

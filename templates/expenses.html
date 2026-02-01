@@ -1047,6 +1047,19 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial sync status check
     updateAllSyncStatus();
 
+    // Ensure empty rows exist in truly empty sections (no rows at all)
+    // This runs once on page load to allow user to add first entry in empty sections
+    ['cash', 'kaspi', 'halyk'].forEach(type => {
+        const tbody = document.getElementById(`drafts-tbody-${type}`);
+        if (tbody) {
+            const rows = tbody.querySelectorAll('.draft-row');
+            if (rows.length === 0) {
+                // Section is completely empty - add one empty row
+                addNewRow(type, false);
+            }
+        }
+    });
+
     // Section checkboxes
     const countSpan = document.getElementById('count');
 
