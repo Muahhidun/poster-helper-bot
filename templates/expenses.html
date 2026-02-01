@@ -1108,8 +1108,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Add empty row at the bottom of each section initially
-    ensureEmptyRowInAllSections();
+    // DON'T auto-create empty rows on page load - they accumulate in database
+    // Empty rows are created only when user fills the last row in a section
     updateSummary();
 
     // Toggle type buttons - use event delegation
