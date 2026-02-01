@@ -348,6 +348,99 @@ function CompletionButton({
   )
 }
 
+// Empty Draft Row Component (always at bottom, creates new draft on input)
+function EmptyDraftRow({
+  type,
+  posterAccounts,
+  onCreate,
+  isCreating,
+}: {
+  type: AccountType
+  posterAccounts: ExpensePosterAccount[]
+  onCreate: (type: AccountType, data: { amount?: number; description?: string }) => void
+  isCreating: boolean
+}) {
+  const [localAmount, setLocalAmount] = useState<number | ''>('')
+  const [localDescription, setLocalDescription] = useState('')
+
+  const handleAmountBlur = () => {
+    if (localAmount && localAmount > 0) {
+      onCreate(type, { amount: localAmount, description: localDescription })
+      setLocalAmount('')
+      setLocalDescription('')
+    }
+  }
+
+  const handleDescriptionBlur = () => {
+    if (localDescription.trim()) {
+      onCreate(type, { amount: localAmount || 0, description: localDescription })
+      setLocalAmount('')
+      setLocalDescription('')
+    }
+  }
+
+  const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id
+
+  return (
+    <tr className="draft-row border-l-4 border-l-gray-200 bg-gray-50/50 hover:bg-gray-100/50 transition-colors">
+      <td className="px-3 py-2 border-b border-gray-100">
+        <input type="checkbox" disabled className="w-4 h-4 opacity-30" />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <span className="p-1.5 text-lg opacity-30">⚪</span>
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <input
+          type="number"
+          value={localAmount}
+          onChange={(e) => setLocalAmount(e.target.value === '' ? '' : Number(e.target.value))}
+          onBlur={handleAmountBlur}
+          onFocus={() => localAmount === 0 && setLocalAmount('')}
+          placeholder="0"
+          disabled={isCreating}
+          className="w-24 px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm text-right font-semibold tabular-nums bg-white/50 placeholder:text-gray-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 focus:bg-white disabled:opacity-50"
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <input
+          type="text"
+          value={localDescription}
+          onChange={(e) => setLocalDescription(e.target.value)}
+          onBlur={handleDescriptionBlur}
+          placeholder="Новая запись..."
+          disabled={isCreating}
+          className="w-44 px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 placeholder:text-gray-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 focus:bg-white disabled:opacity-50"
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <span className="px-2.5 py-1 text-xs text-gray-400">💰 транзакция</span>
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <input
+          type="text"
+          disabled
+          placeholder="Категория..."
+          className="w-full px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 placeholder:text-gray-300 opacity-50"
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <select
+          disabled
+          value={defaultPosterAccountId}
+          className="px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 min-w-[120px] opacity-50"
+        >
+          {posterAccounts.map(pa => (
+            <option key={pa.id} value={pa.id}>{pa.name}</option>
+          ))}
+        </select>
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        {isCreating && <span className="text-xs text-gray-400">⏳</span>}
+      </td>
+    </tr>
+  )
+}
+
 // Draft Row Component
 function DraftRow({
   draft,
@@ -510,7 +603,7 @@ function Section({
   onDelete: (id: number) => void
   onToggleType: (id: number, newType: 'transaction' | 'supply') => void
   onToggleCompletion: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
-  onCreate: (type: AccountType) => void
+  onCreate: (type: AccountType, data: { amount?: number; description?: string }) => void
   isCreating: boolean
 }) {
   const allSelected = drafts.length > 0 && drafts.every(d => selectedIds.has(d.id))
@@ -569,22 +662,13 @@ function Section({
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm mb-6">
-      <div className={cn(
-        'px-5 py-3.5 flex items-center justify-between border-b border-gray-200 bg-gradient-to-r',
+      <h2 className={cn(
+        'px-5 py-3.5 text-sm font-semibold flex items-center gap-2 border-b border-gray-200 bg-gradient-to-r',
         gradient
       )}>
-        <h2 className="text-sm font-semibold flex items-center gap-2">
-          <span>{icon}</span>
-          {label}
-        </h2>
-        <button
-          onClick={() => onCreate(type)}
-          disabled={isCreating}
-          className="px-3 py-1.5 bg-white/80 text-gray-700 rounded-md text-xs font-medium transition-all hover:bg-white hover:shadow-sm disabled:opacity-50"
-        >
-          ➕ Добавить
-        </button>
-      </div>
+        <span>{icon}</span>
+        {label}
+      </h2>
 
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -649,6 +733,12 @@ function Section({
                 onToggleCompletion={onToggleCompletion}
               />
             ))}
+            <EmptyDraftRow
+              type={type}
+              posterAccounts={posterAccounts}
+              onCreate={onCreate}
+              isCreating={isCreating}
+            />
           </tbody>
         </table>
       </div>
@@ -777,13 +867,13 @@ export function Expenses() {
   // Build account type map to determine which account_id to use for each source type
   const accountTypeMap = useMemo(() => buildAccountTypeMap(accounts), [accounts])
 
-  const handleCreate = useCallback((type: AccountType) => {
+  const handleCreate = useCallback((type: AccountType, data: { amount?: number; description?: string }) => {
     // Determine default account_id based on section type
     const defaultAccountId = accountTypeMap[type]
 
     createMutation.mutate({
-      amount: 0,
-      description: '',
+      amount: data.amount || 0,
+      description: data.description || '',
       expense_type: 'transaction',
       source: type,
       ...(defaultAccountId && { account_id: defaultAccountId }),
