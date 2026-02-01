@@ -2,34 +2,134 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  :root {
+    /* Apple-style Light Theme */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    --primary: 211 100% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 9%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 9%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 211 100% 50%;
+
+    --sidebar: 0 0% 98%;
+    --sidebar-foreground: 0 0% 9%;
+
+    --radius: 0.75rem;
+
+    /* Success/Warning colors */
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+  }
+
+  .dark {
+    --background: 0 0% 9%;
+    --foreground: 0 0% 95%;
+
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 0 0% 12%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 211 100% 50%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 60%;
+
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 95%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 211 100% 50%;
+
+    --sidebar: 0 0% 8%;
+    --sidebar-foreground: 0 0% 95%;
+  }
 }
 
-body {
-  margin: 0;
-  padding: 0;
-  overflow-x: hidden;
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
+                 "Inter", "Segoe UI", "Roboto", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
 }
 
-* {
-  box-sizing: border-box;
+/* Apple-style Glassmorphism */
+.glass {
+  @apply bg-white/80 backdrop-blur-xl;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-/* Telegram theme color variables */
-.telegram-theme {
-  background-color: var(--tg-theme-bg-color, #ffffff);
-  color: var(--tg-theme-text-color, #000000);
+.dark .glass {
+  @apply bg-black/60 backdrop-blur-xl;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* Custom scrollbar for webkit browsers */
+/* Sidebar glass effect */
+.sidebar-glass {
+  @apply bg-sidebar/80 backdrop-blur-xl;
+  border-right: 1px solid hsl(var(--border));
+}
+
+/* Card with subtle shadow */
+.card-elevated {
+  @apply bg-card rounded-2xl;
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.05),
+              0 4px 16px -4px rgba(0, 0, 0, 0.08);
+}
+
+.dark .card-elevated {
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.3),
+              0 4px 16px -4px rgba(0, 0, 0, 0.4);
+}
+
+/* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -37,66 +137,69 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
+  @apply bg-muted-foreground/20 rounded-full;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+  @apply bg-muted-foreground/30;
 }
 
-/* Loading animation */
+/* Focus ring - Apple style */
+.focus-ring {
+  @apply outline-none ring-2 ring-primary/50 ring-offset-2 ring-offset-background;
+}
+
+/* Smooth transitions */
+.transition-apple {
+  transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* Table row hover */
+.table-row-hover {
+  @apply transition-colors hover:bg-muted/50;
+}
+
+/* Status indicators */
+.status-success {
+  @apply bg-green-500/10 text-green-600;
+}
+
+.status-warning {
+  @apply bg-amber-500/10 text-amber-600;
+}
+
+.status-pending {
+  @apply bg-gray-500/10 text-gray-500;
+}
+
+/* Inline edit flash effect */
+@keyframes saveFlash {
+  0% { background-color: hsl(var(--success) / 0.2); }
+  100% { background-color: transparent; }
+}
+
+.save-flash {
+  animation: saveFlash 0.6s ease-out;
+}
+
+/* Loading spinner */
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 .animate-spin {
   animation: spin 1s linear infinite;
 }
 
-/* Fade in animation */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+/* Bottom nav safe area for iOS */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .pb-safe {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
   }
 }
 
-.fade-in {
-  animation: fadeIn 0.3s ease-out;
-}
-
-/* Desktop optimizations */
-@media (min-width: 640px) {
-  /* Center and constrain content on larger screens */
-  .min-h-screen {
-    max-width: 480px;
-    margin: 0 auto;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-    min-height: 100vh;
-  }
-
-  /* Better input sizing for desktop */
-  input[type="text"],
-  input[type="number"] {
-    font-size: 16px !important;
-  }
-
-  /* Add some spacing around the app container */
-  body {
-    background-color: #f0f0f0;
-  }
-}
-
-/* Larger desktop screens */
-@media (min-width: 1024px) {
-  .min-h-screen {
-    max-width: 540px;
-  }
+/* Telegram Web App compatibility */
+.telegram-theme {
+  background-color: var(--tg-theme-bg-color, hsl(var(--background)));
+  color: var(--tg-theme-text-color, hsl(var(--foreground)));
 }

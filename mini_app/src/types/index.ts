@@ -367,3 +367,71 @@ export interface ShiftClosingCalculateResponse {
   calculations: ShiftClosingCalculations
   error?: string
 }
+
+// Expense Drafts (Черновики расходов)
+export type ExpenseSource = 'cash' | 'kaspi' | 'halyk'
+export type ExpenseType = 'transaction' | 'supply'
+export type CompletionStatus = 'pending' | 'partial' | 'completed'
+
+export interface ExpenseDraft {
+  id: number
+  amount: number
+  description: string
+  expense_type: ExpenseType
+  category: string | null
+  source: ExpenseSource
+  account_id: number | null
+  poster_account_id: number | null
+  poster_transaction_id: string | null
+  completion_status: CompletionStatus
+  is_income: boolean
+  created_at: string
+}
+
+export interface ExpensesResponse {
+  drafts: ExpenseDraft[]
+  categories: Array<{
+    category_id: number
+    category_name: string
+    poster_account_id: number
+    poster_account_name: string
+  }>
+  accounts: Array<{
+    account_id: number
+    name: string
+    poster_account_id: number
+    poster_account_name: string
+  }>
+  poster_accounts: Array<{
+    id: number
+    name: string
+    is_primary: boolean
+  }>
+}
+
+export interface UpdateExpenseRequest {
+  amount?: number
+  description?: string
+  category?: string
+  source?: ExpenseSource
+  account_id?: number
+  poster_account_id?: number
+  completion_status?: CompletionStatus
+}
+
+export interface CreateExpenseRequest {
+  amount: number
+  description: string
+  expense_type?: ExpenseType
+  category?: string
+  source?: ExpenseSource
+  poster_account_id?: number
+}
+
+export interface SyncFromPosterResponse {
+  success: boolean
+  synced: number
+  skipped: number
+  errors: string[]
+  message: string
+}

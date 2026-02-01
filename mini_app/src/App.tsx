@@ -1,8 +1,13 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useTelegram } from './hooks/useTelegram'
 import { initApiClient } from './api/client'
+import { AppLayout } from './layouts/AppLayout'
+
+// Pages
 import { Dashboard } from './pages/Dashboard'
+import { Expenses } from './pages/Expenses'
 import { SupplyHistory } from './pages/SupplyHistory'
 import { SupplyDetail } from './pages/SupplyDetail'
 import { CreateSupply } from './pages/CreateSupply'
@@ -12,7 +17,17 @@ import { Templates } from './pages/Templates'
 import { ShiftClosing } from './pages/ShiftClosing'
 import { Loading } from './components/Loading'
 
-function App() {
+// Create a client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      retry: 1,
+    },
+  },
+})
+
+function AppContent() {
   const { webApp, isReady } = useTelegram()
 
   useEffect(() => {
@@ -26,6 +41,8 @@ function App() {
         platform: webApp.platform,
         user: webApp.initDataUnsafe?.user,
       })
+      // Expand the app to full height
+      webApp.expand()
     } else {
       console.warn('Running in development mode without Telegram WebApp')
     }
@@ -36,9 +53,10 @@ function App() {
   }
 
   return (
-    <BrowserRouter basename="/mini-app">
+    <AppLayout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/expenses" element={<Expenses />} />
         <Route path="/supplies" element={<SupplyHistory />} />
         <Route path="/supplies/new" element={<CreateSupply />} />
         <Route path="/supplies/:id" element={<SupplyDetail />} />
@@ -49,7 +67,17 @@ function App() {
         <Route path="/shift-closing" element={<ShiftClosing />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </BrowserRouter>
+    </AppLayout>
+  )
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter basename="/mini-app">
+        <AppContent />
+      </BrowserRouter>
+    </QueryClientProvider>
   )
 }
 
