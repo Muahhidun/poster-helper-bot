@@ -1257,8 +1257,18 @@ def sync_expenses_from_poster():
 
                     for txn in transactions:
                         # Accept both expense (type=0) and income (type=1) transactions
+                        # Skip transfers (type=2)
                         txn_type = str(txn.get('type'))
                         if txn_type not in ('0', '1'):
+                            continue
+
+                        # Get category name early to check for transfers
+                        category_name = txn.get('name', '') or txn.get('category_name', '')
+                        category_lower = category_name.lower()
+
+                        # Skip transfers - they have category "Переводы" or similar
+                        if 'перевод' in category_lower:
+                            print(f"   ⏭️ Skipping transfer: category='{category_name}'")
                             continue
 
                         # Build unique poster_transaction_id
@@ -1278,12 +1288,10 @@ def sync_expenses_from_poster():
                         amount = abs(float(amount_raw)) / 100
 
                         # Description from category name or comment
-                        category_name = txn.get('name', '') or txn.get('category_name', '')
                         comment = txn.get('comment', '') or ''
                         description = comment if comment else category_name
 
                         # Detect if this is an income transaction by category name
-                        category_lower = category_name.lower()
                         is_income = txn_type == '1' or 'приход' in category_lower or 'поступлен' in category_lower
 
                         if is_income:
