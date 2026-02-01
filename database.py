@@ -2270,13 +2270,15 @@ class UserDatabase:
         account_id: int = None,
         poster_account_id: int = None,
         poster_transaction_id: str = None,
-        is_income: bool = False
+        is_income: bool = False,
+        completion_status: str = "pending"
     ) -> Optional[int]:
         """
         Создать один черновик расхода (для ручного ввода или синхронизации из Poster)
 
         Args:
             is_income: True если это доход (например, продажа масла), False для расхода
+            completion_status: 'pending' (не в Poster), 'completed' (в Poster)
 
         Returns:
             ID созданного черновика или None при ошибке
@@ -2290,17 +2292,17 @@ class UserDatabase:
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int))
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status))
                 draft_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int))
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status))
                 draft_id = cursor.fetchone()[0]
 
             conn.commit()

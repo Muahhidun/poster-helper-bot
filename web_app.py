@@ -1318,7 +1318,7 @@ def sync_expenses_from_poster():
 
                         print(f"   -> source detected: {source}, is_income: {is_income}")
 
-                        # Create draft
+                        # Create draft - mark as 'completed' since it's already in Poster
                         draft_id = db.create_expense_draft(
                             telegram_user_id=TELEGRAM_USER_ID,
                             amount=amount,
@@ -1329,7 +1329,8 @@ def sync_expenses_from_poster():
                             account_id=int(account_from_id) if account_from_id else None,
                             poster_account_id=account['id'],
                             poster_transaction_id=poster_transaction_id,
-                            is_income=is_income
+                            is_income=is_income,
+                            completion_status='completed'  # Already in Poster!
                         )
 
                         if draft_id:
@@ -1358,6 +1359,103 @@ def sync_expenses_from_poster():
         'errors': errors,
         'message': f'Синхронизировано: {synced}, пропущено: {skipped}'
     })
+
+
+@app.route('/api/poster-transactions')
+def api_poster_transactions():
+    """Get today's transactions from Poster for real-time comparison"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+    if not poster_accounts:
+        return jsonify({'success': False, 'error': 'No Poster accounts'})
+
+    # Kazakhstan time UTC+5
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz)
+    date_str = today.strftime("%Y%m%d")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def fetch_all_transactions():
+        all_transactions = []
+
+        for account in poster_accounts:
+            try:
+                from poster_client import PosterClient
+                client = PosterClient(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+
+                try:
+                    transactions = await client.get_transactions(date_str, date_str)
+                    finance_accounts = await client.get_accounts()
+                    account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+
+                    for txn in transactions:
+                        txn_type = str(txn.get('type'))
+                        # Skip transfers
+                        category_name = txn.get('name', '') or txn.get('category_name', '')
+                        if 'перевод' in category_name.lower():
+                            continue
+                        # Only expenses and income
+                        if txn_type not in ('0', '1'):
+                            continue
+
+                        txn_id = txn.get('transaction_id')
+                        amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
+                        amount = abs(float(amount_raw)) / 100
+                        comment = txn.get('comment', '') or ''
+                        description = comment if comment else category_name
+
+                        account_from_id = txn.get('account_from_id') or txn.get('account_from')
+                        finance_acc = account_map.get(str(account_from_id), {})
+                        finance_acc_name = finance_acc.get('name', '')
+
+                        all_transactions.append({
+                            'id': f"{account['id']}_{txn_id}",
+                            'poster_account_id': account['id'],
+                            'poster_account_name': account['account_name'],
+                            'transaction_id': txn_id,
+                            'amount': amount,
+                            'description': description,
+                            'category': category_name,
+                            'account_id': account_from_id,
+                            'account_name': finance_acc_name,
+                            'type': txn_type,
+                            'is_income': txn_type == '1'
+                        })
+
+                finally:
+                    await client.close()
+
+            except Exception as e:
+                print(f"Error fetching from {account['account_name']}: {e}")
+
+        return all_transactions
+
+    try:
+        transactions = loop.run_until_complete(fetch_all_transactions())
+        loop.close()
+
+        return jsonify({
+            'success': True,
+            'transactions': transactions,
+            'date': date_str,
+            'count': len(transactions)
+        })
+
+    except Exception as e:
+        loop.close()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/expenses/process', methods=['POST'])

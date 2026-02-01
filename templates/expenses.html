@@ -875,26 +875,30 @@ function findSyncStatus(amount, description, category, accountId, posterAccountI
         // Filter by poster account if specified
         if (posterAccountId && t.poster_account_id != posterAccountId) continue;
 
-        // Only check expenses (type 0)
-        if (t.type != 0 && t.type != '0') continue;
+        // Only check expenses and income (type 0 and 1)
+        if (t.type != 0 && t.type != '0' && t.type != 1 && t.type != '1') continue;
 
         let matches = 0;
 
         // 1. Check amount (Poster stores in kopecks/tiyn, divide by 100)
         const tAmountRaw = parseFloat(t.amount) || 0;
         const tAmount = Math.abs(tAmountRaw) / 100;  // Convert from kopecks and absolute value
-        if (Math.abs(tAmount - amount) < 10) {  // Allow 10₸ tolerance
+        if (Math.abs(tAmount - amount) < 2) {  // Allow 2₸ tolerance (rounding)
             matches++;
         }
 
-        // 2. Check comment/description
+        // 2. Check comment/description - compare against BOTH comment and category_name
         const tComment = (t.comment || '').toLowerCase().trim();
-        if (tComment && descLower && (tComment.includes(descLower) || descLower.includes(tComment) || tComment === descLower)) {
+        const tCategoryName = (t.category_name || t.name || '').toLowerCase().trim();
+
+        // Description can match comment OR category name (since we use category_name when comment is empty)
+        const descMatches = (tComment && descLower && (tComment.includes(descLower) || descLower.includes(tComment))) ||
+                           (tCategoryName && descLower && (tCategoryName === descLower || tCategoryName.includes(descLower) || descLower.includes(tCategoryName)));
+        if (descMatches) {
             matches++;
         }
 
         // 3. Check category
-        const tCategoryName = (t.category_name || '').toLowerCase();
         const catLower = (category || '').toLowerCase();
         if (tCategoryName && catLower && (tCategoryName.includes(catLower) || catLower.includes(tCategoryName))) {
             matches++;
@@ -915,6 +919,36 @@ function findSyncStatus(amount, description, category, accountId, posterAccountI
     }
 
     return bestMatch.matches;
+}
+
+// Refresh Poster transactions data via AJAX
+async function refreshPosterData() {
+    try {
+        const response = await fetch('/api/poster-transactions');
+        const data = await response.json();
+
+        if (data.success && data.transactions) {
+            // Update global posterTransactions array
+            posterTransactions.length = 0;  // Clear array
+            data.transactions.forEach(t => {
+                // Convert to format expected by findSyncStatus
+                posterTransactions.push({
+                    ...t,
+                    amount: t.amount * 100,  // Convert back to kopecks for comparison
+                    category_name: t.category,
+                    comment: t.description
+                });
+            });
+            console.log('Refreshed poster transactions:', posterTransactions.length);
+
+            // Update all row sync statuses
+            updateAllSyncStatus();
+            return true;
+        }
+    } catch (err) {
+        console.error('Error refreshing Poster data:', err);
+    }
+    return false;
 }
 
 // Special sync status for supplies - can be split across multiple accounts
@@ -1761,7 +1795,10 @@ document.getElementById('sync-poster-btn').addEventListener('click', async funct
                 alert(`✅ ${result.message}`);
                 location.reload();
             } else {
-                alert(`ℹ️ Новых транзакций не найдено (пропущено: ${result.skipped})`);
+                // No new items - refresh Poster data and update sync status
+                btn.textContent = '🔄 Обновление статусов...';
+                await refreshPosterData();
+                alert(`ℹ️ Новых транзакций не найдено.\nСтатусы совпадения обновлены.`);
             }
         } else {
             alert(`❌ Ошибка: ${result.error || 'Неизвестная ошибка'}`);
