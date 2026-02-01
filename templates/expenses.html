@@ -42,11 +42,11 @@
                 </thead>
                 <tbody id="drafts-tbody-cash" data-account-type="cash">
                     {% for draft in drafts %}
-                    {% set account_name = '' %}
+                    {% set ns = namespace(account_name='') %}
                     {% for acc in accounts if acc.account_id == draft.account_id %}
-                        {% set account_name = acc.name|lower %}
+                        {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
-                    {% if 'kaspi' not in (account_name or draft.source|default('')|lower) and 'халык' not in account_name and 'halyk' not in account_name %}
+                    {% if 'kaspi' not in (ns.account_name or draft.source|default('')|lower) and 'халык' not in ns.account_name and 'halyk' not in ns.account_name %}
                     <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
@@ -138,11 +138,11 @@
                 </thead>
                 <tbody id="drafts-tbody-kaspi" data-account-type="kaspi">
                     {% for draft in drafts %}
-                    {% set account_name = '' %}
+                    {% set ns = namespace(account_name='') %}
                     {% for acc in accounts if acc.account_id == draft.account_id %}
-                        {% set account_name = acc.name|lower %}
+                        {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
-                    {% if 'kaspi' in (account_name or draft.source|default('')|lower) %}
+                    {% if 'kaspi' in (ns.account_name or draft.source|default('')|lower) %}
                     <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
@@ -234,11 +234,11 @@
                 </thead>
                 <tbody id="drafts-tbody-halyk" data-account-type="halyk">
                     {% for draft in drafts %}
-                    {% set account_name = '' %}
+                    {% set ns = namespace(account_name='') %}
                     {% for acc in accounts if acc.account_id == draft.account_id %}
-                        {% set account_name = acc.name|lower %}
+                        {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
-                    {% if 'халык' in account_name or 'halyk' in account_name %}
+                    {% if 'халык' in ns.account_name or 'halyk' in ns.account_name %}
                     <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
@@ -1036,6 +1036,8 @@ if (!accountTypeMap.cash) {
     if (cashAcc) accountTypeMap.cash = cashAcc.account_id;
 }
 
+// Debug: show accounts and mapping
+console.log('Available accounts:', accounts.map(a => ({ id: a.account_id, name: a.name })));
 console.log('Account type mapping:', accountTypeMap);
 
 document.addEventListener('DOMContentLoaded', function() {
