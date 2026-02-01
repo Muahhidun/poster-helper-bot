@@ -432,6 +432,7 @@ export interface CreateExpenseRequest {
   expense_type?: ExpenseType
   category?: string
   source?: ExpenseSource
+  account_id?: number
   poster_account_id?: number
 }
 
@@ -452,4 +453,41 @@ export interface PosterTransaction {
   category_name: string
   account_name: string
   poster_account_id: number
+}
+
+// Supply Drafts (Черновики поставок)
+export interface SupplyDraftItem {
+  id: number
+  supply_draft_id: number
+  ingredient_id: number
+  ingredient_name: string
+  quantity: number
+  price: number
+  unit: string
+  poster_account_id: number | null
+}
+
+export interface SupplyDraft {
+  id: number
+  telegram_user_id: number
+  supplier_name: string
+  poster_account_id: number | null
+  linked_expense_draft_id: number | null
+  linked_expense_amount?: number
+  status: 'pending' | 'processed'
+  created_at: string
+  items: SupplyDraftItem[]
+}
+
+export interface PendingSupplyExpense {
+  id: number
+  amount: number
+  description: string
+  source: ExpenseSource
+}
+
+export interface SupplyDraftsResponse {
+  drafts: SupplyDraft[]
+  pending_supplies: PendingSupplyExpense[]
+  poster_accounts: ExpensePosterAccount[]
 }

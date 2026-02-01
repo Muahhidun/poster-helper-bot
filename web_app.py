@@ -1608,6 +1608,7 @@ def api_create_expense():
         expense_type=data.get('expense_type', 'transaction'),
         category=data.get('category'),
         source=data.get('source', 'cash'),
+        account_id=data.get('account_id'),
         poster_account_id=data.get('poster_account_id')
     )
 
@@ -1860,6 +1861,205 @@ def api_process_expenses():
         'errors': errors,
         'message': f'Создано транзакций: {created}'
     })
+
+
+# ==================== SUPPLY DRAFTS API ====================
+
+@app.route('/api/supply-drafts')
+def api_get_supply_drafts():
+    """Get all supply drafts with items for React app (today only)"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+
+    # Filter to only today's drafts (Kazakhstan time UTC+5)
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
+
+    # Load items for each draft and linked expense amount
+    drafts = []
+    for draft_raw in drafts_raw:
+        # Filter by today's date
+        created_at = str(draft_raw.get('created_at', ''))[:10]
+        if created_at != today:
+            continue
+
+        draft = db.get_supply_draft_with_items(draft_raw['id'])
+        if draft:
+            # Get linked expense amount if available
+            if draft.get('linked_expense_draft_id'):
+                expense = db.get_expense_draft(draft['linked_expense_draft_id'])
+                if expense:
+                    draft['linked_expense_amount'] = expense.get('amount', 0)
+            drafts.append(draft)
+
+    # Get pending expense items of type 'supply' for linking
+    pending_supplies = db.get_pending_supply_items(TELEGRAM_USER_ID)
+
+    # Get poster accounts
+    poster_accounts_list = []
+    try:
+        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if accounts:
+            for acc in accounts:
+                poster_accounts_list.append({
+                    'id': acc['id'],
+                    'name': acc['account_name'],
+                    'is_primary': acc.get('is_primary', False)
+                })
+    except Exception as e:
+        print(f"Error loading poster accounts: {e}")
+
+    return jsonify({
+        'drafts': drafts,
+        'pending_supplies': pending_supplies,
+        'poster_accounts': poster_accounts_list
+    })
+
+
+@app.route('/api/supply-drafts/<int:draft_id>', methods=['PUT'])
+def api_update_supply_draft(draft_id):
+    """Update a supply draft"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    updates = {}
+    if 'supplier_name' in data:
+        updates['supplier_name'] = data['supplier_name']
+    if 'poster_account_id' in data:
+        updates['poster_account_id'] = data['poster_account_id']
+    if 'linked_expense_draft_id' in data:
+        updates['linked_expense_draft_id'] = data['linked_expense_draft_id']
+
+    if updates:
+        db.update_supply_draft(draft_id, **updates)
+
+    return jsonify({'success': True})
+
+
+@app.route('/api/supply-drafts/<int:draft_id>', methods=['DELETE'])
+def api_delete_supply_draft(draft_id):
+    """Delete a supply draft"""
+    db = get_database()
+    db.delete_supply_draft(draft_id)
+    return jsonify({'success': True})
+
+
+@app.route('/api/supply-drafts/<int:draft_id>/items', methods=['POST'])
+def api_add_supply_draft_item(draft_id):
+    """Add item to supply draft"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        ingredient_id=data.get('ingredient_id'),
+        ingredient_name=data.get('ingredient_name', ''),
+        quantity=data.get('quantity', 1),
+        price=data.get('price', 0),
+        unit=data.get('unit', 'шт'),
+        poster_account_id=data.get('poster_account_id')
+    )
+
+    return jsonify({'success': True, 'id': item_id})
+
+
+@app.route('/api/supply-drafts/items/<int:item_id>', methods=['PUT'])
+def api_update_supply_draft_item(item_id):
+    """Update supply draft item"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    updates = {}
+    for field in ['ingredient_id', 'ingredient_name', 'quantity', 'price', 'unit', 'poster_account_id']:
+        if field in data:
+            updates[field] = data[field]
+
+    if updates:
+        db.update_supply_draft_item(item_id, **updates)
+
+    return jsonify({'success': True})
+
+
+@app.route('/api/supply-drafts/items/<int:item_id>', methods=['DELETE'])
+def api_delete_supply_draft_item(item_id):
+    """Delete supply draft item"""
+    db = get_database()
+    db.delete_supply_draft_item(item_id)
+    return jsonify({'success': True})
+
+
+@app.route('/api/supply-drafts/<int:draft_id>/create', methods=['POST'])
+def api_create_supply_in_poster(draft_id):
+    """Create supply in Poster from draft"""
+    db = get_database()
+    draft = db.get_supply_draft_with_items(draft_id)
+
+    if not draft:
+        return jsonify({'success': False, 'error': 'Draft not found'})
+
+    if not draft.get('items'):
+        return jsonify({'success': False, 'error': 'No items in draft'})
+
+    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    if not poster_accounts:
+        return jsonify({'success': False, 'error': 'No Poster accounts'})
+
+    # Get target account
+    poster_account_id = draft.get('poster_account_id')
+    account = None
+    if poster_account_id:
+        account = next((a for a in poster_accounts if a['id'] == poster_account_id), None)
+    if not account:
+        account = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        from poster_client import PosterClient
+        client = PosterClient(
+            telegram_user_id=TELEGRAM_USER_ID,
+            poster_token=account['poster_token'],
+            poster_user_id=account['poster_user_id'],
+            poster_base_url=account['poster_base_url']
+        )
+
+        async def create_supply():
+            try:
+                # Format items for Poster
+                items = []
+                for item in draft['items']:
+                    items.append({
+                        'ingredient_id': item['ingredient_id'],
+                        'count': item['quantity'],
+                        'price': item['price']
+                    })
+
+                supply_data = {
+                    'supplier_name': draft.get('supplier_name', 'Поставщик'),
+                    'items': items
+                }
+
+                result = await client.create_supply(supply_data)
+                return result
+            finally:
+                await client.close()
+
+        result = loop.run_until_complete(create_supply())
+        loop.close()
+
+        if result.get('success'):
+            # Mark draft as processed
+            db.update_supply_draft(draft_id, status='processed')
+            return jsonify({'success': True, 'supply_id': result.get('supply_id')})
+        else:
+            return jsonify({'success': False, 'error': result.get('error', 'Unknown error')})
+
+    except Exception as e:
+        loop.close()
+        return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/expenses/process', methods=['POST'])

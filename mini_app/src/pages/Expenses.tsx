@@ -4,6 +4,7 @@ import {
   useExpenses,
   useUpdateExpense,
   useDeleteExpense,
+  useCreateExpense,
   useSyncFromPoster,
   useProcessDrafts,
   useDeleteDrafts,
@@ -12,6 +13,7 @@ import {
   getCategoryDisplayName,
   getAccountType,
   findSyncStatus,
+  buildAccountTypeMap,
 } from '@/hooks/useExpenses'
 import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransaction, ExpenseAccount } from '@/types'
 
@@ -487,6 +489,8 @@ function Section({
   onDelete,
   onToggleType,
   onToggleCompletion,
+  onCreate,
+  isCreating,
 }: {
   type: AccountType
   label: string
@@ -506,6 +510,8 @@ function Section({
   onDelete: (id: number) => void
   onToggleType: (id: number, newType: 'transaction' | 'supply') => void
   onToggleCompletion: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
+  onCreate: (type: AccountType) => void
+  isCreating: boolean
 }) {
   const allSelected = drafts.length > 0 && drafts.every(d => selectedIds.has(d.id))
   const sectionTotal = drafts.reduce((sum, d) => sum + (d.amount || 0), 0)
@@ -563,13 +569,22 @@ function Section({
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm mb-6">
-      <h2 className={cn(
-        'px-5 py-3.5 text-sm font-semibold flex items-center gap-2 border-b border-gray-200 bg-gradient-to-r',
+      <div className={cn(
+        'px-5 py-3.5 flex items-center justify-between border-b border-gray-200 bg-gradient-to-r',
         gradient
       )}>
-        <span>{icon}</span>
-        {label}
-      </h2>
+        <h2 className="text-sm font-semibold flex items-center gap-2">
+          <span>{icon}</span>
+          {label}
+        </h2>
+        <button
+          onClick={() => onCreate(type)}
+          disabled={isCreating}
+          className="px-3 py-1.5 bg-white/80 text-gray-700 rounded-md text-xs font-medium transition-all hover:bg-white hover:shadow-sm disabled:opacity-50"
+        >
+          ➕ Добавить
+        </button>
+      </div>
 
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -651,6 +666,7 @@ export function Expenses() {
   const { data: posterData } = usePosterTransactions()
   const updateMutation = useUpdateExpense()
   const deleteMutation = useDeleteExpense()
+  const createMutation = useCreateExpense()
   const syncMutation = useSyncFromPoster()
   const processMutation = useProcessDrafts()
   const deleteDraftsMutation = useDeleteDrafts()
@@ -757,6 +773,22 @@ export function Expenses() {
   const handleToggleCompletion = useCallback((id: number, newStatus: 'pending' | 'partial' | 'completed') => {
     updateMutation.mutate({ id, data: { completion_status: newStatus } })
   }, [updateMutation])
+
+  // Build account type map to determine which account_id to use for each source type
+  const accountTypeMap = useMemo(() => buildAccountTypeMap(accounts), [accounts])
+
+  const handleCreate = useCallback((type: AccountType) => {
+    // Determine default account_id based on section type
+    const defaultAccountId = accountTypeMap[type]
+
+    createMutation.mutate({
+      amount: 0,
+      description: '',
+      expense_type: 'transaction',
+      source: type,
+      ...(defaultAccountId && { account_id: defaultAccountId }),
+    })
+  }, [createMutation, accountTypeMap])
 
   const handleSync = useCallback(async () => {
     const result = await syncMutation.mutateAsync()
@@ -881,6 +913,8 @@ export function Expenses() {
           onDelete={handleDelete}
           onToggleType={handleToggleType}
           onToggleCompletion={handleToggleCompletion}
+          onCreate={handleCreate}
+          isCreating={createMutation.isPending}
         />
       ))}
 
