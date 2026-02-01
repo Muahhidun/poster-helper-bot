@@ -388,25 +388,32 @@ export interface ExpenseDraft {
   created_at: string
 }
 
+export interface ExpenseCategory {
+  category_id: number
+  category_name: string
+  poster_account_id: number
+  poster_account_name: string
+}
+
+export interface ExpenseAccount {
+  account_id: number
+  name: string
+  poster_account_id: number
+  poster_account_name: string
+}
+
+export interface ExpensePosterAccount {
+  id: number
+  name: string
+  is_primary: boolean
+}
+
 export interface ExpensesResponse {
   drafts: ExpenseDraft[]
-  categories: Array<{
-    category_id: number
-    category_name: string
-    poster_account_id: number
-    poster_account_name: string
-  }>
-  accounts: Array<{
-    account_id: number
-    name: string
-    poster_account_id: number
-    poster_account_name: string
-  }>
-  poster_accounts: Array<{
-    id: number
-    name: string
-    is_primary: boolean
-  }>
+  categories: ExpenseCategory[]
+  accounts: ExpenseAccount[]
+  poster_accounts: ExpensePosterAccount[]
+  poster_transactions: PosterTransaction[]
 }
 
 export interface UpdateExpenseRequest {
@@ -434,4 +441,15 @@ export interface SyncFromPosterResponse {
   skipped: number
   errors: string[]
   message: string
+}
+
+// Poster transaction for sync status comparison
+export interface PosterTransaction {
+  id: string
+  type: number // 0 = expense, 1 = income
+  amount: number // in kopecks/tiyn
+  comment: string
+  category_name: string
+  account_name: string
+  poster_account_id: number
 }

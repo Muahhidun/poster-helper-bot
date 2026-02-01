@@ -1,475 +1,924 @@
-import { useState, useMemo, useCallback } from 'react'
-import {
-  RefreshCw,
-  Plus,
-  Check,
-  Trash2,
-  Package,
-  Receipt,
-  ChevronDown,
-  ChevronRight,
-  Wallet,
-  CreditCard,
-  Building2,
-} from 'lucide-react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import {
   useExpenses,
   useUpdateExpense,
-  useCreateExpense,
   useDeleteExpense,
   useSyncFromPoster,
   useProcessDrafts,
+  useDeleteDrafts,
+  useToggleExpenseType,
+  usePosterTransactions,
+  getCategoryDisplayName,
+  getAccountType,
+  findSyncStatus,
 } from '@/hooks/useExpenses'
-import type { ExpenseDraft, ExpenseSource } from '@/types'
+import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransaction, ExpenseAccount } from '@/types'
+
+type AccountType = 'cash' | 'kaspi' | 'halyk'
+type SortDirection = 'asc' | 'desc' | null
+type SortColumn = 'amount' | 'description' | 'type' | 'category' | 'department'
+
+interface SortState {
+  column: SortColumn | null
+  direction: SortDirection
+}
+
+// Section configuration
+const SECTIONS: { type: AccountType; label: string; icon: string; gradient: string }[] = [
+  { type: 'cash', label: 'Наличка', icon: '💵', gradient: 'from-emerald-50 to-green-50 text-emerald-700' },
+  { type: 'kaspi', label: 'Kaspi Pay', icon: '📱', gradient: 'from-orange-50 to-amber-50 text-orange-700' },
+  { type: 'halyk', label: 'Халык', icon: '🏦', gradient: 'from-blue-50 to-sky-50 text-blue-700' },
+]
 
 // Editable Cell Component
 function EditableCell({
-  value: initialValue,
-  row,
-  column,
+  value,
+  type,
+  draftId,
+  field,
   onSave,
+  placeholder,
+  className,
 }: {
   value: string | number
-  row: { original: ExpenseDraft }
-  column: string
+  type: 'text' | 'number'
+  draftId: number
+  field: string
   onSave: (id: number, field: string, value: string | number) => void
+  placeholder?: string
+  className?: string
 }) {
-  const [value, setValue] = useState(initialValue)
-  const [isEditing, setIsEditing] = useState(false)
+  const [localValue, setLocalValue] = useState(value)
   const [isSaved, setIsSaved] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setLocalValue(value)
+  }, [value])
 
   const handleBlur = () => {
-    setIsEditing(false)
-    if (value !== initialValue) {
-      onSave(row.original.id, column, value)
+    if (localValue !== value) {
+      onSave(draftId, field, localValue)
       setIsSaved(true)
-      setTimeout(() => setIsSaved(false), 600)
+      setTimeout(() => setIsSaved(false), 300)
+    }
+  }
+
+  const handleFocus = () => {
+    if (type === 'number' && localValue === 0) {
+      setLocalValue('')
     }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      ;(e.target as HTMLInputElement).blur()
-    }
-    if (e.key === 'Escape') {
-      setValue(initialValue)
-      setIsEditing(false)
+      inputRef.current?.blur()
     }
   }
 
-  const isAmount = column === 'amount'
-
   return (
-    <div
+    <input
+      ref={inputRef}
+      type={type}
+      value={localValue}
+      onChange={(e) => setLocalValue(type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
+      onBlur={handleBlur}
+      onFocus={handleFocus}
+      onKeyDown={handleKeyDown}
+      placeholder={placeholder}
+      step={type === 'number' ? 1 : undefined}
       className={cn(
-        'relative rounded-lg transition-all',
-        isSaved && 'save-flash'
+        'w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm transition-all',
+        'hover:border-gray-300 hover:bg-gray-50',
+        'focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10',
+        isSaved && 'animate-flash-save',
+        className
       )}
-    >
-      {isEditing ? (
-        <input
-          type={isAmount ? 'number' : 'text'}
-          value={value}
-          onChange={(e) =>
-            setValue(isAmount ? parseFloat(e.target.value) || 0 : e.target.value)
-          }
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          autoFocus
-          className={cn(
-            'w-full bg-transparent border-none outline-none focus:ring-2 focus:ring-primary/30 rounded-lg px-2 py-1',
-            isAmount && 'text-right font-semibold tabular-nums'
-          )}
-        />
-      ) : (
-        <div
-          onClick={() => setIsEditing(true)}
-          className={cn(
-            'cursor-text px-2 py-1 rounded-lg hover:bg-muted/50 transition-colors',
-            isAmount && 'text-right font-semibold tabular-nums'
-          )}
-        >
-          {isAmount ? (
-            <span>{Number(value).toLocaleString('ru-RU')} ₸</span>
-          ) : (
-            <span className={!value ? 'text-muted-foreground' : ''}>
-              {value || 'Введите описание...'}
-            </span>
-          )}
-        </div>
-      )}
-      {isSaved && (
-        <div className="absolute right-2 top-1/2 -translate-y-1/2">
-          <Check className="h-4 w-4 text-green-500" />
-        </div>
-      )}
-    </div>
-  )
-}
-
-// Status Badge Component
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <div
-      className={cn(
-        'w-3 h-3 rounded-full',
-        status === 'completed' && 'bg-green-500',
-        status === 'partial' && 'bg-amber-500',
-        status === 'pending' && 'bg-gray-300'
-      )}
-      title={
-        status === 'completed'
-          ? 'В Poster'
-          : status === 'partial'
-          ? 'Частично'
-          : 'Не в Poster'
-      }
     />
   )
 }
 
-// Source Header Component
-function SourceHeader({ source }: { source: ExpenseSource }) {
-  const config = {
-    cash: { icon: Wallet, label: 'Наличка', color: 'text-green-600' },
-    kaspi: { icon: CreditCard, label: 'Kaspi Pay', color: 'text-amber-600' },
-    halyk: { icon: Building2, label: 'Халык', color: 'text-blue-600' },
+// Category Autocomplete Component
+function CategoryAutocomplete({
+  value,
+  draftId,
+  categories,
+  posterAccountId,
+  onSave,
+}: {
+  value: string
+  draftId: number
+  categories: ExpenseCategory[]
+  posterAccountId: number | null
+  onSave: (id: number, field: string, value: string) => void
+}) {
+  const [localValue, setLocalValue] = useState(value || '')
+  const [isOpen, setIsOpen] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(-1)
+  const [isSaved, setIsSaved] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setLocalValue(value || '')
+  }, [value])
+
+  const filteredCategories = useMemo(() => {
+    const query = localValue.toLowerCase().trim()
+    if (query.length < 1) return []
+
+    let matches = categories.filter(c => {
+      const displayName = getCategoryDisplayName(c.category_name)
+      return displayName.toLowerCase().includes(query)
+    })
+
+    // Sort: selected department first
+    matches.sort((a, b) => {
+      const aMatch = a.poster_account_id === posterAccountId ? 0 : 1
+      const bMatch = b.poster_account_id === posterAccountId ? 0 : 1
+      if (aMatch !== bMatch) return aMatch - bMatch
+      return getCategoryDisplayName(a.category_name).localeCompare(getCategoryDisplayName(b.category_name), 'ru')
+    })
+
+    // Deduplicate by display name
+    const seen = new Set<string>()
+    return matches.filter(c => {
+      const displayName = getCategoryDisplayName(c.category_name).toLowerCase()
+      if (seen.has(displayName)) return false
+      seen.add(displayName)
+      return true
+    }).slice(0, 10)
+  }, [localValue, categories, posterAccountId])
+
+  const handleSelect = (categoryName: string) => {
+    setLocalValue(categoryName)
+    setIsOpen(false)
+    onSave(draftId, 'category', categoryName)
+    setIsSaved(true)
+    setTimeout(() => setIsSaved(false), 300)
   }
 
-  const { icon: Icon, label, color } = config[source]
+  const handleBlur = () => {
+    setTimeout(() => {
+      setIsOpen(false)
+      if (localValue !== value) {
+        onSave(draftId, 'category', localValue)
+      }
+    }, 150)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isOpen) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelectedIndex(prev => Math.min(prev + 1, filteredCategories.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelectedIndex(prev => Math.max(prev - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (selectedIndex >= 0 && filteredCategories[selectedIndex]) {
+        handleSelect(getCategoryDisplayName(filteredCategories[selectedIndex].category_name))
+      } else if (filteredCategories.length === 1) {
+        handleSelect(getCategoryDisplayName(filteredCategories[0].category_name))
+      }
+    } else if (e.key === 'Escape') {
+      setIsOpen(false)
+    }
+  }
 
   return (
-    <div className={cn('flex items-center gap-2 py-3 px-4', color)}>
-      <Icon className="h-5 w-5" />
-      <span className="font-semibold text-base">{label}</span>
+    <div className="relative">
+      <input
+        ref={inputRef}
+        type="text"
+        value={localValue}
+        onChange={(e) => {
+          setLocalValue(e.target.value)
+          setIsOpen(true)
+          setSelectedIndex(-1)
+        }}
+        onFocus={() => setIsOpen(true)}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder="Категория..."
+        autoComplete="off"
+        className={cn(
+          'w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm transition-all',
+          'hover:border-gray-300 hover:bg-gray-50',
+          'focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10',
+          isSaved && 'animate-flash-save'
+        )}
+      />
+      {isOpen && filteredCategories.length > 0 && (
+        <div
+          ref={resultsRef}
+          className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-50 min-w-[180px]"
+        >
+          {filteredCategories.map((cat, i) => {
+            const displayName = getCategoryDisplayName(cat.category_name)
+            const isOtherDept = posterAccountId && cat.poster_account_id && cat.poster_account_id !== posterAccountId
+            return (
+              <div
+                key={`${cat.category_id}-${cat.poster_account_id}`}
+                className={cn(
+                  'px-3 py-2 cursor-pointer text-sm transition-colors',
+                  i === selectedIndex ? 'bg-blue-50' : 'hover:bg-gray-50'
+                )}
+                onMouseDown={() => handleSelect(displayName)}
+              >
+                {displayName}
+                {isOtherDept && cat.poster_account_name && (
+                  <span className="ml-2 text-xs text-gray-400">({cat.poster_account_name})</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
 
-export function Expenses() {
-  const { data, isLoading, error } = useExpenses()
-  const updateExpense = useUpdateExpense()
-  const createExpense = useCreateExpense()
-  const deleteExpense = useDeleteExpense()
-  const syncFromPoster = useSyncFromPoster()
-  const processDrafts = useProcessDrafts()
+// Poster Account Select Component
+function PosterAccountSelect({
+  value,
+  draftId,
+  posterAccounts,
+  onSave,
+}: {
+  value: number | null
+  draftId: number
+  posterAccounts: ExpensePosterAccount[]
+  onSave: (id: number, field: string, value: number) => void
+}) {
+  const [isSaved, setIsSaved] = useState(false)
 
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set(['cash', 'kaspi', 'halyk'])
+  const selectedValue = value || posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id
+
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newValue = parseInt(e.target.value)
+    onSave(draftId, 'poster_account_id', newValue)
+    setIsSaved(true)
+    setTimeout(() => setIsSaved(false), 300)
+  }
+
+  return (
+    <select
+      value={selectedValue}
+      onChange={handleChange}
+      className={cn(
+        'px-2.5 py-1.5 border border-gray-200 rounded text-sm bg-white cursor-pointer min-w-[120px] transition-all',
+        'hover:border-gray-300 hover:bg-gray-50',
+        'focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10',
+        isSaved && 'animate-flash-save'
+      )}
+    >
+      {posterAccounts.map(pa => (
+        <option key={pa.id} value={pa.id}>{pa.name}</option>
+      ))}
+    </select>
+  )
+}
+
+// Type Toggle Button
+function TypeButton({
+  draft,
+  onToggle,
+}: {
+  draft: ExpenseDraft
+  onToggle: (id: number, newType: 'transaction' | 'supply') => void
+}) {
+  const getLabel = () => {
+    if (draft.expense_type === 'supply') return '📦 поставка'
+    if (draft.is_income) return '💵 доход'
+    return '💰 транзакция'
+  }
+
+  const handleClick = () => {
+    const newType = draft.expense_type === 'supply' ? 'transaction' : 'supply'
+    onToggle(draft.id, newType)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="px-2.5 py-1 border border-gray-200 rounded-full bg-white text-xs whitespace-nowrap transition-all hover:bg-gray-50 hover:border-gray-300"
+    >
+      {getLabel()}
+    </button>
+  )
+}
+
+// Completion Status Button
+function CompletionButton({
+  status,
+  draftId,
+  onToggle,
+}: {
+  status: string
+  draftId: number
+  onToggle: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
+}) {
+  const statusIcons: Record<string, string> = {
+    pending: '⚪',
+    partial: '🟡',
+    completed: '✅',
+  }
+
+  const handleClick = () => {
+    const nextStatus = status === 'pending' ? 'partial' : status === 'partial' ? 'completed' : 'pending'
+    onToggle(draftId, nextStatus as 'pending' | 'partial' | 'completed')
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="p-1.5 text-lg rounded transition-transform hover:scale-110 hover:bg-gray-100"
+      title="Статус выполнения"
+    >
+      {statusIcons[status] || '⚪'}
+    </button>
+  )
+}
+
+// Draft Row Component
+function DraftRow({
+  draft,
+  categories,
+  posterAccounts,
+  accounts,
+  posterTransactions,
+  isSelected,
+  onSelect,
+  onUpdate,
+  onDelete,
+  onToggleType,
+  onToggleCompletion,
+}: {
+  draft: ExpenseDraft
+  categories: ExpenseCategory[]
+  posterAccounts: ExpensePosterAccount[]
+  accounts: ExpenseAccount[]
+  posterTransactions: PosterTransaction[]
+  isSelected: boolean
+  onSelect: (id: number, selected: boolean) => void
+  onUpdate: (id: number, field: string, value: string | number) => void
+  onDelete: (id: number) => void
+  onToggleType: (id: number, newType: 'transaction' | 'supply') => void
+  onToggleCompletion: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
+}) {
+  const syncMatches = useMemo(() => {
+    return findSyncStatus(
+      draft.amount,
+      draft.description,
+      draft.category,
+      draft.account_id,
+      draft.poster_account_id,
+      draft.expense_type,
+      posterTransactions,
+      accounts
+    )
+  }, [draft, posterTransactions, accounts])
+
+  const rowClasses = cn(
+    'draft-row transition-colors',
+    draft.expense_type === 'supply' ? 'border-l-4 border-l-blue-500' :
+      draft.is_income ? 'border-l-4 border-l-amber-400 bg-amber-50/50' : 'border-l-4 border-l-emerald-500',
+    draft.completion_status === 'completed' && 'bg-emerald-50/70 opacity-70',
+    draft.completion_status === 'partial' && 'bg-amber-50/70',
+    syncMatches >= 4 && 'bg-emerald-50',
+    syncMatches === 3 && 'bg-amber-50',
+    'hover:bg-gray-50'
   )
 
-  // Group expenses by source
-  const groupedExpenses = useMemo(() => {
-    if (!data?.drafts) return { cash: [], kaspi: [], halyk: [] }
+  return (
+    <tr className={rowClasses} data-id={draft.id}>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => onSelect(draft.id, e.target.checked)}
+          className="w-4 h-4 cursor-pointer accent-blue-600"
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <CompletionButton
+          status={draft.completion_status || 'pending'}
+          draftId={draft.id}
+          onToggle={onToggleCompletion}
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <EditableCell
+          value={draft.amount}
+          type="number"
+          draftId={draft.id}
+          field="amount"
+          onSave={onUpdate}
+          className="w-24 text-right font-semibold tabular-nums"
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <EditableCell
+          value={draft.description}
+          type="text"
+          draftId={draft.id}
+          field="description"
+          onSave={onUpdate}
+          className="w-44"
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <TypeButton draft={draft} onToggle={onToggleType} />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <CategoryAutocomplete
+          value={draft.category || ''}
+          draftId={draft.id}
+          categories={categories}
+          posterAccountId={draft.poster_account_id}
+          onSave={onUpdate}
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <PosterAccountSelect
+          value={draft.poster_account_id}
+          draftId={draft.id}
+          posterAccounts={posterAccounts}
+          onSave={onUpdate}
+        />
+      </td>
+      <td className="px-3 py-2 border-b border-gray-100">
+        <button
+          type="button"
+          onClick={() => onDelete(draft.id)}
+          className="p-1.5 text-sm opacity-40 hover:opacity-100 hover:bg-red-50 hover:text-red-600 rounded transition-all"
+          title="Удалить"
+        >
+          🗑️
+        </button>
+      </td>
+    </tr>
+  )
+}
 
-    const groups: Record<ExpenseSource, ExpenseDraft[]> = {
+// Section Component
+function Section({
+  type,
+  label,
+  icon,
+  gradient,
+  drafts,
+  categories,
+  posterAccounts,
+  accounts,
+  posterTransactions,
+  selectedIds,
+  sortState,
+  onSelectAll,
+  onSelect,
+  onSort,
+  onUpdate,
+  onDelete,
+  onToggleType,
+  onToggleCompletion,
+}: {
+  type: AccountType
+  label: string
+  icon: string
+  gradient: string
+  drafts: ExpenseDraft[]
+  categories: ExpenseCategory[]
+  posterAccounts: ExpensePosterAccount[]
+  accounts: ExpenseAccount[]
+  posterTransactions: PosterTransaction[]
+  selectedIds: Set<number>
+  sortState: SortState
+  onSelectAll: (type: AccountType, selected: boolean) => void
+  onSelect: (id: number, selected: boolean) => void
+  onSort: (type: AccountType, column: SortColumn) => void
+  onUpdate: (id: number, field: string, value: string | number) => void
+  onDelete: (id: number) => void
+  onToggleType: (id: number, newType: 'transaction' | 'supply') => void
+  onToggleCompletion: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
+}) {
+  const allSelected = drafts.length > 0 && drafts.every(d => selectedIds.has(d.id))
+  const sectionTotal = drafts.reduce((sum, d) => sum + (d.amount || 0), 0)
+
+  const sortedDrafts = useMemo(() => {
+    if (!sortState.column || !sortState.direction) return drafts
+
+    const sorted = [...drafts].sort((a, b) => {
+      let aVal: string | number = ''
+      let bVal: string | number = ''
+
+      switch (sortState.column) {
+        case 'amount':
+          aVal = a.amount || 0
+          bVal = b.amount || 0
+          break
+        case 'description':
+          aVal = (a.description || '').toLowerCase()
+          bVal = (b.description || '').toLowerCase()
+          break
+        case 'type':
+          aVal = a.expense_type
+          bVal = b.expense_type
+          break
+        case 'category':
+          aVal = (a.category || '').toLowerCase()
+          bVal = (b.category || '').toLowerCase()
+          break
+        case 'department':
+          aVal = posterAccounts.find(pa => pa.id === a.poster_account_id)?.name || ''
+          bVal = posterAccounts.find(pa => pa.id === b.poster_account_id)?.name || ''
+          break
+      }
+
+      let comparison: number
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        comparison = aVal - bVal
+      } else {
+        comparison = String(aVal).localeCompare(String(bVal), 'ru')
+      }
+
+      return sortState.direction === 'desc' ? -comparison : comparison
+    })
+
+    // Keep empty rows at the end
+    const emptyRows = sorted.filter(d => !d.amount && !d.description?.trim())
+    const dataRows = sorted.filter(d => d.amount || d.description?.trim())
+    return [...dataRows, ...emptyRows]
+  }, [drafts, sortState, posterAccounts])
+
+  const renderSortIcon = (column: SortColumn) => {
+    if (sortState.column !== column) return <span className="ml-1 text-gray-300 text-xs">↕</span>
+    return <span className="ml-1 text-xs">{sortState.direction === 'asc' ? '↑' : '↓'}</span>
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm mb-6">
+      <h2 className={cn(
+        'px-5 py-3.5 text-sm font-semibold flex items-center gap-2 border-b border-gray-200 bg-gradient-to-r',
+        gradient
+      )}>
+        <span>{icon}</span>
+        {label}
+      </h2>
+
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              <th className="px-3 py-2.5 text-left w-10">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={(e) => onSelectAll(type, e.target.checked)}
+                  className="w-4 h-4 cursor-pointer accent-blue-600"
+                />
+              </th>
+              <th className="px-3 py-2.5 text-left w-10">✓</th>
+              <th
+                className="px-3 py-2.5 text-left cursor-pointer hover:bg-gray-100 transition-colors"
+                onClick={() => onSort(type, 'amount')}
+              >
+                Сумма {renderSortIcon('amount')}
+              </th>
+              <th
+                className="px-3 py-2.5 text-left cursor-pointer hover:bg-gray-100 transition-colors"
+                onClick={() => onSort(type, 'description')}
+              >
+                Описание {renderSortIcon('description')}
+              </th>
+              <th
+                className="px-3 py-2.5 text-left cursor-pointer hover:bg-gray-100 transition-colors"
+                onClick={() => onSort(type, 'type')}
+              >
+                Тип {renderSortIcon('type')}
+              </th>
+              <th
+                className="px-3 py-2.5 text-left cursor-pointer hover:bg-gray-100 transition-colors"
+                onClick={() => onSort(type, 'category')}
+              >
+                Категория {renderSortIcon('category')}
+              </th>
+              <th
+                className="px-3 py-2.5 text-left cursor-pointer hover:bg-gray-100 transition-colors"
+                onClick={() => onSort(type, 'department')}
+              >
+                Отдел {renderSortIcon('department')}
+              </th>
+              <th className="px-3 py-2.5 text-left w-10"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedDrafts.map(draft => (
+              <DraftRow
+                key={draft.id}
+                draft={draft}
+                categories={categories}
+                posterAccounts={posterAccounts}
+                accounts={accounts}
+                posterTransactions={posterTransactions}
+                isSelected={selectedIds.has(draft.id)}
+                onSelect={onSelect}
+                onUpdate={onUpdate}
+                onDelete={onDelete}
+                onToggleType={onToggleType}
+                onToggleCompletion={onToggleCompletion}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="px-5 py-3 bg-gray-50 text-right text-sm font-semibold text-gray-600">
+        <span className="text-gray-900 tabular-nums">{sectionTotal.toLocaleString('ru-RU')}₸</span>
+      </div>
+    </div>
+  )
+}
+
+// Main Expenses Page
+export function Expenses() {
+  const { data, isLoading, error } = useExpenses()
+  const { data: posterData } = usePosterTransactions()
+  const updateMutation = useUpdateExpense()
+  const deleteMutation = useDeleteExpense()
+  const syncMutation = useSyncFromPoster()
+  const processMutation = useProcessDrafts()
+  const deleteDraftsMutation = useDeleteDrafts()
+  const toggleTypeMutation = useToggleExpenseType()
+
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [sortStates, setSortStates] = useState<Record<AccountType, SortState>>({
+    cash: { column: null, direction: null },
+    kaspi: { column: null, direction: null },
+    halyk: { column: null, direction: null },
+  })
+
+  const drafts = data?.drafts || []
+  const categories = data?.categories || []
+  const accounts = data?.accounts || []
+  const posterAccounts = data?.poster_accounts || []
+  const posterTransactions = posterData?.transactions || data?.poster_transactions || []
+
+  // Group drafts by account type
+  const groupedDrafts = useMemo(() => {
+    const groups: Record<AccountType, ExpenseDraft[]> = {
       cash: [],
       kaspi: [],
       halyk: [],
     }
 
-    data.drafts.forEach((draft) => {
-      const source = draft.source || 'cash'
-      if (groups[source]) {
-        groups[source].push(draft)
-      } else {
-        groups.cash.push(draft)
-      }
+    drafts.forEach(draft => {
+      const type = getAccountType(draft, accounts)
+      groups[type].push(draft)
     })
 
     return groups
-  }, [data?.drafts])
+  }, [drafts, accounts])
 
-  // Handle cell save
-  const handleSave = useCallback(
-    (id: number, field: string, value: string | number) => {
-      updateExpense.mutate({ id, data: { [field]: value } })
-    },
-    [updateExpense]
-  )
-
-  // Handle selection
-  const toggleSelection = (id: number) => {
-    setSelectedIds((prev) => {
+  // Handlers
+  const handleSelect = useCallback((id: number, selected: boolean) => {
+    setSelectedIds(prev => {
       const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
+      if (selected) {
         next.add(id)
+      } else {
+        next.delete(id)
       }
       return next
     })
-  }
+  }, [])
 
-  // Handle sync
-  const handleSync = () => {
-    syncFromPoster.mutate()
-  }
+  const handleSelectAll = useCallback((type: AccountType, selected: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      groupedDrafts[type].forEach(d => {
+        if (selected) {
+          next.add(d.id)
+        } else {
+          next.delete(d.id)
+        }
+      })
+      return next
+    })
+  }, [groupedDrafts])
 
-  // Handle process
-  const handleProcess = () => {
-    if (selectedIds.size > 0) {
-      processDrafts.mutate(Array.from(selectedIds))
-      setSelectedIds(new Set())
-    }
-  }
+  const handleSort = useCallback((type: AccountType, column: SortColumn) => {
+    setSortStates(prev => {
+      const state = prev[type]
+      let newDirection: SortDirection
+      if (state.column !== column) {
+        newDirection = 'asc'
+      } else if (state.direction === 'asc') {
+        newDirection = 'desc'
+      } else if (state.direction === 'desc') {
+        newDirection = null
+      } else {
+        newDirection = 'asc'
+      }
 
-  // Handle delete
-  const handleDelete = (id: number) => {
-    deleteExpense.mutate(id)
-    setSelectedIds((prev) => {
+      return {
+        ...prev,
+        [type]: {
+          column: newDirection ? column : null,
+          direction: newDirection,
+        },
+      }
+    })
+  }, [])
+
+  const handleUpdate = useCallback((id: number, field: string, value: string | number) => {
+    updateMutation.mutate({ id, data: { [field]: value } })
+  }, [updateMutation])
+
+  const handleDelete = useCallback((id: number) => {
+    if (!confirm('Удалить этот черновик?')) return
+    deleteMutation.mutate(id)
+    setSelectedIds(prev => {
       const next = new Set(prev)
       next.delete(id)
       return next
     })
-  }
+  }, [deleteMutation])
 
-  // Handle add new
-  const handleAddNew = (source: ExpenseSource) => {
-    createExpense.mutate({
-      amount: 0,
-      description: '',
-      source,
-    })
-  }
+  const handleToggleType = useCallback((id: number, newType: 'transaction' | 'supply') => {
+    toggleTypeMutation.mutate({ id, expenseType: newType })
+  }, [toggleTypeMutation])
 
-  // Toggle group expansion
-  const toggleGroup = (source: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(source)) {
-        next.delete(source)
-      } else {
-        next.add(source)
-      }
-      return next
-    })
-  }
+  const handleToggleCompletion = useCallback((id: number, newStatus: 'pending' | 'partial' | 'completed') => {
+    updateMutation.mutate({ id, data: { completion_status: newStatus } })
+  }, [updateMutation])
 
-  // Calculate totals
-  const totals = useMemo(() => {
-    const result = { cash: 0, kaspi: 0, halyk: 0, total: 0 }
-    Object.entries(groupedExpenses).forEach(([source, items]) => {
-      const sum = items.reduce((acc, item) => {
-        const multiplier = item.is_income ? 1 : -1
-        return acc + item.amount * multiplier
-      }, 0)
-      result[source as ExpenseSource] = sum
-      result.total += sum
-    })
-    return result
-  }, [groupedExpenses])
+  const handleSync = useCallback(async () => {
+    const result = await syncMutation.mutateAsync()
+    if (result.synced > 0) {
+      alert(`✅ ${result.message}`)
+    } else {
+      alert('ℹ️ Новых транзакций не найдено.\nСтатусы совпадения обновлены.')
+    }
+  }, [syncMutation])
+
+  const handleProcess = useCallback(async () => {
+    if (selectedIds.size === 0) {
+      alert('Выберите черновики для создания')
+      return
+    }
+    await processMutation.mutateAsync(Array.from(selectedIds))
+    setSelectedIds(new Set())
+    alert('✅ Транзакции созданы в Poster')
+  }, [selectedIds, processMutation])
+
+  const handleDeleteSelected = useCallback(async () => {
+    if (selectedIds.size === 0) {
+      alert('Выберите черновики для удаления')
+      return
+    }
+    if (!confirm(`Удалить ${selectedIds.size} выбранных?`)) return
+    await deleteDraftsMutation.mutateAsync(Array.from(selectedIds))
+    setSelectedIds(new Set())
+  }, [selectedIds, deleteDraftsMutation])
+
+  // Summary stats
+  const stats = useMemo(() => {
+    const transactions = drafts.filter(d => d.expense_type === 'transaction').length
+    const supplies = drafts.filter(d => d.expense_type === 'supply').length
+    const total = drafts.reduce((sum, d) => sum + (d.amount || 0), 0)
+    return { total: drafts.length, transactions, supplies, sum: total }
+  }, [drafts])
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="text-gray-500">Загрузка...</div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="p-6 text-center text-destructive">
-        Ошибка загрузки данных
+      <div className="flex items-center justify-center h-64">
+        <div className="text-red-500">Ошибка загрузки данных</div>
       </div>
     )
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-4 animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Расходы</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {data?.drafts.length || 0} записей за сегодня
-          </p>
-        </div>
+    <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <h1 className="text-2xl font-bold text-gray-900 mb-6 tracking-tight">Черновики расходов</h1>
 
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncFromPoster.isPending}
-          >
-            <RefreshCw
-              className={cn(
-                'h-4 w-4 mr-2',
-                syncFromPoster.isPending && 'animate-spin'
-              )}
-            />
-            Синхронизировать
-          </Button>
-
-          {selectedIds.size > 0 && (
-            <Button size="sm" onClick={handleProcess} disabled={processDrafts.isPending}>
-              <Check className="h-4 w-4 mr-2" />
-              Создать ({selectedIds.size})
-            </Button>
-          )}
-        </div>
+      {/* Actions */}
+      <div className="flex flex-wrap gap-3 mb-5 items-center">
+        <button
+          onClick={handleProcess}
+          disabled={selectedIds.size === 0 || processMutation.isPending}
+          className="px-4 py-2 bg-emerald-600 text-white rounded-md font-medium text-sm transition-all hover:bg-emerald-700 hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          ✅ Создать выбранные транзакции
+        </button>
+        <button
+          onClick={handleDeleteSelected}
+          disabled={selectedIds.size === 0 || deleteDraftsMutation.isPending}
+          className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-md font-medium text-sm transition-all hover:bg-red-100 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          🗑️ Удалить выбранные
+        </button>
+        <button
+          onClick={handleSync}
+          disabled={syncMutation.isPending}
+          className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md font-medium text-sm transition-all hover:bg-gray-200 disabled:opacity-50"
+        >
+          {syncMutation.isPending ? '⏳ Синхронизация...' : '🔄 Синхронизировать'}
+        </button>
+        <span className="ml-auto text-sm text-gray-500 font-medium">
+          Выбрано: <span className="text-gray-900">{selectedIds.size}</span>
+        </span>
       </div>
 
-      {/* Expense Groups */}
-      <div className="space-y-4">
-        {(['cash', 'kaspi', 'halyk'] as ExpenseSource[]).map((source) => {
-          const items = groupedExpenses[source]
-          const isExpanded = expandedGroups.has(source)
-          const total = totals[source]
-
-          return (
-            <Card key={source} className="overflow-hidden">
-              {/* Group Header */}
-              <div
-                className="flex items-center justify-between px-4 py-3 bg-muted/30 cursor-pointer hover:bg-muted/50 transition-colors"
-                onClick={() => toggleGroup(source)}
-              >
-                <div className="flex items-center gap-2">
-                  {isExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <SourceHeader source={source} />
-                  <span className="text-muted-foreground text-sm">
-                    ({items.length})
-                  </span>
-                </div>
-                <div
-                  className={cn(
-                    'font-semibold tabular-nums',
-                    total >= 0 ? 'text-green-600' : 'text-foreground'
-                  )}
-                >
-                  {total >= 0 ? '+' : ''}
-                  {total.toLocaleString('ru-RU')} ₸
-                </div>
-              </div>
-
-              {/* Items */}
-              {isExpanded && (
-                <div className="divide-y divide-border">
-                  {items.map((item) => (
-                    <div
-                      key={item.id}
-                      className={cn(
-                        'flex items-center gap-3 px-4 py-2 table-row-hover',
-                        item.completion_status === 'completed' && 'bg-green-50/50',
-                        item.completion_status === 'partial' && 'bg-amber-50/50',
-                        item.is_income && 'bg-amber-50/30'
-                      )}
-                    >
-                      {/* Checkbox */}
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(item.id)}
-                        onChange={() => toggleSelection(item.id)}
-                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                      />
-
-                      {/* Status */}
-                      <StatusBadge status={item.completion_status} />
-
-                      {/* Amount */}
-                      <div className="w-28 flex-shrink-0">
-                        <EditableCell
-                          value={item.amount}
-                          row={{ original: item } }
-                          column="amount"
-                          onSave={handleSave}
-                        />
-                      </div>
-
-                      {/* Description */}
-                      <div className="flex-1 min-w-0">
-                        <EditableCell
-                          value={item.description}
-                          row={{ original: item } }
-                          column="description"
-                          onSave={handleSave}
-                        />
-                      </div>
-
-                      {/* Type Badge */}
-                      <div
-                        className={cn(
-                          'flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium',
-                          item.expense_type === 'supply'
-                            ? 'bg-blue-100 text-blue-700'
-                            : item.is_income
-                            ? 'bg-amber-100 text-amber-700'
-                            : 'bg-gray-100 text-gray-700'
-                        )}
-                      >
-                        {item.expense_type === 'supply' ? (
-                          <>
-                            <Package className="h-3 w-3" />
-                            <span className="hidden sm:inline">поставка</span>
-                          </>
-                        ) : item.is_income ? (
-                          <>
-                            <Receipt className="h-3 w-3" />
-                            <span className="hidden sm:inline">доход</span>
-                          </>
-                        ) : (
-                          <>
-                            <Receipt className="h-3 w-3" />
-                            <span className="hidden sm:inline">расход</span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Category */}
-                      <div className="hidden md:block w-32 text-sm text-muted-foreground truncate">
-                        {item.category || '—'}
-                      </div>
-
-                      {/* Delete */}
-                      <button
-                        onClick={() => handleDelete(item.id)}
-                        className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-
-                  {/* Add New Row */}
-                  <button
-                    onClick={() => handleAddNew(source)}
-                    className="w-full flex items-center gap-2 px-4 py-3 text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span className="text-sm">Добавить запись</span>
-                  </button>
-                </div>
-              )}
-            </Card>
-          )
-        })}
+      {/* Sync Legend */}
+      <div className="flex gap-5 mb-5 text-xs text-gray-500">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+          Совпало 4/4 (уже в Poster)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+          Совпало 3/4 (частичное)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-gray-200"></span>
+          Не найдено в Poster
+        </span>
       </div>
+
+      {/* Sections */}
+      {SECTIONS.map(section => (
+        <Section
+          key={section.type}
+          type={section.type}
+          label={section.label}
+          icon={section.icon}
+          gradient={section.gradient}
+          drafts={groupedDrafts[section.type]}
+          categories={categories}
+          posterAccounts={posterAccounts}
+          accounts={accounts}
+          posterTransactions={posterTransactions}
+          selectedIds={selectedIds}
+          sortState={sortStates[section.type]}
+          onSelectAll={handleSelectAll}
+          onSelect={handleSelect}
+          onSort={handleSort}
+          onUpdate={handleUpdate}
+          onDelete={handleDelete}
+          onToggleType={handleToggleType}
+          onToggleCompletion={handleToggleCompletion}
+        />
+      ))}
 
       {/* Summary */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between">
-          <span className="font-medium">Итого за день:</span>
-          <span
-            className={cn(
-              'text-xl font-bold tabular-nums',
-              totals.total >= 0 ? 'text-green-600' : 'text-foreground'
-            )}
-          >
-            {totals.total >= 0 ? '+' : ''}
-            {totals.total.toLocaleString('ru-RU')} ₸
-          </span>
+      <div className="flex flex-wrap gap-8 items-center p-5 bg-gray-50 rounded-lg">
+        <p className="text-sm text-gray-500">
+          Всего: <span className="text-gray-900 font-medium">{stats.total}</span> записей
+        </p>
+        <p className="text-sm text-gray-500">
+          💰 Транзакций: <span className="text-gray-900 font-medium">{stats.transactions}</span>
+        </p>
+        <p className="text-sm text-gray-500">
+          📦 Поставок: <span className="text-gray-900 font-medium">{stats.supplies}</span>
+        </p>
+        <p className="text-sm">
+          <strong className="text-gray-900">
+            Общая сумма: <span className="tabular-nums">{stats.sum.toLocaleString('ru-RU')}</span>₸
+          </strong>
+        </p>
+      </div>
+
+      {drafts.length === 0 && (
+        <div className="text-center py-16 text-gray-400">
+          <p>Нет черновиков расходов</p>
+          <p className="mt-2">Добавьте расход в нужную секцию или отправьте фото/Kaspi выписку в бота.</p>
         </div>
-      </Card>
+      )}
+
+      {/* Flash animation style */}
+      <style>{`
+        @keyframes flash-save {
+          0% { background-color: #d1fae5; }
+          100% { background-color: transparent; }
+        }
+        .animate-flash-save {
+          animation: flash-save 0.3s ease;
+        }
+      `}</style>
     </div>
   )
 }
