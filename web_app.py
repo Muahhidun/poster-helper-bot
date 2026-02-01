@@ -1272,8 +1272,9 @@ def sync_expenses_from_poster():
 
                         # Extract transaction data
                         # Amount in Poster is in kopecks (tiyins), divide by 100
+                        # Use absolute value - Poster shows expenses as negative, but we store positive
                         amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
-                        amount = float(amount_raw) / 100
+                        amount = abs(float(amount_raw)) / 100
 
                         # Description from category name or comment
                         category_name = txn.get('name', '') or txn.get('category_name', '')
