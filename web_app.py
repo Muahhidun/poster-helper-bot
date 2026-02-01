@@ -1458,6 +1458,410 @@ def api_poster_transactions():
         return jsonify({'success': False, 'error': str(e)})
 
 
+# ==================== EXPENSES API ====================
+
+@app.route('/api/expenses')
+def api_get_expenses():
+    """Get all expense drafts with categories, accounts, and poster transactions for React app"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+    # Load ALL drafts (not just pending) to show completion status
+    drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+
+    # Filter to show only today's drafts (Kazakhstan time UTC+5)
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
+    drafts = [d for d in drafts if d.get('created_at') and str(d['created_at'])[:10] == today]
+
+    # Load categories, accounts, poster_accounts, and transactions
+    categories = []
+    accounts = []
+    poster_accounts_list = []
+    poster_transactions = []
+
+    try:
+        from poster_client import PosterClient
+        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+        if poster_accounts:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # Build poster_accounts_list
+            for acc in poster_accounts:
+                poster_accounts_list.append({
+                    'id': acc['id'],
+                    'name': acc['account_name'],
+                    'is_primary': acc.get('is_primary', False)
+                })
+
+            async def load_data():
+                all_categories = []
+                all_accounts = []
+                all_transactions = []
+
+                # Get date range for transactions (last 30 days)
+                date_to = datetime.now()
+                date_from = date_to - timedelta(days=30)
+                date_from_str = date_from.strftime("%Y%m%d")
+                date_to_str = date_to.strftime("%Y%m%d")
+
+                for acc in poster_accounts:
+                    client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+                    try:
+                        # Load categories
+                        cats = await client.get_categories()
+                        for c in cats:
+                            cat_type = c.get('type', '1')
+                            if str(cat_type) != '1':
+                                continue
+                            c['poster_account_id'] = acc['id']
+                            c['poster_account_name'] = acc['account_name']
+                            all_categories.append(c)
+
+                        # Load finance accounts
+                        accs = await client.get_accounts()
+                        for a in accs:
+                            a['poster_account_id'] = acc['id']
+                            a['poster_account_name'] = acc['account_name']
+                        all_accounts.extend(accs)
+
+                        # Load transactions for sync check
+                        transactions = await client.get_transactions(date_from_str, date_to_str)
+                        for t in transactions:
+                            t['poster_account_id'] = acc['id']
+                            t['poster_account_name'] = acc['account_name']
+                        all_transactions.extend(transactions)
+
+                    finally:
+                        await client.close()
+
+                return all_categories, all_accounts, all_transactions
+
+            categories, accounts, poster_transactions = loop.run_until_complete(load_data())
+            loop.close()
+    except Exception as e:
+        print(f"Error loading expenses data: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return jsonify({
+        'drafts': drafts,
+        'categories': categories,
+        'accounts': accounts,
+        'poster_accounts': poster_accounts_list,
+        'poster_transactions': poster_transactions
+    })
+
+
+@app.route('/api/expenses/<int:draft_id>', methods=['PUT'])
+def api_update_expense(draft_id):
+    """Update an expense draft"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    # Map frontend field names to database field names
+    update_fields = {}
+    if 'amount' in data:
+        update_fields['amount'] = data['amount']
+    if 'description' in data:
+        update_fields['description'] = data['description']
+    if 'category' in data:
+        update_fields['category'] = data['category']
+    if 'source' in data:
+        update_fields['source'] = data['source']
+    if 'account_id' in data:
+        update_fields['account_id'] = data['account_id']
+    if 'poster_account_id' in data:
+        update_fields['poster_account_id'] = data['poster_account_id']
+    if 'completion_status' in data:
+        update_fields['completion_status'] = data['completion_status']
+
+    success = db.update_expense_draft(draft_id, **update_fields)
+    return jsonify({'success': success})
+
+
+@app.route('/api/expenses/<int:draft_id>', methods=['DELETE'])
+def api_delete_expense(draft_id):
+    """Delete an expense draft"""
+    db = get_database()
+    success = db.delete_expense_draft(draft_id)
+    return jsonify({'success': success})
+
+
+@app.route('/api/expenses', methods=['POST'])
+def api_create_expense():
+    """Create a new expense draft"""
+    db = get_database()
+    data = request.get_json() or {}
+
+    draft_id = db.create_expense_draft(
+        telegram_user_id=TELEGRAM_USER_ID,
+        amount=data.get('amount', 0),
+        description=data.get('description', ''),
+        expense_type=data.get('expense_type', 'transaction'),
+        category=data.get('category'),
+        source=data.get('source', 'cash'),
+        poster_account_id=data.get('poster_account_id')
+    )
+
+    return jsonify({'success': True, 'id': draft_id})
+
+
+@app.route('/api/expenses/<int:draft_id>/toggle-type', methods=['POST'])
+def api_toggle_expense_type(draft_id):
+    """Toggle expense type between transaction and supply"""
+    db = get_database()
+    data = request.get_json() or {}
+    new_type = data.get('expense_type', 'transaction')
+
+    # Get current expense draft
+    all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+    expense_draft = next((d for d in all_drafts if d['id'] == draft_id), None)
+
+    if not expense_draft:
+        return jsonify({'success': False, 'error': 'Draft not found'})
+
+    supply_draft_id = None
+
+    if new_type == 'supply':
+        # Create supply draft linked to this expense
+        from datetime import datetime
+        supply_draft_id = db.create_empty_supply_draft(
+            telegram_user_id=TELEGRAM_USER_ID,
+            supplier_name=expense_draft.get('description', ''),
+            invoice_date=datetime.now().strftime("%Y-%m-%d"),
+            total_sum=expense_draft.get('amount', 0),
+            linked_expense_draft_id=draft_id,
+            account_id=expense_draft.get('account_id'),
+            source=expense_draft.get('source', 'cash')
+        )
+    else:
+        # Switching to transaction - find and delete linked supply draft
+        supply_drafts = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+        linked_supply = next((s for s in supply_drafts if s.get('linked_expense_draft_id') == draft_id), None)
+        if linked_supply:
+            db.delete_supply_draft(linked_supply['id'])
+
+    success = db.update_expense_draft(draft_id, expense_type=new_type)
+    return jsonify({'success': success, 'supply_draft_id': supply_draft_id})
+
+
+@app.route('/api/expenses/<int:draft_id>/completion-status', methods=['POST'])
+def api_update_completion_status(draft_id):
+    """Update completion status of expense draft"""
+    db = get_database()
+    data = request.get_json() or {}
+    status = data.get('completion_status', 'pending')
+
+    success = db.update_expense_draft(draft_id, completion_status=status)
+    return jsonify({'success': success})
+
+
+@app.route('/api/expenses/sync-from-poster', methods=['POST'])
+def api_sync_expenses_from_poster():
+    """Sync expenses from Poster - API version"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+    if not poster_accounts:
+        return jsonify({'success': False, 'error': 'No Poster accounts', 'synced': 0, 'skipped': 0, 'errors': []})
+
+    # Kazakhstan time UTC+5
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz)
+    date_str = today.strftime("%Y%m%d")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    synced = 0
+    skipped = 0
+    errors = []
+
+    async def sync_from_all_accounts():
+        nonlocal synced, skipped, errors
+
+        for account in poster_accounts:
+            try:
+                from poster_client import PosterClient
+                client = PosterClient(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+
+                try:
+                    transactions = await client.get_transactions(date_str, date_str)
+                    finance_accounts = await client.get_accounts()
+                    account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+
+                    for txn in transactions:
+                        txn_type = str(txn.get('type'))
+                        category_name = txn.get('name', '') or txn.get('category_name', '')
+
+                        # Skip transfers
+                        if 'перевод' in category_name.lower():
+                            continue
+
+                        # Only expenses and income
+                        if txn_type not in ('0', '1'):
+                            continue
+
+                        txn_id = txn.get('transaction_id')
+                        amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
+                        amount = abs(float(amount_raw)) / 100
+                        comment = txn.get('comment', '') or ''
+                        description = comment if comment else category_name
+
+                        account_from_id = txn.get('account_from_id') or txn.get('account_from')
+                        finance_acc = account_map.get(str(account_from_id), {})
+
+                        # Check if already synced
+                        existing = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+                        already_exists = any(
+                            d.get('poster_transaction_id') == str(txn_id) and
+                            d.get('poster_account_id') == account['id']
+                            for d in existing
+                        )
+
+                        if already_exists:
+                            skipped += 1
+                            continue
+
+                        # Determine source from finance account name
+                        finance_acc_name = finance_acc.get('name', '').lower()
+                        source = 'cash'
+                        if 'kaspi' in finance_acc_name:
+                            source = 'kaspi'
+                        elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
+                            source = 'halyk'
+
+                        # Create expense draft
+                        db.create_expense_draft(
+                            telegram_user_id=TELEGRAM_USER_ID,
+                            amount=amount,
+                            description=description,
+                            expense_type='transaction',
+                            category=category_name,
+                            source=source,
+                            account_id=finance_acc.get('account_id'),
+                            poster_account_id=account['id'],
+                            poster_transaction_id=str(txn_id),
+                            is_income=(txn_type == '1'),
+                            completion_status='completed'
+                        )
+                        synced += 1
+
+                finally:
+                    await client.close()
+
+            except Exception as e:
+                errors.append(f"{account['account_name']}: {str(e)}")
+
+    try:
+        loop.run_until_complete(sync_from_all_accounts())
+        loop.close()
+    except Exception as e:
+        loop.close()
+        return jsonify({'success': False, 'error': str(e), 'synced': synced, 'skipped': skipped, 'errors': errors})
+
+    return jsonify({
+        'success': True,
+        'synced': synced,
+        'skipped': skipped,
+        'errors': errors,
+        'message': f'Синхронизировано: {synced}, пропущено: {skipped}'
+    })
+
+
+@app.route('/api/expenses/process', methods=['POST'])
+def api_process_expenses():
+    """Process selected expense drafts - create transactions in Poster"""
+    db = get_database()
+    data = request.get_json() or {}
+    draft_ids = data.get('draft_ids', [])
+
+    if not draft_ids:
+        return jsonify({'success': False, 'error': 'No drafts selected'})
+
+    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    if not poster_accounts:
+        return jsonify({'success': False, 'error': 'No Poster accounts'})
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    created = 0
+    errors = []
+
+    async def process_drafts():
+        nonlocal created, errors
+
+        all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+        drafts_to_process = [d for d in all_drafts if d['id'] in draft_ids]
+
+        for draft in drafts_to_process:
+            try:
+                # Find the poster account
+                poster_account_id = draft.get('poster_account_id')
+                account = next((a for a in poster_accounts if a['id'] == poster_account_id), poster_accounts[0])
+
+                from poster_client import PosterClient
+                client = PosterClient(
+                    telegram_user_id=TELEGRAM_USER_ID,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+
+                try:
+                    # Create transaction in Poster
+                    result = await client.create_transaction(
+                        amount=draft['amount'],
+                        category=draft.get('category', ''),
+                        comment=draft.get('description', ''),
+                        account_id=draft.get('account_id'),
+                        is_income=draft.get('is_income', False)
+                    )
+
+                    if result.get('success'):
+                        # Mark as completed
+                        db.update_expense_draft(draft['id'], completion_status='completed')
+                        created += 1
+                    else:
+                        errors.append(f"Draft {draft['id']}: {result.get('error', 'Unknown error')}")
+
+                finally:
+                    await client.close()
+
+            except Exception as e:
+                errors.append(f"Draft {draft['id']}: {str(e)}")
+
+    try:
+        loop.run_until_complete(process_drafts())
+        loop.close()
+    except Exception as e:
+        loop.close()
+        return jsonify({'success': False, 'error': str(e), 'created': created, 'errors': errors})
+
+    return jsonify({
+        'success': True,
+        'created': created,
+        'errors': errors,
+        'message': f'Создано транзакций: {created}'
+    })
+
+
 @app.route('/expenses/process', methods=['POST'])
 def process_drafts():
     """Process selected drafts - create transactions in Poster (multi-account support)"""
