@@ -1818,6 +1818,16 @@ def update_supply_draft(draft_id):
 
     if update_fields:
         success = db.update_supply_draft(draft_id, **update_fields)
+
+        # Sync source to linked expense draft if changed
+        if 'source' in update_fields:
+            draft = db.get_supply_draft_with_items(draft_id)
+            if draft and draft.get('linked_expense_draft_id'):
+                db.update_expense_draft(
+                    draft['linked_expense_draft_id'],
+                    source=update_fields['source']
+                )
+
         return jsonify({'success': success})
     return jsonify({'success': False, 'error': 'No fields to update'})
 
@@ -2223,9 +2233,16 @@ def process_supply(draft_id):
             # Mark draft as processed
             db.mark_supply_draft_processed(draft_id)
 
-            # Also mark linked expense draft if exists
+            # Also mark linked expense draft as in_poster (stay visible, show green)
+            # and sync the source from supply to expense
             if draft.get('linked_expense_draft_id'):
-                db.mark_drafts_processed([draft['linked_expense_draft_id']])
+                # Update source on expense draft to match supply
+                db.update_expense_draft(
+                    draft['linked_expense_draft_id'],
+                    source=draft.get('source', 'cash')
+                )
+                # Mark as in Poster (keeps it visible with green status)
+                db.mark_drafts_in_poster([draft['linked_expense_draft_id']])
 
             # Format response
             supply_ids = [s['supply_id'] for s in created_supplies]

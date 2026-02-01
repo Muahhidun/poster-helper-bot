@@ -954,23 +954,27 @@ async function refreshPosterData() {
 // Special sync status for supplies - can be split across multiple accounts
 // Example: "Япоша 125000" expense might match transactions:
 //   - "Поставка №4824 от «Япоша »" 60000₸ in PizzBurg
-//   - "Поставка №4825 от «Япоша »" 65000₸ in PizzBurg-Cafe
+//   - "Накладная от Япоша" 65000₸ in PizzBurg-Cafe
 // Sum = 125000₸ = expense amount
 function findSupplySyncStatus(expenseAmount, supplierName, category, accountName) {
     if (!supplierName) return 0;
 
     // Find all transactions that look like supply transactions with this supplier
-    // Pattern: "Поставка №xxx от «Supplier »" or just contains supplier name
+    // Patterns: "Поставка №xxx от «Supplier»", "Накладная от Supplier", or just supplier name
     const supplyTransactions = posterTransactions.filter(t => {
         if (t.type != 0 && t.type != '0') return false;
 
         const comment = (t.comment || '').toLowerCase();
-        // Match "поставка" + supplier name
-        const isSupplyComment = comment.includes('поставка') && comment.includes(supplierName);
-        // Or direct supplier name match in comment
-        const hasSupplierName = comment.includes(supplierName);
+        const categoryName = (t.category_name || t.name || '').toLowerCase();
 
-        return isSupplyComment || hasSupplierName;
+        // Match "поставка" or "накладная" + supplier name in comment
+        const isSupplyComment = (comment.includes('поставка') || comment.includes('накладная')) && comment.includes(supplierName);
+        // Or direct supplier name match in comment
+        const hasSupplierInComment = comment.includes(supplierName);
+        // Or supplier name in category (e.g. "Поставки" category)
+        const isSupplyCategory = categoryName.includes('поставк') || categoryName.includes('товар');
+
+        return isSupplyComment || (hasSupplierInComment && isSupplyCategory) || (hasSupplierInComment && comment.length < 50);
     });
 
     if (supplyTransactions.length === 0) return 0;
