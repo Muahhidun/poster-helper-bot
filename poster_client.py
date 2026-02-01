@@ -253,6 +253,47 @@ class PosterClient:
         else:
             raise Exception("Transaction creation failed: no ID returned")
 
+    async def update_transaction(
+        self,
+        transaction_id: int,
+        amount: int,
+        comment: str = None,
+        category_id: int = None
+    ) -> bool:
+        """
+        Update existing finance transaction
+
+        Args:
+            transaction_id: ID of transaction to update
+            amount: New amount in KZT
+            comment: New comment (optional)
+            category_id: New category ID (optional)
+
+        Returns:
+            True if update was successful
+        """
+        data = {
+            'transaction_id': transaction_id,
+            'amount_from': int(amount)
+        }
+
+        if comment is not None:
+            data['comment'] = comment
+        if category_id is not None:
+            data['category'] = category_id
+
+        logger.info(f"Updating transaction {transaction_id}: {data}")
+        result = await self._request('POST', 'finance.updateTransactions', data=data)
+
+        # Check response
+        if isinstance(result, dict):
+            response = result.get('response', result)
+            # Success typically returns the transaction_id or empty dict
+            if response or response == {}:
+                logger.info(f"✅ Transaction {transaction_id} updated successfully")
+                return True
+        return False
+
     # === Storage Methods ===
 
     async def get_storages(self) -> List[Dict]:
