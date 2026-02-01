@@ -50,7 +50,7 @@
                         {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
                     {% if 'kaspi' not in (ns.account_name or draft.source|default('')|lower) and 'халык' not in ns.account_name and 'halyk' not in ns.account_name %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -58,6 +58,7 @@
                         data-account-id="{{ draft.account_id or '' }}"
                         data-poster-account-id="{{ draft.poster_account_id or '' }}"
                         data-completion-status="{{ draft.completion_status or 'pending' }}"
+                        data-is-income="{{ draft.is_income|default(0)|int }}"
                         data-account-type="cash">
                         <td>
                             <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
@@ -71,7 +72,7 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1" min="0">
+                                   data-id="{{ draft.id }}" step="1">
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -80,9 +81,12 @@
                         <td class="type">
                             <button type="button" class="btn-type"
                                     data-id="{{ draft.id }}"
-                                    data-type="{{ draft.expense_type }}">
+                                    data-type="{{ draft.expense_type }}"
+                                    data-is-income="{{ draft.is_income|default(0)|int }}">
                                 {% if draft.expense_type == 'supply' %}
                                     📦 поставка
+                                {% elif draft.is_income %}
+                                    💵 доход
                                 {% else %}
                                     💰 транзакция
                                 {% endif %}
@@ -146,7 +150,7 @@
                         {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
                     {% if 'kaspi' in (ns.account_name or draft.source|default('')|lower) %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -154,6 +158,7 @@
                         data-account-id="{{ draft.account_id or '' }}"
                         data-poster-account-id="{{ draft.poster_account_id or '' }}"
                         data-completion-status="{{ draft.completion_status or 'pending' }}"
+                        data-is-income="{{ draft.is_income|default(0)|int }}"
                         data-account-type="kaspi">
                         <td>
                             <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
@@ -167,7 +172,7 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1" min="0">
+                                   data-id="{{ draft.id }}" step="1">
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -176,9 +181,12 @@
                         <td class="type">
                             <button type="button" class="btn-type"
                                     data-id="{{ draft.id }}"
-                                    data-type="{{ draft.expense_type }}">
+                                    data-type="{{ draft.expense_type }}"
+                                    data-is-income="{{ draft.is_income|default(0)|int }}">
                                 {% if draft.expense_type == 'supply' %}
                                     📦 поставка
+                                {% elif draft.is_income %}
+                                    💵 доход
                                 {% else %}
                                     💰 транзакция
                                 {% endif %}
@@ -242,7 +250,7 @@
                         {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
                     {% if 'халык' in ns.account_name or 'halyk' in ns.account_name %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -250,6 +258,7 @@
                         data-account-id="{{ draft.account_id or '' }}"
                         data-poster-account-id="{{ draft.poster_account_id or '' }}"
                         data-completion-status="{{ draft.completion_status or 'pending' }}"
+                        data-is-income="{{ draft.is_income|default(0)|int }}"
                         data-account-type="halyk">
                         <td>
                             <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
@@ -263,7 +272,7 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1" min="0">
+                                   data-id="{{ draft.id }}" step="1">
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -272,9 +281,12 @@
                         <td class="type">
                             <button type="button" class="btn-type"
                                     data-id="{{ draft.id }}"
-                                    data-type="{{ draft.expense_type }}">
+                                    data-type="{{ draft.expense_type }}"
+                                    data-is-income="{{ draft.is_income|default(0)|int }}">
                                 {% if draft.expense_type == 'supply' %}
                                     📦 поставка
+                                {% elif draft.is_income %}
+                                    💵 доход
                                 {% else %}
                                     💰 транзакция
                                 {% endif %}
@@ -551,6 +563,15 @@ h1 {
 
 .draft-row.transaction td:first-child {
     box-shadow: inset 3px 0 0 var(--accent-green);
+}
+
+/* Income row - gold/yellow indicator */
+.draft-row.income td:first-child {
+    box-shadow: inset 3px 0 0 #f59e0b !important;
+}
+
+.draft-row.income {
+    background: #fffef0 !important;
 }
 
 /* Status styles */
@@ -1539,7 +1560,7 @@ function createRowElement(draft) {
         </td>
         <td class="amount">
             <input type="number" class="edit-amount" value="${draft.amount || 0}"
-                   data-id="${draft.id}" step="1" min="0">
+                   data-id="${draft.id}" step="1">
         </td>
         <td class="description">
             <input type="text" class="edit-description" value="${draft.description || ''}"

@@ -270,6 +270,12 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Migration: add is_income column for income transactions (доходы, например продажа масла)
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN is_income INTEGER DEFAULT 0")
+            except Exception:
+                pass  # Column already exists
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
@@ -524,6 +530,12 @@ class UserDatabase:
             # Migration: add poster_transaction_id column for linking drafts to Poster transactions
             try:
                 cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS poster_transaction_id TEXT")
+            except Exception:
+                pass  # Column already exists
+
+            # Migration: add is_income column for income transactions (доходы, например продажа масла)
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS is_income INTEGER DEFAULT 0")
             except Exception:
                 pass  # Column already exists
 
@@ -2257,10 +2269,14 @@ class UserDatabase:
         source: str = "cash",
         account_id: int = None,
         poster_account_id: int = None,
-        poster_transaction_id: str = None
+        poster_transaction_id: str = None,
+        is_income: bool = False
     ) -> Optional[int]:
         """
         Создать один черновик расхода (для ручного ввода или синхронизации из Poster)
+
+        Args:
+            is_income: True если это доход (например, продажа масла), False для расхода
 
         Returns:
             ID созданного черновика или None при ошибке
@@ -2269,25 +2285,27 @@ class UserDatabase:
             conn = self._get_connection()
             cursor = conn.cursor()
 
+            is_income_int = 1 if is_income else 0
+
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id))
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int))
                 draft_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id))
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int))
                 draft_id = cursor.fetchone()[0]
 
             conn.commit()
             conn.close()
-            logger.info(f"✅ Created expense draft #{draft_id} for user {telegram_user_id}")
+            logger.info(f"✅ Created expense draft #{draft_id} for user {telegram_user_id} (income={is_income})")
             return draft_id
 
         except Exception as e:

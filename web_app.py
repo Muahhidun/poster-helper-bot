@@ -1244,6 +1244,7 @@ def sync_expenses_from_poster():
                 try:
                     # Fetch today's transactions
                     transactions = await client.get_transactions(date_str, date_str)
+                    print(f"📅 Fetched {len(transactions)} transactions for {date_str} from {account['account_name']}")
 
                     # Also fetch finance accounts for mapping account_id -> account name
                     finance_accounts = await client.get_accounts()
@@ -1255,8 +1256,9 @@ def sync_expenses_from_poster():
                         print(f"   - ID {acc.get('account_id')}: {acc.get('name')}")
 
                     for txn in transactions:
-                        # Skip non-expense transactions (type 0 = expense)
-                        if str(txn.get('type')) != '0':
+                        # Accept both expense (type=0) and income (type=1) transactions
+                        txn_type = str(txn.get('type'))
+                        if txn_type not in ('0', '1'):
                             continue
 
                         # Build unique poster_transaction_id
@@ -1271,13 +1273,21 @@ def sync_expenses_from_poster():
 
                         # Extract transaction data
                         # Amount in Poster is in kopecks (tiyins), divide by 100
+                        # Use absolute value - Poster shows expenses as negative, but we store positive
                         amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
-                        amount = float(amount_raw) / 100
+                        amount = abs(float(amount_raw)) / 100
 
                         # Description from category name or comment
                         category_name = txn.get('name', '') or txn.get('category_name', '')
                         comment = txn.get('comment', '') or ''
                         description = comment if comment else category_name
+
+                        # Detect if this is an income transaction by category name
+                        category_lower = category_name.lower()
+                        is_income = txn_type == '1' or 'приход' in category_lower or 'поступлен' in category_lower
+
+                        if is_income:
+                            print(f"   💰 Income detected: category='{category_name}', type={txn_type}")
 
                         # Determine source (cash/kaspi/halyk) from account name
                         # Try both 'account_from_id' and 'account_from' fields
@@ -1298,7 +1308,7 @@ def sync_expenses_from_poster():
                         elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
                             source = 'halyk'
 
-                        print(f"   -> source detected: {source}")
+                        print(f"   -> source detected: {source}, is_income: {is_income}")
 
                         # Create draft
                         draft_id = db.create_expense_draft(
@@ -1310,12 +1320,14 @@ def sync_expenses_from_poster():
                             source=source,
                             account_id=int(account_from_id) if account_from_id else None,
                             poster_account_id=account['id'],
-                            poster_transaction_id=poster_transaction_id
+                            poster_transaction_id=poster_transaction_id,
+                            is_income=is_income
                         )
 
                         if draft_id:
                             synced_count += 1
-                            print(f"✅ Synced transaction #{txn_id} from {account['account_name']}: {description} - {amount}₸")
+                            txn_type_label = "income" if is_income else "expense"
+                            print(f"✅ Synced {txn_type_label} #{txn_id} from {account['account_name']}: {description} - {amount}₸")
 
                 finally:
                     await client.close()
@@ -1455,9 +1467,13 @@ def process_drafts():
                                 else:
                                     raise Exception(f"Invalid poster_transaction_id format: {poster_txn_id}")
                             else:
+                                # Determine transaction type: 0 = expense, 1 = income
+                                is_income = bool(draft.get('is_income'))
+                                txn_type = 1 if is_income else 0
+
                                 # Create new transaction
                                 await client.create_transaction(
-                                    transaction_type=0,
+                                    transaction_type=txn_type,
                                     category_id=cat_id,
                                     account_from_id=account_id,
                                     amount=int(draft['amount']),
@@ -1465,7 +1481,8 @@ def process_drafts():
                                 )
                                 total_success += 1
                                 all_processed_ids.append(draft['id'])
-                                print(f"✅ Created transaction in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
+                                type_label = "доход" if is_income else "расход"
+                                print(f"✅ Created {type_label} in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
                         except Exception as e:
                             print(f"Error processing transaction in {account['account_name']}: {e}")
 
