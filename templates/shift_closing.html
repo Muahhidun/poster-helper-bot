@@ -171,6 +171,24 @@
             </div>
         </div>
     </div>
+
+    <!-- Expense Report Section -->
+    <div class="expense-report-section">
+        <div class="expense-report-header">
+            <h3>📋 Отчёт по расходам</h3>
+            <button type="button" class="btn btn-primary" onclick="loadExpenseReport()">
+                Сформировать отчёт
+            </button>
+        </div>
+        <div id="expense-report-container" style="display: none;">
+            <div class="report-actions">
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyReport()">
+                    📋 Скопировать
+                </button>
+            </div>
+            <pre id="expense-report-text" class="expense-report-text"></pre>
+        </div>
+    </div>
 </div>
 
 <style>
@@ -485,6 +503,59 @@ h1 {
     opacity: 0.6;
     pointer-events: none;
 }
+
+/* Expense Report Section */
+.expense-report-section {
+    margin-top: 30px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.expense-report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.expense-report-header h3 {
+    margin: 0;
+    color: #333;
+}
+
+.report-actions {
+    margin-bottom: 10px;
+    text-align: right;
+}
+
+.expense-report-text {
+    background: #1a1a2e;
+    color: #eee;
+    padding: 20px;
+    border-radius: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.expense-report-text .section-header {
+    color: #fff;
+    font-weight: 600;
+}
+
+.expense-report-text .total-line {
+    color: #4ade80;
+}
+
+.expense-report-text .income-line {
+    color: #fbbf24;
+}
 </style>
 
 <script>
@@ -626,6 +697,45 @@ function calculate() {
 }
 
 // Initialize
+// Load expense report
+async function loadExpenseReport() {
+    const container = document.getElementById('expense-report-container');
+    const textEl = document.getElementById('expense-report-text');
+
+    try {
+        const response = await fetch('/api/expense-report');
+        const data = await response.json();
+
+        if (data.success) {
+            textEl.textContent = data.report;
+            container.style.display = 'block';
+        } else {
+            alert('Ошибка: ' + (data.error || 'Не удалось загрузить отчёт'));
+        }
+    } catch (err) {
+        console.error('Error loading expense report:', err);
+        alert('Ошибка загрузки отчёта');
+    }
+}
+
+// Copy report to clipboard
+function copyReport() {
+    const text = document.getElementById('expense-report-text').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Скопировано!');
+    }).catch(err => {
+        console.error('Copy failed:', err);
+        // Fallback for older browsers
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('Скопировано!');
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Set current date
     const today = new Date();
