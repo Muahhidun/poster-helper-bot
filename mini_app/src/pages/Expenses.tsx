@@ -52,14 +52,19 @@ function EditableCell({
   className?: string
 }) {
   const [localValue, setLocalValue] = useState(value)
+  const [isFocused, setIsFocused] = useState(false)
   const [isSaved, setIsSaved] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Only sync from props when NOT focused (prevents reset while user is typing)
   useEffect(() => {
-    setLocalValue(value)
-  }, [value])
+    if (!isFocused) {
+      setLocalValue(value)
+    }
+  }, [value, isFocused])
 
   const handleBlur = () => {
+    setIsFocused(false)
     if (localValue !== value) {
       onSave(draftId, field, localValue)
       setIsSaved(true)
@@ -68,6 +73,7 @@ function EditableCell({
   }
 
   const handleFocus = () => {
+    setIsFocused(true)
     if (type === 'number' && localValue === 0) {
       setLocalValue('')
     }
@@ -116,15 +122,19 @@ function CategoryAutocomplete({
   onSave: (id: number, field: string, value: string) => void
 }) {
   const [localValue, setLocalValue] = useState(value || '')
+  const [isFocused, setIsFocused] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const [isSaved, setIsSaved] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
 
+  // Only sync from props when NOT focused
   useEffect(() => {
-    setLocalValue(value || '')
-  }, [value])
+    if (!isFocused) {
+      setLocalValue(value || '')
+    }
+  }, [value, isFocused])
 
   const filteredCategories = useMemo(() => {
     const query = localValue.toLowerCase().trim()
@@ -163,6 +173,7 @@ function CategoryAutocomplete({
 
   const handleBlur = () => {
     setTimeout(() => {
+      setIsFocused(false)
       setIsOpen(false)
       if (localValue !== value) {
         onSave(draftId, 'category', localValue)
@@ -202,7 +213,7 @@ function CategoryAutocomplete({
           setIsOpen(true)
           setSelectedIndex(-1)
         }}
-        onFocus={() => setIsOpen(true)}
+        onFocus={() => { setIsFocused(true); setIsOpen(true) }}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         placeholder="Категория..."
