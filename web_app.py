@@ -1318,7 +1318,7 @@ def sync_expenses_from_poster():
 
                         print(f"   -> source detected: {source}, is_income: {is_income}")
 
-                        # Create draft
+                        # Create draft - mark as 'completed' since it's already in Poster
                         draft_id = db.create_expense_draft(
                             telegram_user_id=TELEGRAM_USER_ID,
                             amount=amount,
@@ -1329,7 +1329,8 @@ def sync_expenses_from_poster():
                             account_id=int(account_from_id) if account_from_id else None,
                             poster_account_id=account['id'],
                             poster_transaction_id=poster_transaction_id,
-                            is_income=is_income
+                            is_income=is_income,
+                            completion_status='completed'  # Already in Poster!
                         )
 
                         if draft_id:
