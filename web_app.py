@@ -1502,11 +1502,11 @@ def process_drafts():
         success, processed_ids = loop.run_until_complete(create_all_transactions())
         loop.close()
 
-        # Mark as processed
+        # Mark as in Poster (stay visible with green status)
         if processed_ids:
-            db.mark_drafts_processed(processed_ids)
+            db.mark_drafts_in_poster(processed_ids)
 
-        flash(f'Обработано {success} транзакций в Poster', 'success')
+        flash(f'Создано {success} транзакций в Poster ✅', 'success')
 
     except Exception as e:
         flash(f'Ошибка: {str(e)}', 'error')
@@ -2440,6 +2440,114 @@ def api_shift_closing_calculate():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/expense-report')
+def api_expense_report():
+    """Generate expense report in text format for shift closing"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+
+    # Get today's pending drafts (Kazakhstan time UTC+5)
+    kz_tz = timezone(timedelta(hours=5))
+    today = datetime.now(kz_tz)
+    today_str = today.strftime("%Y-%m-%d")
+    date_display = today.strftime("%d.%m")
+
+    try:
+        # Get all pending expense drafts for today
+        all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
+
+        # Filter to today's drafts
+        drafts = []
+        for d in all_drafts:
+            created_at = str(d.get('created_at', ''))[:10]
+            if created_at == today_str:
+                drafts.append(d)
+
+        # Group by source (cash, kaspi, halyk)
+        by_source = {'cash': [], 'kaspi': [], 'halyk': []}
+        for d in drafts:
+            source = d.get('source', 'cash')
+            if source not in by_source:
+                source = 'cash'
+            by_source[source].append(d)
+
+        # Build report
+        lines = [f"Закрытие смены {date_display}", ""]
+
+        # Kaspi section
+        if by_source['kaspi']:
+            lines.append("Каспий")
+            total = 0
+            for d in by_source['kaspi']:
+                amount = int(d.get('amount', 0))
+                desc = d.get('description', '')
+                is_income = d.get('is_income', 0)
+                if is_income:
+                    lines.append(f"- [x] +{amount} {desc}")
+                    total += amount
+                else:
+                    lines.append(f"- [x] {amount} {desc}")
+                    total -= amount
+            lines.append(f"Итого {'+' if total >= 0 else ''}{total}")
+            lines.append("")
+
+        # Cash section
+        if by_source['cash']:
+            lines.append("Наличка")
+            total_expense = 0
+            total_income = 0
+            for d in by_source['cash']:
+                amount = int(d.get('amount', 0))
+                desc = d.get('description', '')
+                is_income = d.get('is_income', 0)
+                if is_income:
+                    lines.append(f"- [x] +{amount} {desc}")
+                    total_income += amount
+                else:
+                    lines.append(f"- [x] {amount} {desc}")
+                    total_expense += amount
+            net = total_income - total_expense
+            lines.append(f"Расход: {total_expense}, Приход: +{total_income}")
+            lines.append(f"Итого {'+' if net >= 0 else ''}{net}")
+            lines.append("")
+
+        # Halyk section
+        if by_source['halyk']:
+            lines.append("Халык банк")
+            total = 0
+            for d in by_source['halyk']:
+                amount = int(d.get('amount', 0))
+                desc = d.get('description', '')
+                is_income = d.get('is_income', 0)
+                if is_income:
+                    lines.append(f"- [x] +{amount} {desc}")
+                    total += amount
+                else:
+                    lines.append(f"- [x] {amount} {desc}")
+                    total -= amount
+            lines.append(f"Итого {'+' if total >= 0 else ''}{total}")
+            lines.append("")
+
+        report = "\n".join(lines)
+
+        return jsonify({
+            'success': True,
+            'report': report,
+            'date': today_str,
+            'counts': {
+                'cash': len(by_source['cash']),
+                'kaspi': len(by_source['kaspi']),
+                'halyk': len(by_source['halyk'])
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ========================================

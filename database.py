@@ -2398,6 +2398,43 @@ class UserDatabase:
             logger.error(f"Failed to mark drafts processed: {e}")
             return 0
 
+    def mark_drafts_in_poster(self, draft_ids: list) -> int:
+        """
+        Пометить черновики как созданные в Poster (completion_status='completed')
+        но оставить на странице (status='pending')
+        """
+        if not draft_ids:
+            return 0
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                placeholders = ",".join(["?" for _ in draft_ids])
+                cursor.execute(f"""
+                    UPDATE expense_drafts
+                    SET completion_status = 'completed'
+                    WHERE id IN ({placeholders})
+                """, draft_ids)
+            else:
+                placeholders = ",".join(["%s" for _ in draft_ids])
+                cursor.execute(f"""
+                    UPDATE expense_drafts
+                    SET completion_status = 'completed'
+                    WHERE id IN ({placeholders})
+                """, draft_ids)
+
+            updated = cursor.rowcount
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Marked {updated} drafts as in Poster (staying visible)")
+            return updated
+
+        except Exception as e:
+            logger.error(f"Failed to mark drafts in poster: {e}")
+            return 0
+
     # ==================== Supply Drafts Methods ====================
 
     def save_supply_draft(
