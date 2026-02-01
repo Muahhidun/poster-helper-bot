@@ -11,20 +11,6 @@
         </button>
     </div>
 
-    {% if pending_supplies %}
-    <div class="alert alert-info">
-        <strong>📋 Ожидают накладных:</strong> {{ pending_supplies|length }} позиций из листа кассира
-        <ul class="mb-0 mt-2">
-            {% for item in pending_supplies[:5] %}
-            <li>{{ "{:,.0f}".format(item.amount) }}₸ — {{ item.description[:40] }}{% if item.description|length > 40 %}...{% endif %}</li>
-            {% endfor %}
-            {% if pending_supplies|length > 5 %}
-            <li>... и ещё {{ pending_supplies|length - 5 }} позиций</li>
-            {% endif %}
-        </ul>
-    </div>
-    {% endif %}
-
     <div class="supplies-list" id="supplies-list">
         {% for draft in drafts %}
         <div class="supply-card" data-id="{{ draft.id }}">
