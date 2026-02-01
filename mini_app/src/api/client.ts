@@ -19,6 +19,10 @@ import type {
   ShiftClosingPosterData,
   ShiftClosingInput,
   ShiftClosingCalculateResponse,
+  ExpensesResponse,
+  UpdateExpenseRequest,
+  CreateExpenseRequest,
+  SyncFromPosterResponse,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -195,6 +199,58 @@ class ApiClient {
     return this.request<ShiftClosingCalculateResponse>('/api/shift-closing/calculate', {
       method: 'POST',
       body: JSON.stringify(data),
+    })
+  }
+
+  // Expenses
+  async getExpenses(): Promise<ExpensesResponse> {
+    return this.request<ExpensesResponse>('/api/expenses')
+  }
+
+  async updateExpense(id: number, data: UpdateExpenseRequest): Promise<{ success: boolean }> {
+    return this.request(`/api/expenses/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async createExpense(data: CreateExpenseRequest): Promise<{ id: number; success: boolean }> {
+    return this.request('/api/expenses', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteExpense(id: number): Promise<{ success: boolean }> {
+    return this.request(`/api/expenses/${id}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async syncExpensesFromPoster(): Promise<SyncFromPosterResponse> {
+    return this.request<SyncFromPosterResponse>('/api/expenses/sync-from-poster', {
+      method: 'POST',
+    })
+  }
+
+  async processExpenseDrafts(draftIds: number[]): Promise<{ success: boolean }> {
+    return this.request('/api/expenses/process', {
+      method: 'POST',
+      body: JSON.stringify({ draft_ids: draftIds }),
+    })
+  }
+
+  async toggleExpenseType(id: number, expenseType: 'transaction' | 'supply'): Promise<{ success: boolean }> {
+    return this.request(`/api/expenses/${id}/toggle-type`, {
+      method: 'POST',
+      body: JSON.stringify({ expense_type: expenseType }),
+    })
+  }
+
+  async updateExpenseCompletionStatus(id: number, status: 'pending' | 'partial' | 'completed'): Promise<{ success: boolean }> {
+    return this.request(`/api/expenses/${id}/completion-status`, {
+      method: 'POST',
+      body: JSON.stringify({ completion_status: status }),
     })
   }
 }

@@ -7,6 +7,7 @@ import { AppLayout } from './layouts/AppLayout'
 
 // Pages
 import { Dashboard } from './pages/Dashboard'
+import { Expenses } from './pages/Expenses'
 import { SupplyHistory } from './pages/SupplyHistory'
 import { SupplyDetail } from './pages/SupplyDetail'
 import { CreateSupply } from './pages/CreateSupply'
@@ -55,7 +56,7 @@ function AppContent() {
     <AppLayout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/expenses" element={<Dashboard />} /> {/* TODO: Create Expenses page */}
+        <Route path="/expenses" element={<Expenses />} />
         <Route path="/supplies" element={<SupplyHistory />} />
         <Route path="/supplies/new" element={<CreateSupply />} />
         <Route path="/supplies/:id" element={<SupplyDetail />} />
