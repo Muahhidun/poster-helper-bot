@@ -1244,6 +1244,7 @@ def sync_expenses_from_poster():
                 try:
                     # Fetch today's transactions
                     transactions = await client.get_transactions(date_str, date_str)
+                    print(f"📅 Fetched {len(transactions)} transactions for {date_str} from {account['account_name']}")
 
                     # Also fetch finance accounts for mapping account_id -> account name
                     finance_accounts = await client.get_accounts()

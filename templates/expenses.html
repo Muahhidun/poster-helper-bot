@@ -71,7 +71,7 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1" min="0">
+                                   data-id="{{ draft.id }}" step="1">
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -167,7 +167,7 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1" min="0">
+                                   data-id="{{ draft.id }}" step="1">
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -263,7 +263,7 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1" min="0">
+                                   data-id="{{ draft.id }}" step="1">
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -1539,7 +1539,7 @@ function createRowElement(draft) {
         </td>
         <td class="amount">
             <input type="number" class="edit-amount" value="${draft.amount || 0}"
-                   data-id="${draft.id}" step="1" min="0">
+                   data-id="${draft.id}" step="1">
         </td>
         <td class="description">
             <input type="text" class="edit-description" value="${draft.description || ''}"
