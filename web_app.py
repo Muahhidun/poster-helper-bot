@@ -1734,11 +1734,22 @@ def api_sync_expenses_from_poster():
                         comment = txn.get('comment', '') or ''
                         description = comment if comment else category_name
 
-                        account_from_id = txn.get('account_from_id') or txn.get('account_from')
+                        # Try multiple field names for account ID
+                        account_from_id = (
+                            txn.get('account_from_id') or
+                            txn.get('account_from') or
+                            txn.get('account_id') or
+                            txn.get('account')
+                        )
+                        # Also check direct account_name field
+                        txn_account_name = txn.get('account_name', '') or ''
+
                         finance_acc = account_map.get(str(account_from_id), {})
+                        # Use finance account name or fall back to direct txn account_name
+                        finance_acc_name_raw = finance_acc.get('name') or txn_account_name
 
                         # Debug: log account lookup
-                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, found_acc='{finance_acc.get('name', 'NOT FOUND')}'", flush=True)
+                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('name', 'NOT FOUND')}'", flush=True)
 
                         # Check if already synced
                         existing = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
@@ -1752,8 +1763,8 @@ def api_sync_expenses_from_poster():
                             skipped += 1
                             continue
 
-                        # Determine source from finance account name
-                        finance_acc_name = finance_acc.get('name', '').lower()
+                        # Determine source from finance account name (or direct txn account_name)
+                        finance_acc_name = finance_acc_name_raw.lower() if finance_acc_name_raw else ''
                         source = 'cash'
                         if 'kaspi' in finance_acc_name:
                             source = 'kaspi'
