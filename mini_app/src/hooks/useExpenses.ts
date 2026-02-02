@@ -164,7 +164,8 @@ const categoryNameMap: Record<string, string> = {
   'book_category_action_actualization': 'Актуализация',
 }
 
-export function getCategoryDisplayName(rawName: string): string {
+export function getCategoryDisplayName(rawName: string | null | undefined): string {
+  if (!rawName) return ''
   return categoryNameMap[rawName] || rawName
 }
 

@@ -373,27 +373,38 @@ function EmptyDraftRow({
 }) {
   const [localAmount, setLocalAmount] = useState<number | ''>('')
   const [localDescription, setLocalDescription] = useState('')
+  const rowRef = useRef<HTMLTableRowElement>(null)
+  const isSubmittingRef = useRef(false)
 
-  const handleAmountBlur = () => {
-    if (localAmount && localAmount > 0) {
-      onCreate(type, { amount: localAmount, description: localDescription })
-      setLocalAmount('')
-      setLocalDescription('')
-    }
-  }
+  // Single blur handler - only create draft when focus leaves the entire row
+  const handleFieldBlur = () => {
+    if (isSubmittingRef.current || isCreating) return
 
-  const handleDescriptionBlur = () => {
-    if (localDescription.trim()) {
-      onCreate(type, { amount: localAmount || 0, description: localDescription })
-      setLocalAmount('')
-      setLocalDescription('')
-    }
+    setTimeout(() => {
+      // If focus is still within the row, don't create draft yet
+      if (rowRef.current?.contains(document.activeElement)) return
+
+      // Create only if there's data
+      if ((localAmount && localAmount > 0) || localDescription.trim()) {
+        isSubmittingRef.current = true
+        onCreate(type, {
+          amount: localAmount || 0,
+          description: localDescription
+        })
+        setLocalAmount('')
+        setLocalDescription('')
+        // Reset after a small delay to allow for React Query refresh
+        setTimeout(() => {
+          isSubmittingRef.current = false
+        }, 500)
+      }
+    }, 50)
   }
 
   const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id
 
   return (
-    <tr className="draft-row border-l-4 border-l-gray-200 bg-gray-50/50 hover:bg-gray-100/50 transition-colors">
+    <tr ref={rowRef} className="draft-row border-l-4 border-l-gray-200 bg-gray-50/50 hover:bg-gray-100/50 transition-colors">
       <td className="px-3 py-2 border-b border-gray-100">
         <input type="checkbox" disabled className="w-4 h-4 opacity-30" />
       </td>
@@ -405,7 +416,7 @@ function EmptyDraftRow({
           type="number"
           value={localAmount}
           onChange={(e) => setLocalAmount(e.target.value === '' ? '' : Number(e.target.value))}
-          onBlur={handleAmountBlur}
+          onBlur={handleFieldBlur}
           onFocus={() => localAmount === 0 && setLocalAmount('')}
           placeholder="0"
           disabled={isCreating}
@@ -417,7 +428,7 @@ function EmptyDraftRow({
           type="text"
           value={localDescription}
           onChange={(e) => setLocalDescription(e.target.value)}
-          onBlur={handleDescriptionBlur}
+          onBlur={handleFieldBlur}
           placeholder="Новая запись..."
           disabled={isCreating}
           className="w-44 px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 placeholder:text-gray-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 focus:bg-white disabled:opacity-50"
