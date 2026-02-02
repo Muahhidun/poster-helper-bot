@@ -1711,7 +1711,12 @@ def api_sync_expenses_from_poster():
                     for acc in finance_accounts:
                         print(f"  - account_id={acc.get('account_id')}, name='{acc.get('name')}'", flush=True)
 
-                    for txn in transactions:
+                    for idx, txn in enumerate(transactions):
+                        # Debug: log first transaction structure
+                        if idx == 0:
+                            print(f"[SYNC DEBUG] First transaction keys: {list(txn.keys())}", flush=True)
+                            print(f"[SYNC DEBUG] First transaction: {txn}", flush=True)
+
                         txn_type = str(txn.get('type'))
                         category_name = txn.get('name', '') or txn.get('category_name', '')
 
