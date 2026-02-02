@@ -86,13 +86,17 @@ def load_items_from_csv():
         except Exception as e:
             print(f"Error loading ingredients: {e}")
 
-    # Load products
+    # Load products (only "Напитки" category - drinks that can be supplied)
     products_csv = config.DATA_DIR / "poster_products.csv"
     if products_csv.exists():
         try:
             with open(products_csv, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
+                    # Only include products from "Напитки" category
+                    # Skip tech cards (pizzas, burgers, doner, etc.)
+                    if row.get('category_name', '') != 'Напитки':
+                        continue
                     items.append({
                         'id': int(row['product_id']),
                         'name': row['product_name'],
@@ -523,14 +527,20 @@ def search_items():
                                 'poster_account_name': acc['account_name']
                             })
 
-                    # Also fetch products (товары) - items like Ayran, Coca-Cola, etc.
-                    # that are not ingredients but can be supplied and sold
+                    # Also fetch products (товары) - only drinks like Ayran, Coca-Cola, etc.
+                    # that can be supplied to warehouse. Skip tech cards (pizzas, burgers, etc.)
                     if source in ['all', 'product', 'ingredient']:
                         products = loop.run_until_complete(poster_client.get_products())
                         print(f"[DEBUG] Fetched {len(products)} products from {acc['account_name']}", flush=True)
                         if products:
                             print(f"[DEBUG] First 3 products: {[p.get('product_name') for p in products[:3]]}", flush=True)
                         for prod in products:
+                            # Only include products from "Напитки" category for supplies
+                            # Tech cards (Pizzas, Burgers, Doner etc.) should not appear in supplies
+                            category = prod.get('category_name', '')
+                            if category != 'Напитки':
+                                continue
+
                             name = prod.get('product_name', '')
                             name_lower = name.lower()
 
