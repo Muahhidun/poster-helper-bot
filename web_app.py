@@ -2441,6 +2441,18 @@ def list_supplies():
                             'poster_account_name': acc.get('account_name', '')
                         })
 
+                    # Also fetch products (товары) - items like Ayran, Coca-Cola, etc.
+                    products = loop.run_until_complete(poster_client.get_products())
+                    for prod in products:
+                        name = prod.get('product_name', '')
+                        items.append({
+                            'id': int(prod.get('product_id', 0)),
+                            'name': name,
+                            'type': 'product',
+                            'poster_account_id': acc['id'],
+                            'poster_account_name': acc.get('account_name', '')
+                        })
+
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
