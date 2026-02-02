@@ -828,8 +828,17 @@ export function Expenses() {
       halyk: [],
     }
 
+    // Debug: log draft sources
+    console.log('[DEBUG] Grouping drafts:', drafts.map(d => ({
+      id: d.id,
+      source: d.source,
+      account_id: d.account_id,
+      description: d.description?.slice(0, 20)
+    })))
+
     drafts.forEach(draft => {
       const type = getAccountType(draft, accounts)
+      console.log(`[DEBUG] draft ${draft.id}: source='${draft.source}' -> type='${type}'`)
       groups[type].push(draft)
     })
 

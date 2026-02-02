@@ -1707,9 +1707,9 @@ def api_sync_expenses_from_poster():
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
                     # Debug: log finance accounts
-                    print(f"[SYNC DEBUG] Finance accounts for {account['account_name']}:")
+                    print(f"[SYNC DEBUG] Finance accounts for {account['account_name']}:", flush=True)
                     for acc in finance_accounts:
-                        print(f"  - account_id={acc.get('account_id')}, name='{acc.get('name')}'")
+                        print(f"  - account_id={acc.get('account_id')}, name='{acc.get('name')}'", flush=True)
 
                     for txn in transactions:
                         txn_type = str(txn.get('type'))
@@ -1733,7 +1733,7 @@ def api_sync_expenses_from_poster():
                         finance_acc = account_map.get(str(account_from_id), {})
 
                         # Debug: log account lookup
-                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, found_acc='{finance_acc.get('name', 'NOT FOUND')}'")
+                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, found_acc='{finance_acc.get('name', 'NOT FOUND')}'", flush=True)
 
                         # Check if already synced
                         existing = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
@@ -1755,7 +1755,7 @@ def api_sync_expenses_from_poster():
                         elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
                             source = 'halyk'
 
-                        print(f"[SYNC DEBUG] txn={txn_id}, finance_acc_name='{finance_acc_name}', source='{source}'")
+                        print(f"[SYNC DEBUG] txn={txn_id}, finance_acc_name='{finance_acc_name}', source='{source}'", flush=True)
 
                         # Create expense draft
                         db.create_expense_draft(
