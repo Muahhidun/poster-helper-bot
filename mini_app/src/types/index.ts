@@ -390,7 +390,8 @@ export interface ExpenseDraft {
 
 export interface ExpenseCategory {
   category_id: number
-  category_name: string
+  category_name?: string  // May be empty for custom categories
+  name?: string           // Poster sometimes returns this instead of category_name
   poster_account_id: number
   poster_account_name: string
 }

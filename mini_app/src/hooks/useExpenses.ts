@@ -164,7 +164,19 @@ const categoryNameMap: Record<string, string> = {
   'book_category_action_actualization': 'Актуализация',
 }
 
-export function getCategoryDisplayName(rawName: string | null | undefined): string {
+// Handles both string and category object (like Flask: cat.category_name || cat.name)
+export function getCategoryDisplayName(
+  category: { category_name?: string; name?: string } | string | null | undefined
+): string {
+  if (!category) return ''
+
+  // If passed a string directly (backward compatibility)
+  if (typeof category === 'string') {
+    return categoryNameMap[category] || category
+  }
+
+  // If passed a category object - check both fields (like Flask does)
+  const rawName = category.category_name || category.name || ''
   if (!rawName) return ''
   return categoryNameMap[rawName] || rawName
 }

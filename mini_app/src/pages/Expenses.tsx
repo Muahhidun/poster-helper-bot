@@ -142,13 +142,13 @@ function CategoryAutocomplete({
       const aMatch = a.poster_account_id === posterAccountId ? 0 : 1
       const bMatch = b.poster_account_id === posterAccountId ? 0 : 1
       if (aMatch !== bMatch) return aMatch - bMatch
-      return getCategoryDisplayName(a.category_name).localeCompare(getCategoryDisplayName(b.category_name), 'ru')
+      return getCategoryDisplayName(a).localeCompare(getCategoryDisplayName(b), 'ru')
     })
 
     // Deduplicate by display name
     const seen = new Set<string>()
     return sorted.filter(c => {
-      const displayName = getCategoryDisplayName(c.category_name).toLowerCase()
+      const displayName = getCategoryDisplayName(c).toLowerCase()
       if (!displayName || seen.has(displayName)) return false
       seen.add(displayName)
       return true
@@ -163,7 +163,7 @@ function CategoryAutocomplete({
     if (query.length < 1) return allCategories.slice(0, 15)
 
     return allCategories.filter(c => {
-      const displayName = getCategoryDisplayName(c.category_name)
+      const displayName = getCategoryDisplayName(c)
       return displayName.toLowerCase().includes(query)
     }).slice(0, 10)
   }, [localValue, allCategories])
@@ -183,14 +183,14 @@ function CategoryAutocomplete({
       // Only save if value changed AND it's a valid category (or empty to clear)
       if (localValue !== value) {
         const isValidCategory = localValue === '' || allCategories.some(c =>
-          getCategoryDisplayName(c.category_name).toLowerCase() === localValue.toLowerCase()
+          getCategoryDisplayName(c).toLowerCase() === localValue.toLowerCase()
         )
         if (isValidCategory) {
           // Find the exact category name (with proper casing)
           const exactMatch = allCategories.find(c =>
-            getCategoryDisplayName(c.category_name).toLowerCase() === localValue.toLowerCase()
+            getCategoryDisplayName(c).toLowerCase() === localValue.toLowerCase()
           )
-          const finalValue = exactMatch ? getCategoryDisplayName(exactMatch.category_name) : localValue
+          const finalValue = exactMatch ? getCategoryDisplayName(exactMatch) : localValue
           setLocalValue(finalValue)
           onSave(draftId, 'category', finalValue)
         } else {
@@ -213,10 +213,10 @@ function CategoryAutocomplete({
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       if (selectedIndex >= 0 && filteredCategories[selectedIndex]) {
         e.preventDefault()
-        handleSelect(getCategoryDisplayName(filteredCategories[selectedIndex].category_name))
+        handleSelect(getCategoryDisplayName(filteredCategories[selectedIndex]))
       } else if (filteredCategories.length === 1) {
         e.preventDefault()
-        handleSelect(getCategoryDisplayName(filteredCategories[0].category_name))
+        handleSelect(getCategoryDisplayName(filteredCategories[0]))
       }
     } else if (e.key === 'Escape') {
       setIsOpen(false)
@@ -253,7 +253,7 @@ function CategoryAutocomplete({
           className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-50 min-w-[180px]"
         >
           {filteredCategories.map((cat, i) => {
-            const displayName = getCategoryDisplayName(cat.category_name)
+            const displayName = getCategoryDisplayName(cat)
             const isOtherDept = posterAccountId && cat.poster_account_id && cat.poster_account_id !== posterAccountId
             return (
               <div
@@ -420,7 +420,7 @@ function EmptyDraftRow({
           isSubmittingRef.current = false
         }, 500)
       }
-    }, 50)
+    }, 150)
   }
 
   const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id
