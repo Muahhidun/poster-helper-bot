@@ -2179,12 +2179,19 @@ def process_drafts():
                     finance_accounts = await client.get_accounts()
                     categories = await client.get_categories()
 
+                    # Debug: print all categories from Poster
+                    print(f"[DEBUG] Categories from Poster for {account['account_name']}:", flush=True)
+                    for cat in categories:
+                        print(f"  - id={cat.get('category_id')}, name='{cat.get('category_name')}', raw={cat}", flush=True)
+
                     # Build category map (name -> id)
                     category_map = {}
                     for cat in categories:
                         cat_name = cat.get('category_name', '') or cat.get('name', '')
                         if cat_name:
                             category_map[cat_name.lower()] = int(cat.get('category_id', 1))
+
+                    print(f"[DEBUG] Category map: {category_map}", flush=True)
 
                     # Define default category priority
                     default_categories = ['хозяйственные расходы', 'прочее', 'единовременный расход']
@@ -2220,9 +2227,12 @@ def process_drafts():
                         draft_category = (draft.get('category') or '').lower().strip()
                         cat_id = None
 
+                        print(f"[DEBUG] Looking for category: draft_category='{draft_category}', in_map={draft_category in category_map}", flush=True)
+
                         # 1. Exact match
                         if draft_category in category_map:
                             cat_id = category_map[draft_category]
+                            print(f"[DEBUG] Exact match found: {cat_id}", flush=True)
 
                         # 2. Partial match (draft category contains Poster category or vice versa)
                         if not cat_id:
