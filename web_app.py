@@ -1706,6 +1706,11 @@ def api_sync_expenses_from_poster():
                     finance_accounts = await client.get_accounts()
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
+                    # Debug: log finance accounts
+                    print(f"[SYNC DEBUG] Finance accounts for {account['account_name']}:")
+                    for acc in finance_accounts:
+                        print(f"  - account_id={acc.get('account_id')}, name='{acc.get('name')}'")
+
                     for txn in transactions:
                         txn_type = str(txn.get('type'))
                         category_name = txn.get('name', '') or txn.get('category_name', '')
@@ -1727,6 +1732,9 @@ def api_sync_expenses_from_poster():
                         account_from_id = txn.get('account_from_id') or txn.get('account_from')
                         finance_acc = account_map.get(str(account_from_id), {})
 
+                        # Debug: log account lookup
+                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, found_acc='{finance_acc.get('name', 'NOT FOUND')}'")
+
                         # Check if already synced
                         existing = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
                         already_exists = any(
@@ -1746,6 +1754,8 @@ def api_sync_expenses_from_poster():
                             source = 'kaspi'
                         elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
                             source = 'halyk'
+
+                        print(f"[SYNC DEBUG] txn={txn_id}, finance_acc_name='{finance_acc_name}', source='{source}'")
 
                         # Create expense draft
                         db.create_expense_draft(
