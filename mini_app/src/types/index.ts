@@ -476,6 +476,7 @@ export interface SupplyDraft {
   linked_expense_amount?: number
   status: 'pending' | 'processed'
   created_at: string
+  invoice_date?: string
   items: SupplyDraftItem[]
 }
 

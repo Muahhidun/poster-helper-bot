@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { SupplyDraftsResponse } from '@/types'
+import type { SupplyDraftsResponse, PosterItem } from '@/types'
 
 // Fetch all supply drafts
 export function useSupplyDrafts() {
@@ -27,6 +27,7 @@ export function useUpdateSupplyDraft() {
         supplier_name?: string
         poster_account_id?: number
         linked_expense_draft_id?: number | null
+        invoice_date?: string
       }
     }) => {
       const response = await fetch(`/api/supply-drafts/${id}`, {
@@ -160,5 +161,44 @@ export function useCreateSupplyInPoster() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supply-drafts'] })
     },
+  })
+}
+
+// Create new empty supply draft
+export function useCreateSupplyDraft() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (data?: {
+      supplier_name?: string
+      poster_account_id?: number
+      invoice_date?: string
+    }) => {
+      const response = await fetch('/api/supply-drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data || {}),
+      })
+      if (!response.ok) throw new Error('Failed to create supply draft')
+      return response.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supply-drafts'] })
+    },
+  })
+}
+
+// Search ingredients for autocomplete
+export function useSearchIngredients(query: string, enabled: boolean = true) {
+  return useQuery<PosterItem[]>({
+    queryKey: ['ingredients-search', query],
+    queryFn: async () => {
+      if (!query || query.length < 1) return []
+      const response = await fetch(`/api/items/search?q=${encodeURIComponent(query)}&source=ingredient`)
+      if (!response.ok) throw new Error('Failed to search ingredients')
+      return response.json()
+    },
+    enabled: enabled && query.length >= 1,
+    staleTime: 30000, // 30 seconds cache
   })
 }
