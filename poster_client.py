@@ -360,9 +360,9 @@ class PosterClient:
 
         Note: Uses form-urlencoded format, not JSON
         """
-        # Calculate total amount
+        # Calculate total amount (use round() for consistent rounding, not int() which truncates)
         total_amount = sum(
-            int(item['num'] * item['price'])
+            round(item['num'] * item['price'])
             for item in ingredients
         )
 
@@ -390,7 +390,7 @@ class PosterClient:
                     num_for_api = str(num)
 
             # For calculations, use original numeric value
-            ingredient_sum = int(num * item['price'])
+            ingredient_sum = round(num * item['price'])
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][num]'] = num_for_api
             data[f'ingredients[{idx}][price]'] = int(item['price'])
@@ -447,9 +447,9 @@ class PosterClient:
 
         Note: Requires ALL supply parameters, not just status
         """
-        # Calculate total amount
+        # Calculate total amount (use round() for consistent rounding, not int() which truncates)
         total_amount = sum(
-            int(item['num'] * item['price'])
+            round(item['num'] * item['price'])
             for item in ingredients
         )
 
@@ -475,7 +475,7 @@ class PosterClient:
                 else:
                     num_for_api = str(num)
 
-            ingredient_sum = int(num * item['price'])
+            ingredient_sum = round(num * item['price'])
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][num]'] = num_for_api
             data[f'ingredients[{idx}][price]'] = int(item['price'])

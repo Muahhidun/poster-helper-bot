@@ -485,6 +485,28 @@ def search_items():
                                 'poster_account_name': acc['account_name']
                             })
 
+                    # Also fetch products (товары) - items like Ayran, Coca-Cola, etc.
+                    # that are not ingredients but can be supplied and sold
+                    if source in ['all', 'product', 'ingredient']:
+                        products = loop.run_until_complete(poster_client.get_products())
+                        for prod in products:
+                            name = prod.get('product_name', '')
+                            name_lower = name.lower()
+
+                            # Skip if already seen (primary account or same product)
+                            if name_lower in seen_names:
+                                continue
+                            seen_names.add(name_lower)
+
+                            # Products use product_id in Poster
+                            items.append({
+                                'id': int(prod.get('product_id', 0)),
+                                'name': name,
+                                'type': 'product',
+                                'poster_account_id': acc['id'],
+                                'poster_account_name': acc['account_name']
+                            })
+
                     loop.close()
                 except Exception as e:
                     print(f"Error loading from account {acc['account_name']}: {e}")
@@ -494,9 +516,11 @@ def search_items():
         # Fallback to CSV
         items = load_items_from_csv()
 
-    # Filter by type if specified
-    if source != 'all':
-        items = [item for item in items if item['type'] == source]
+    # Filter by type if specified (but 'ingredient' source now includes products too for supply search)
+    # Products like Ayran, Coca-Cola can also be supplied to warehouse
+    if source == 'product':
+        items = [item for item in items if item['type'] == 'product']
+    # For 'all' and 'ingredient' - show both ingredients and products (for supply autocomplete)
 
     # Filter by query
     if query:
