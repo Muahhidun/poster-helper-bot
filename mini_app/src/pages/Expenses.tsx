@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+// v2: Fixed sum calculation with Number() conversion for PostgreSQL DECIMAL
 import {
   useExpenses,
   useUpdateExpense,
