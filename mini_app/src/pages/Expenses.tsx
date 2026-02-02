@@ -651,7 +651,7 @@ function Section({
   isCreating: boolean
 }) {
   const allSelected = drafts.length > 0 && drafts.every(d => selectedIds.has(d.id))
-  const sectionTotal = drafts.reduce((sum, d) => sum + (d.amount || 0), 0)
+  const sectionTotal = drafts.reduce((sum, d) => sum + Number(d.amount || 0), 0)
 
   const sortedDrafts = useMemo(() => {
     if (!sortState.column || !sortState.direction) return drafts
@@ -957,7 +957,7 @@ export function Expenses() {
   const stats = useMemo(() => {
     const transactions = drafts.filter(d => d.expense_type === 'transaction').length
     const supplies = drafts.filter(d => d.expense_type === 'supply').length
-    const total = drafts.reduce((sum, d) => sum + (d.amount || 0), 0)
+    const total = drafts.reduce((sum, d) => sum + Number(d.amount || 0), 0)
     return { total: drafts.length, transactions, supplies, sum: total }
   }, [drafts])
 
