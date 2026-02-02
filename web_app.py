@@ -1918,6 +1918,28 @@ def api_get_supply_drafts():
     })
 
 
+@app.route('/api/supply-drafts', methods=['POST'])
+def api_create_supply_draft():
+    """Create a new empty supply draft"""
+    from datetime import datetime
+    db = get_database()
+    data = request.get_json() or {}
+
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TELEGRAM_USER_ID,
+        supplier_name=data.get('supplier_name', ''),
+        invoice_date=data.get('invoice_date') or datetime.now().strftime("%Y-%m-%d"),
+        total_sum=0,
+        linked_expense_draft_id=data.get('linked_expense_draft_id'),
+        poster_account_id=data.get('poster_account_id'),
+        source=data.get('source', 'cash')
+    )
+
+    if draft_id:
+        return jsonify({'success': True, 'id': draft_id})
+    return jsonify({'success': False, 'error': 'Failed to create draft'}), 500
+
+
 @app.route('/api/supply-drafts/<int:draft_id>', methods=['PUT'])
 def api_update_supply_draft(draft_id):
     """Update a supply draft"""
@@ -1931,6 +1953,8 @@ def api_update_supply_draft(draft_id):
         updates['poster_account_id'] = data['poster_account_id']
     if 'linked_expense_draft_id' in data:
         updates['linked_expense_draft_id'] = data['linked_expense_draft_id']
+    if 'invoice_date' in data:
+        updates['invoice_date'] = data['invoice_date']
 
     if updates:
         db.update_supply_draft(draft_id, **updates)
