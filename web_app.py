@@ -2514,11 +2514,15 @@ def list_supplies():
     except Exception as e:
         print(f"Error loading ingredients: {e}")
 
+    # Load suppliers for autocomplete
+    suppliers = load_suppliers_from_csv()
+
     return render_template('supplies.html',
                           drafts=drafts,
                           pending_supplies=pending_supplies,
                           items=items,
-                          poster_accounts=poster_accounts_list)
+                          poster_accounts=poster_accounts_list,
+                          suppliers=suppliers)
 
 
 @app.route('/supplies/all')
@@ -2615,6 +2619,8 @@ def update_supply_draft(draft_id):
     update_fields = {}
     if 'supplier_name' in data:
         update_fields['supplier_name'] = str(data['supplier_name'])
+    if 'supplier_id' in data:
+        update_fields['supplier_id'] = int(data['supplier_id']) if data['supplier_id'] else None
     if 'invoice_date' in data:
         update_fields['invoice_date'] = str(data['invoice_date'])
     if 'total_sum' in data:

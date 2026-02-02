@@ -705,9 +705,14 @@ class UserDatabase:
                     cursor.execute("ALTER TABLE supply_drafts ADD COLUMN source TEXT DEFAULT 'cash'")
                 except Exception:
                     pass
+                try:
+                    cursor.execute("ALTER TABLE supply_drafts ADD COLUMN supplier_id INTEGER")
+                except Exception:
+                    pass
             else:
                 cursor.execute("ALTER TABLE supply_drafts ADD COLUMN IF NOT EXISTS account_id INTEGER")
                 cursor.execute("ALTER TABLE supply_drafts ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'cash'")
+                cursor.execute("ALTER TABLE supply_drafts ADD COLUMN IF NOT EXISTS supplier_id INTEGER")
 
             conn.commit()
             conn.close()
@@ -2575,7 +2580,7 @@ class UserDatabase:
 
         Args:
             supply_draft_id: ID черновика
-            **kwargs: Поля для обновления (supplier_name, invoice_date, total_sum, account_id, source)
+            **kwargs: Поля для обновления (supplier_name, supplier_id, invoice_date, total_sum, account_id, source)
         """
         if not kwargs:
             return False

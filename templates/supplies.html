@@ -18,8 +18,16 @@
                 <div class="supply-info">
                     <div class="supplier-row">
                         <label>Поставщик:</label>
-                        <input type="text" class="supplier-input" value="{{ draft.supplier_name or '' }}"
-                               data-id="{{ draft.id }}" placeholder="Название поставщика">
+                        <div class="supplier-search-wrapper">
+                            <input type="text" class="supplier-input" value="{{ draft.supplier_name or '' }}"
+                                   data-id="{{ draft.id }}" data-supplier-id="{{ draft.supplier_id or '' }}"
+                                   placeholder="Поиск поставщика...">
+                            <div class="supplier-results"></div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-repeat-supply" data-id="{{ draft.id }}"
+                                style="display:none" title="Повторить последнюю поставку">
+                            🔄 Повторить
+                        </button>
                     </div>
                     <div class="meta-row">
                         <span class="amount calculated-total">{{ "{:,.0f}".format(draft.total_sum or 0) }}₸</span>
@@ -175,14 +183,55 @@ h1 { margin: 0; }
     color: #666;
 }
 
-.supplier-input {
+.supplier-search-wrapper {
+    position: relative;
     flex: 1;
+    max-width: 300px;
+}
+
+.supplier-input {
+    width: 100%;
     padding: 6px 10px;
     border: 1px solid #ddd;
     border-radius: 4px;
     font-size: 16px;
     font-weight: 600;
-    max-width: 300px;
+}
+
+.supplier-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.supplier-result-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+}
+
+.supplier-result-item:hover, .supplier-result-item.active {
+    background: #e3f2fd;
+}
+
+.btn-repeat-supply {
+    background: #17a2b8;
+    color: white;
+    white-space: nowrap;
+    margin-left: 10px;
+}
+
+.btn-repeat-supply:hover {
+    background: #138496;
 }
 
 .meta-row {
@@ -398,9 +447,13 @@ h1 { margin: 0; }
 // Ingredients data from server
 const ingredients = {{ items|tojson|safe if items else '[]' }};
 const posterAccounts = {{ poster_accounts|tojson|safe if poster_accounts else '[]' }};
+const suppliers = {{ suppliers|tojson|safe if suppliers else '[]' }};
 
 // Supply draft items (loaded from server)
 const supplyItems = {};  // { draftId: [items] }
+
+// Last supply items by supplier (for autofill)
+const lastSupplyByDraft = {};  // { draftId: { supplierId, supplierName, items: [] } }
 
 // Initial load of items for each draft
 {% for draft in drafts %}
@@ -455,13 +508,222 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Supplier name change
+    // Supplier autocomplete
     document.querySelectorAll('.supplier-input').forEach(input => {
-        input.addEventListener('change', async function() {
+        const resultsDiv = input.nextElementSibling;
+        const repeatBtn = input.closest('.supplier-row').querySelector('.btn-repeat-supply');
+        let selectedIndex = -1;
+        let supplierSearchTimeout = null;
+
+        // Check if draft already has supplier with last supply data
+        const draftId = input.dataset.id;
+        const existingSupplierId = input.dataset.supplierId;
+        if (existingSupplierId && input.value) {
+            loadLastSupplyForDraft(draftId, parseInt(existingSupplierId), input.value);
+        }
+
+        input.addEventListener('input', function() {
+            clearTimeout(supplierSearchTimeout);
+            const query = this.value.toLowerCase().trim();
+            selectedIndex = -1;
+
+            // Clear supplier ID when typing
+            this.dataset.supplierId = '';
+            repeatBtn.style.display = 'none';
+
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            supplierSearchTimeout = setTimeout(() => {
+                const matches = suppliers.filter(s =>
+                    s.name.toLowerCase().includes(query)
+                ).slice(0, 10);
+
+                if (matches.length === 0) {
+                    resultsDiv.innerHTML = '<div class="supplier-result-item" style="color:#999">Не найдено</div>';
+                } else {
+                    resultsDiv.innerHTML = matches.map((s, i) => `
+                        <div class="supplier-result-item" data-index="${i}"
+                             data-id="${s.id}" data-name="${s.name}">
+                            ${s.name}
+                        </div>
+                    `).join('');
+                }
+                resultsDiv.style.display = 'block';
+            }, 100);
+        });
+
+        // Keyboard navigation
+        input.addEventListener('keydown', function(e) {
+            const items = resultsDiv.querySelectorAll('.supplier-result-item[data-id]');
+            if (items.length === 0 && e.key !== 'Enter') return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
+                updateSupplierSelection(items);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIndex = Math.max(selectedIndex - 1, 0);
+                updateSupplierSelection(items);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (selectedIndex >= 0 && items[selectedIndex]) {
+                    selectSupplier(items[selectedIndex], input);
+                } else if (items.length === 1) {
+                    selectSupplier(items[0], input);
+                } else if (resultsDiv.style.display === 'none') {
+                    // Just save the manual input
+                    saveSupplierName(input);
+                }
+            } else if (e.key === 'Escape') {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        function updateSupplierSelection(items) {
+            items.forEach((item, i) => {
+                item.classList.toggle('active', i === selectedIndex);
+            });
+        }
+
+        // Click selection
+        resultsDiv.addEventListener('click', function(e) {
+            const item = e.target.closest('.supplier-result-item[data-id]');
+            if (item) selectSupplier(item, input);
+        });
+
+        // Close on outside click
+        document.addEventListener('click', function(e) {
+            if (!input.contains(e.target) && !resultsDiv.contains(e.target)) {
+                resultsDiv.style.display = 'none';
+            }
+        });
+
+        // Save on blur (manual input)
+        input.addEventListener('blur', function() {
+            setTimeout(() => {
+                if (resultsDiv.style.display === 'none' && this.value) {
+                    saveSupplierName(this);
+                }
+            }, 200);
+        });
+
+        async function selectSupplier(item, inputEl) {
+            const draftId = inputEl.dataset.id;
+            const supplierId = parseInt(item.dataset.id);
+            const supplierName = item.dataset.name;
+
+            inputEl.value = supplierName;
+            inputEl.dataset.supplierId = supplierId;
+            resultsDiv.style.display = 'none';
+
+            // Save to server
+            await updateSupplyDraft(draftId, { supplier_name: supplierName, supplier_id: supplierId });
+            inputEl.classList.add('saved');
+            setTimeout(() => inputEl.classList.remove('saved'), 300);
+
+            // Load last supply from this supplier
+            loadLastSupplyForDraft(draftId, supplierId, supplierName);
+        }
+
+        async function saveSupplierName(inputEl) {
+            const draftId = inputEl.dataset.id;
+            await updateSupplyDraft(draftId, { supplier_name: inputEl.value });
+            inputEl.classList.add('saved');
+            setTimeout(() => inputEl.classList.remove('saved'), 300);
+        }
+    });
+
+    // Load last supply data for a draft
+    async function loadLastSupplyForDraft(draftId, supplierId, supplierName) {
+        const repeatBtn = document.querySelector(`.btn-repeat-supply[data-id="${draftId}"]`);
+
+        try {
+            const response = await fetch(`/api/supplies/last/${supplierId}`);
+            const data = await response.json();
+
+            if (data.items && data.items.length > 0) {
+                lastSupplyByDraft[draftId] = {
+                    supplierId: supplierId,
+                    supplierName: supplierName,
+                    items: data.items
+                };
+                repeatBtn.textContent = `🔄 Повторить (${data.items.length})`;
+                repeatBtn.style.display = 'inline-block';
+            } else {
+                delete lastSupplyByDraft[draftId];
+                repeatBtn.style.display = 'none';
+            }
+        } catch (e) {
+            console.error('Error loading last supply:', e);
+            repeatBtn.style.display = 'none';
+        }
+    }
+
+    // Repeat last supply button
+    document.querySelectorAll('.btn-repeat-supply').forEach(btn => {
+        btn.addEventListener('click', async function() {
             const draftId = this.dataset.id;
-            await updateSupplyDraft(draftId, { supplier_name: this.value });
-            this.classList.add('saved');
-            setTimeout(() => this.classList.remove('saved'), 300);
+            const lastSupply = lastSupplyByDraft[draftId];
+
+            if (!lastSupply || !lastSupply.items.length) {
+                alert('Нет данных о последней поставке');
+                return;
+            }
+
+            if (!confirm(`Добавить ${lastSupply.items.length} товаров из последней поставки от ${lastSupply.supplierName}?`)) {
+                return;
+            }
+
+            this.disabled = true;
+            this.textContent = '⏳...';
+
+            // Add each item from last supply
+            for (const lastItem of lastSupply.items) {
+                // Find matching ingredient
+                const ing = ingredients.find(i => i.id === lastItem.id && i.name === lastItem.name);
+                if (!ing) continue;
+
+                // Add item to server
+                const response = await fetch(`/supplies/add-item/${draftId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        poster_ingredient_id: ing.id,
+                        poster_ingredient_name: ing.name,
+                        name: ing.name,
+                        quantity: lastItem.quantity || 1,
+                        price: lastItem.price || 0,
+                        poster_account_id: ing.poster_account_id || null
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    if (!supplyItems[draftId]) supplyItems[draftId] = [];
+                    supplyItems[draftId].push({
+                        id: result.item_id,
+                        item_name: ing.name,
+                        poster_ingredient_id: ing.id,
+                        poster_ingredient_name: ing.name,
+                        poster_account_id: ing.poster_account_id,
+                        poster_account_name: ing.poster_account_name || '',
+                        quantity: lastItem.quantity || 1,
+                        price_per_unit: lastItem.price || 0,
+                        total: (lastItem.quantity || 1) * (lastItem.price || 0)
+                    });
+                }
+            }
+
+            // Re-render items
+            renderItems(parseInt(draftId));
+            updateTotals();
+
+            this.disabled = false;
+            this.textContent = `🔄 Повторить (${lastSupply.items.length})`;
         });
     });
 
@@ -622,6 +884,18 @@ document.addEventListener('DOMContentLoaded', function() {
             const accountId = item.dataset.accountId ? parseInt(item.dataset.accountId) : null;
             const accountName = item.dataset.accountName || '';
 
+            // Check if we have last supply data for this ingredient (autofill)
+            let autoQty = 0;
+            let autoPrice = 0;
+            const lastSupply = lastSupplyByDraft[draftId];
+            if (lastSupply && lastSupply.items) {
+                const lastItem = lastSupply.items.find(i => i.id === ingredientId || i.name === ingredientName);
+                if (lastItem) {
+                    autoQty = lastItem.quantity || 1;
+                    autoPrice = lastItem.price || 0;
+                }
+            }
+
             // Add item to server
             const response = await fetch(`/supplies/add-item/${draftId}`, {
                 method: 'POST',
@@ -630,8 +904,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     poster_ingredient_id: ingredientId,
                     poster_ingredient_name: ingredientName,
                     name: ingredientName,
-                    quantity: 0,
-                    price: 0,
+                    quantity: autoQty,
+                    price: autoPrice,
                     poster_account_id: accountId
                 })
             });
@@ -647,13 +921,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     poster_ingredient_name: ingredientName,
                     poster_account_id: accountId,
                     poster_account_name: accountName,
-                    quantity: 0,
-                    price_per_unit: 0,
-                    total: 0
+                    quantity: autoQty,
+                    price_per_unit: autoPrice,
+                    total: autoQty * autoPrice,
+                    lastPrice: autoPrice > 0 ? autoPrice : null  // Store for hint
                 });
 
                 // Re-render items
                 renderItems(parseInt(draftId));
+                updateTotals();
 
                 // Focus on quantity input of new item
                 setTimeout(() => {
