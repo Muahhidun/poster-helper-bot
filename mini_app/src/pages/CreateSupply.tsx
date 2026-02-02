@@ -366,6 +366,8 @@ export const CreateSupply: React.FC = () => {
       unit: lastItem?.unit || 'шт',
       sum: quantity * price,  // Initialize sum
       poster_account_id: posterItem.poster_account_id,  // Track which Poster account this item belongs to
+      lastPrice: lastItem?.price,  // Store last price for comparison
+      lastQuantity: lastItem?.quantity,  // Store last quantity for reference
     }
 
     setItems([...items, newItem])
@@ -468,10 +470,27 @@ export const CreateSupply: React.FC = () => {
       price: item.price,
       unit: item.unit,
       sum: item.quantity * item.price,  // Initialize sum
+      lastPrice: item.price,  // Store last price for comparison
+      lastQuantity: item.quantity,  // Store last quantity for reference
     }))
 
     setItems(newItems)
     webApp?.HapticFeedback?.notificationOccurred('success')
+  }
+
+  // Apply last price to an item
+  const applyLastPrice = (index: number) => {
+    const item = items[index]
+    if (item.lastPrice && item.lastPrice > 0) {
+      const newItems = [...items]
+      newItems[index] = {
+        ...item,
+        price: item.lastPrice,
+        sum: item.quantity * item.lastPrice,
+      }
+      setItems(newItems)
+      webApp?.HapticFeedback?.impactOccurred('light')
+    }
   }
 
   // Submit form
@@ -893,6 +912,18 @@ export const CreateSupply: React.FC = () => {
                           borderColor: themeParams.hint_color || '#d1d5db',
                         }}
                       />
+                      {/* Last price hint - click to apply */}
+                      {item.lastPrice !== undefined && item.lastPrice > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => applyLastPrice(index)}
+                          className="mt-1 text-xs flex items-center gap-1"
+                          style={{ color: themeParams.hint_color || '#6b7280' }}
+                        >
+                          <span>⏱</span>
+                          <span>{item.lastPrice.toLocaleString('ru-RU')} ₸</span>
+                        </button>
+                      )}
                     </div>
 
                     <div>

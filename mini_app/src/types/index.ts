@@ -253,6 +253,8 @@ export interface SupplyItemInput {
   unit: string
   sum?: number  // Optional: for UI calculations only (not sent to backend)
   poster_account_id?: number  // Which Poster account this item belongs to
+  lastPrice?: number  // Last recorded price for this item (for comparison)
+  lastQuantity?: number  // Last recorded quantity for this item
 }
 
 export interface CreateSupplyRequest {
