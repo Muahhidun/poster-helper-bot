@@ -386,43 +386,63 @@ function CompletionButton({
 function EmptyDraftRow({
   type,
   posterAccounts,
+  categories,
   onCreate,
   isCreating,
 }: {
   type: AccountType
   posterAccounts: ExpensePosterAccount[]
-  onCreate: (type: AccountType, data: { amount?: number; description?: string }) => void
+  categories: ExpenseCategory[]
+  onCreate: (type: AccountType, data: { amount?: number; description?: string; category?: string }) => void
   isCreating: boolean
 }) {
   const [localAmount, setLocalAmount] = useState<number | ''>('')
   const [localDescription, setLocalDescription] = useState('')
+  const [localCategory, setLocalCategory] = useState('')
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState(false)
   const rowRef = useRef<HTMLTableRowElement>(null)
-  const isSubmittingRef = useRef(false)
+  const categoryInputRef = useRef<HTMLInputElement>(null)
 
-  // Single blur handler - only create draft when focus leaves the entire row
-  const handleFieldBlur = () => {
-    if (isSubmittingRef.current || isCreating) return
+  // Check if there's any data entered
+  const hasData = (localAmount && localAmount > 0) || localDescription.trim() || localCategory.trim()
 
-    setTimeout(() => {
-      // If focus is still within the row, don't create draft yet
-      if (rowRef.current?.contains(document.activeElement)) return
+  // Submit handler - explicit submission via button or Enter key
+  const handleSubmit = () => {
+    if (isCreating || !hasData) return
 
-      // Create only if there's data
-      if ((localAmount && localAmount > 0) || localDescription.trim()) {
-        isSubmittingRef.current = true
-        onCreate(type, {
-          amount: localAmount || 0,
-          description: localDescription
-        })
-        setLocalAmount('')
-        setLocalDescription('')
-        // Reset after a small delay to allow for React Query refresh
-        setTimeout(() => {
-          isSubmittingRef.current = false
-        }, 500)
-      }
-    }, 150)
+    onCreate(type, {
+      amount: localAmount || 0,
+      description: localDescription,
+      category: localCategory || undefined
+    })
+    setLocalAmount('')
+    setLocalDescription('')
+    setLocalCategory('')
   }
+
+  // Handle Enter key to submit
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && hasData && !isCreating) {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
+  // Category suggestions
+  const uniqueCategories = useMemo(() => {
+    const names = new Set<string>()
+    categories.forEach(c => {
+      const name = c.category_name || c.name
+      if (name) names.add(name)
+    })
+    return Array.from(names).sort()
+  }, [categories])
+
+  const filteredCategories = useMemo(() => {
+    if (!localCategory.trim()) return uniqueCategories.slice(0, 8)
+    const lower = localCategory.toLowerCase()
+    return uniqueCategories.filter(c => c.toLowerCase().includes(lower)).slice(0, 8)
+  }, [localCategory, uniqueCategories])
 
   const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id
 
@@ -439,7 +459,7 @@ function EmptyDraftRow({
           type="number"
           value={localAmount}
           onChange={(e) => setLocalAmount(e.target.value === '' ? '' : Number(e.target.value))}
-          onBlur={handleFieldBlur}
+          onKeyDown={handleKeyDown}
           onFocus={() => localAmount === 0 && setLocalAmount('')}
           placeholder="0"
           disabled={isCreating}
@@ -451,7 +471,7 @@ function EmptyDraftRow({
           type="text"
           value={localDescription}
           onChange={(e) => setLocalDescription(e.target.value)}
-          onBlur={handleFieldBlur}
+          onKeyDown={handleKeyDown}
           placeholder="Новая запись..."
           disabled={isCreating}
           className="w-44 px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 placeholder:text-gray-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 focus:bg-white disabled:opacity-50"
@@ -460,13 +480,37 @@ function EmptyDraftRow({
       <td className="px-3 py-2 border-b border-gray-100">
         <span className="px-2.5 py-1 text-xs text-gray-400">💰 транзакция</span>
       </td>
-      <td className="px-3 py-2 border-b border-gray-100">
+      <td className="px-3 py-2 border-b border-gray-100 relative">
         <input
+          ref={categoryInputRef}
           type="text"
-          disabled
+          value={localCategory}
+          onChange={(e) => setLocalCategory(e.target.value)}
+          onFocus={() => setShowCategorySuggestions(true)}
+          onBlur={() => setTimeout(() => setShowCategorySuggestions(false), 200)}
+          onKeyDown={handleKeyDown}
           placeholder="Категория..."
-          className="w-full px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 placeholder:text-gray-300 opacity-50"
+          disabled={isCreating}
+          className="w-full px-2.5 py-1.5 border border-dashed border-gray-300 rounded text-sm bg-white/50 placeholder:text-gray-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 focus:bg-white disabled:opacity-50"
         />
+        {showCategorySuggestions && filteredCategories.length > 0 && (
+          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-48 overflow-auto">
+            {filteredCategories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 transition-colors"
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  setLocalCategory(cat)
+                  setShowCategorySuggestions(false)
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        )}
       </td>
       <td className="px-3 py-2 border-b border-gray-100">
         <select
@@ -480,7 +524,19 @@ function EmptyDraftRow({
         </select>
       </td>
       <td className="px-3 py-2 border-b border-gray-100">
-        {isCreating && <span className="text-xs text-gray-400">⏳</span>}
+        {isCreating ? (
+          <span className="text-xs text-gray-400">⏳</span>
+        ) : hasData ? (
+          <button
+            onClick={handleSubmit}
+            className="p-1.5 text-green-600 hover:text-green-700 hover:bg-green-50 rounded transition-colors"
+            title="Добавить запись"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+          </button>
+        ) : null}
       </td>
     </tr>
   )
@@ -648,7 +704,7 @@ function Section({
   onDelete: (id: number) => void
   onToggleType: (id: number, newType: 'transaction' | 'supply') => void
   onToggleCompletion: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
-  onCreate: (type: AccountType, data: { amount?: number; description?: string }) => void
+  onCreate: (type: AccountType, data: { amount?: number; description?: string; category?: string }) => void
   isCreating: boolean
 }) {
   const allSelected = drafts.length > 0 && drafts.every(d => selectedIds.has(d.id))
@@ -781,6 +837,7 @@ function Section({
             <EmptyDraftRow
               type={type}
               posterAccounts={posterAccounts}
+              categories={categories}
               onCreate={onCreate}
               isCreating={isCreating}
             />
@@ -828,17 +885,8 @@ export function Expenses() {
       halyk: [],
     }
 
-    // Debug: log draft sources
-    console.log('[DEBUG] Grouping drafts:', drafts.map(d => ({
-      id: d.id,
-      source: d.source,
-      account_id: d.account_id,
-      description: d.description?.slice(0, 20)
-    })))
-
     drafts.forEach(draft => {
       const type = getAccountType(draft, accounts)
-      console.log(`[DEBUG] draft ${draft.id}: source='${draft.source}' -> type='${type}'`)
       groups[type].push(draft)
     })
 
@@ -921,7 +969,7 @@ export function Expenses() {
   // Build account type map to determine which account_id to use for each source type
   const accountTypeMap = useMemo(() => buildAccountTypeMap(accounts), [accounts])
 
-  const handleCreate = useCallback((type: AccountType, data: { amount?: number; description?: string }) => {
+  const handleCreate = useCallback((type: AccountType, data: { amount?: number; description?: string; category?: string }) => {
     // Determine default account_id based on section type
     const defaultAccountId = accountTypeMap[type]
 
@@ -931,6 +979,7 @@ export function Expenses() {
       expense_type: 'transaction',
       source: type,
       ...(defaultAccountId && { account_id: defaultAccountId }),
+      ...(data.category && { category: data.category }),
     })
   }, [createMutation, accountTypeMap])
 
