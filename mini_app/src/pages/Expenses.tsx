@@ -136,17 +136,9 @@ function CategoryAutocomplete({
     }
   }, [value, isFocused])
 
-  const filteredCategories = useMemo(() => {
-    const query = localValue.toLowerCase().trim()
-    if (query.length < 1) return []
-
-    let matches = categories.filter(c => {
-      const displayName = getCategoryDisplayName(c.category_name)
-      return displayName.toLowerCase().includes(query)
-    })
-
-    // Sort: selected department first
-    matches.sort((a, b) => {
+  // Get all unique categories sorted by department
+  const allCategories = useMemo(() => {
+    const sorted = [...categories].sort((a, b) => {
       const aMatch = a.poster_account_id === posterAccountId ? 0 : 1
       const bMatch = b.poster_account_id === posterAccountId ? 0 : 1
       if (aMatch !== bMatch) return aMatch - bMatch
@@ -155,13 +147,26 @@ function CategoryAutocomplete({
 
     // Deduplicate by display name
     const seen = new Set<string>()
-    return matches.filter(c => {
+    return sorted.filter(c => {
       const displayName = getCategoryDisplayName(c.category_name).toLowerCase()
-      if (seen.has(displayName)) return false
+      if (!displayName || seen.has(displayName)) return false
       seen.add(displayName)
       return true
+    })
+  }, [categories, posterAccountId])
+
+  // Filter categories based on input
+  const filteredCategories = useMemo(() => {
+    const query = localValue.toLowerCase().trim()
+
+    // Show all categories when empty or when focused
+    if (query.length < 1) return allCategories.slice(0, 15)
+
+    return allCategories.filter(c => {
+      const displayName = getCategoryDisplayName(c.category_name)
+      return displayName.toLowerCase().includes(query)
     }).slice(0, 10)
-  }, [localValue, categories, posterAccountId])
+  }, [localValue, allCategories])
 
   const handleSelect = (categoryName: string) => {
     setLocalValue(categoryName)
@@ -175,14 +180,29 @@ function CategoryAutocomplete({
     setTimeout(() => {
       setIsFocused(false)
       setIsOpen(false)
+      // Only save if value changed AND it's a valid category (or empty to clear)
       if (localValue !== value) {
-        onSave(draftId, 'category', localValue)
+        const isValidCategory = localValue === '' || allCategories.some(c =>
+          getCategoryDisplayName(c.category_name).toLowerCase() === localValue.toLowerCase()
+        )
+        if (isValidCategory) {
+          // Find the exact category name (with proper casing)
+          const exactMatch = allCategories.find(c =>
+            getCategoryDisplayName(c.category_name).toLowerCase() === localValue.toLowerCase()
+          )
+          const finalValue = exactMatch ? getCategoryDisplayName(exactMatch.category_name) : localValue
+          setLocalValue(finalValue)
+          onSave(draftId, 'category', finalValue)
+        } else {
+          // Reset to previous value if invalid
+          setLocalValue(value || '')
+        }
       }
     }, 150)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) return
+    if (!isOpen || filteredCategories.length === 0) return
 
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -190,15 +210,17 @@ function CategoryAutocomplete({
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setSelectedIndex(prev => Math.max(prev - 1, 0))
-    } else if (e.key === 'Enter') {
-      e.preventDefault()
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
       if (selectedIndex >= 0 && filteredCategories[selectedIndex]) {
+        e.preventDefault()
         handleSelect(getCategoryDisplayName(filteredCategories[selectedIndex].category_name))
       } else if (filteredCategories.length === 1) {
+        e.preventDefault()
         handleSelect(getCategoryDisplayName(filteredCategories[0].category_name))
       }
     } else if (e.key === 'Escape') {
       setIsOpen(false)
+      setLocalValue(value || '')
     }
   }
 
@@ -213,7 +235,7 @@ function CategoryAutocomplete({
           setIsOpen(true)
           setSelectedIndex(-1)
         }}
-        onFocus={() => { setIsFocused(true); setIsOpen(true) }}
+        onFocus={() => { setIsFocused(true); setIsOpen(true); setSelectedIndex(-1) }}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         placeholder="Категория..."
