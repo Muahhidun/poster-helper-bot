@@ -45,11 +45,15 @@
                 </thead>
                 <tbody id="drafts-tbody-cash" data-account-type="cash">
                     {% for draft in drafts %}
-                    {% set ns = namespace(account_name='') %}
+                    {% set ns = namespace(account_name='', source='') %}
                     {% for acc in accounts if acc.account_id == draft.account_id %}
                         {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
-                    {% if 'kaspi' not in (ns.account_name or draft.source|default('')|lower) and 'халык' not in ns.account_name and 'halyk' not in ns.account_name %}
+                    {% set ns.source = draft.source|default('')|lower %}
+                    {# Cash section: exclude kaspi and halyk drafts - check BOTH account_name AND source #}
+                    {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
+                    {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name %}
+                    {% if not is_kaspi and not is_halyk %}
                     <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
@@ -145,11 +149,14 @@
                 </thead>
                 <tbody id="drafts-tbody-kaspi" data-account-type="kaspi">
                     {% for draft in drafts %}
-                    {% set ns = namespace(account_name='') %}
+                    {% set ns = namespace(account_name='', source='') %}
                     {% for acc in accounts if acc.account_id == draft.account_id %}
                         {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
-                    {% if 'kaspi' in (ns.account_name or draft.source|default('')|lower) %}
+                    {% set ns.source = draft.source|default('')|lower %}
+                    {# Kaspi section: include drafts where account_name contains 'kaspi' OR source is 'kaspi' #}
+                    {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
+                    {% if is_kaspi %}
                     <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
@@ -245,11 +252,14 @@
                 </thead>
                 <tbody id="drafts-tbody-halyk" data-account-type="halyk">
                     {% for draft in drafts %}
-                    {% set ns = namespace(account_name='') %}
+                    {% set ns = namespace(account_name='', source='') %}
                     {% for acc in accounts if acc.account_id == draft.account_id %}
                         {% set ns.account_name = acc.name|lower %}
                     {% endfor %}
-                    {% if 'халык' in ns.account_name or 'halyk' in ns.account_name %}
+                    {% set ns.source = draft.source|default('')|lower %}
+                    {# Halyk section: include drafts where account_name contains 'халык'/'halyk' OR source is 'halyk' #}
+                    {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name or ns.source == 'halyk' %}
+                    {% if is_halyk %}
                     <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
@@ -1063,9 +1073,9 @@ function updateRowSyncStatus(row) {
     }
 }
 
-// Update all rows sync status
+// Update all rows sync status (excluding placeholder rows)
 function updateAllSyncStatus() {
-    document.querySelectorAll('.draft-row').forEach(row => {
+    document.querySelectorAll('.draft-row:not(.placeholder-row)').forEach(row => {
         updateRowSyncStatus(row);
     });
 }
@@ -1106,16 +1116,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial sync status check
     updateAllSyncStatus();
 
-    // Ensure empty rows exist in truly empty sections (no rows at all)
-    // This runs once on page load to allow user to add first entry in empty sections
+    // Ensure empty placeholder rows exist in all sections
+    // These are client-side only and don't create DB entries until user enters data
     ['cash', 'kaspi', 'halyk'].forEach(type => {
         const tbody = document.getElementById(`drafts-tbody-${type}`);
         if (tbody) {
-            const rows = tbody.querySelectorAll('.draft-row');
-            if (rows.length === 0) {
-                // Section is completely empty - add one empty row
-                addNewRow(type, false);
-            }
+            ensurePlaceholderRow(type);
         }
     });
 
@@ -1128,7 +1134,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateSummary() {
-        const rows = document.querySelectorAll('.draft-row');
+        // Exclude placeholder rows from summary
+        const rows = document.querySelectorAll('.draft-row:not(.placeholder-row)');
         let total = 0;
         let transactions = 0;
         let supplies = 0;
@@ -1278,26 +1285,30 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, true);
 
-    // Detect when user fills an empty row -> ensure new empty row exists in that section
+    // Handle placeholder row input - when user starts typing, convert to real row
     // Debounced to prevent multiple rapid calls
-    let ensureRowTimeout = null;
+    let placeholderConvertTimeout = null;
     document.addEventListener('input', function(e) {
         if (e.target.classList.contains('edit-amount') || e.target.classList.contains('edit-description')) {
             const row = e.target.closest('tr');
-            const tbody = row?.parentElement;
-            if (!tbody) return;
+            if (!row) return;
 
-            // Check if this is the last row in this section
-            const rows = tbody.querySelectorAll('.draft-row');
-            if (rows.length > 0 && rows[rows.length - 1] === row) {
-                // User is filling the last row, ensure there's a new empty row in this section
-                const accountType = tbody.dataset.accountType || 'cash';
+            // Check if this is a placeholder row (no DB ID)
+            if (row.classList.contains('placeholder-row')) {
+                const tbody = row.parentElement;
+                const accountType = tbody?.dataset.accountType || 'cash';
 
-                // Debounce the call
-                clearTimeout(ensureRowTimeout);
-                ensureRowTimeout = setTimeout(() => {
-                    ensureEmptyRowInSection(accountType);
-                }, 300);
+                // Check if user entered actual data
+                const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
+                const desc = (row.querySelector('.edit-description')?.value || '').trim();
+
+                if (amount > 0 || desc.length > 0) {
+                    // Debounce - wait for user to stop typing then convert to real row
+                    clearTimeout(placeholderConvertTimeout);
+                    placeholderConvertTimeout = setTimeout(() => {
+                        convertPlaceholderToRealRow(row, accountType);
+                    }, 500);
+                }
             }
         }
     });
@@ -1484,8 +1495,142 @@ async function updateField(id, field, value) {
 
 // Track pending row creations to prevent duplicates
 const pendingRowCreation = { cash: false, kaspi: false, halyk: false };
+const pendingPlaceholderConversion = { cash: false, kaspi: false, halyk: false };
 
-// Create new row dynamically for a specific section
+// Create a client-side placeholder row (no DB entry until user enters data)
+function createPlaceholderRow(accountType) {
+    const tr = document.createElement('tr');
+    tr.className = 'draft-row transaction placeholder-row';
+    tr.dataset.accountType = accountType;
+    tr.dataset.id = 'placeholder-' + accountType;
+
+    // Build poster accounts options with default selection
+    let posterAccountOptions = '';
+    const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id;
+    posterAccounts.forEach(pa => {
+        const selected = pa.id == defaultPosterAccountId ? 'selected' : '';
+        posterAccountOptions += `<option value="${pa.id}" ${selected}>${pa.name}</option>`;
+    });
+
+    tr.innerHTML = `
+        <td>
+            <input type="checkbox" disabled class="draft-checkbox" style="opacity:0.3">
+        </td>
+        <td class="completion-status">
+            <span style="padding:4px 8px;font-size:18px;opacity:0.3">⚪</span>
+        </td>
+        <td class="amount">
+            <input type="number" class="edit-amount placeholder-input" value="0" step="1"
+                   style="border-style:dashed;opacity:0.7">
+        </td>
+        <td class="description">
+            <input type="text" class="edit-description placeholder-input" value=""
+                   placeholder="Новая запись..."
+                   style="border-style:dashed;opacity:0.7">
+        </td>
+        <td class="type">
+            <span class="btn-type" style="opacity:0.5;cursor:default">💰 транзакция</span>
+        </td>
+        <td class="category">
+            <div class="autocomplete-wrapper">
+                <input type="text" class="edit-category placeholder-input"
+                       value="" placeholder="Категория..."
+                       style="border-style:dashed;opacity:0.7"
+                       autocomplete="off">
+                <div class="autocomplete-results"></div>
+            </div>
+        </td>
+        <td class="poster-account">
+            <select class="edit-poster-account" style="opacity:0.7" disabled>
+                ${posterAccountOptions}
+            </select>
+        </td>
+        <td class="actions">
+        </td>
+    `;
+
+    return tr;
+}
+
+// Ensure there's always exactly ONE placeholder row at the bottom of a section
+function ensurePlaceholderRow(accountType) {
+    const tbody = document.getElementById(`drafts-tbody-${accountType}`);
+    if (!tbody) return;
+
+    // Remove any existing placeholder rows
+    tbody.querySelectorAll('.placeholder-row').forEach(row => row.remove());
+
+    // Add one placeholder row at the end
+    const placeholderRow = createPlaceholderRow(accountType);
+    tbody.appendChild(placeholderRow);
+}
+
+// Convert placeholder row to a real row by creating DB entry
+async function convertPlaceholderToRealRow(placeholderRow, accountType) {
+    // Prevent duplicate conversions
+    if (pendingPlaceholderConversion[accountType]) {
+        return null;
+    }
+    pendingPlaceholderConversion[accountType] = true;
+
+    try {
+        // Get values from placeholder
+        const amount = parseFloat(placeholderRow.querySelector('.edit-amount')?.value) || 0;
+        const description = placeholderRow.querySelector('.edit-description')?.value || '';
+        const category = placeholderRow.querySelector('.edit-category')?.value || '';
+
+        // Skip if no real data entered
+        if (amount === 0 && !description.trim()) {
+            return null;
+        }
+
+        // Get account_id for this section
+        const accountId = accountTypeMap[accountType];
+
+        // Create real DB entry with the data (pass both account_id AND source for proper grouping)
+        const response = await fetch('/expenses/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                account_id: accountId,
+                source: accountType,  // Also set source field for consistent grouping
+                amount: amount,
+                description: description,
+                category: category || undefined
+            })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+            // Create real row element
+            result.draft.account_type = accountType;
+            result.draft.amount = amount;
+            result.draft.description = description;
+            result.draft.category = category;
+            const newRow = createRowElement(result.draft);
+
+            // Replace placeholder with real row
+            placeholderRow.parentNode.insertBefore(newRow, placeholderRow);
+            placeholderRow.remove();
+
+            // Add new placeholder at the end
+            ensurePlaceholderRow(accountType);
+
+            updateSummaryGlobal();
+            return newRow;
+        } else {
+            console.error('Error creating row:', result.error);
+            return null;
+        }
+    } catch (e) {
+        console.error('Error converting placeholder:', e);
+        return null;
+    } finally {
+        pendingPlaceholderConversion[accountType] = false;
+    }
+}
+
+// Create new row dynamically for a specific section (used when explicitly adding)
 async function addNewRow(accountType = 'cash', focusAmount = true) {
     // Prevent duplicate row creation
     if (pendingRowCreation[accountType]) {
@@ -1500,7 +1645,7 @@ async function addNewRow(accountType = 'cash', focusAmount = true) {
         const response = await fetch('/expenses/create', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ account_id: accountId })
+            body: JSON.stringify({ account_id: accountId, source: accountType })
         });
 
         const result = await response.json();
@@ -1510,7 +1655,13 @@ async function addNewRow(accountType = 'cash', focusAmount = true) {
             const newRow = createRowElement(result.draft);
             const tbody = document.getElementById(`drafts-tbody-${accountType}`);
             if (tbody) {
-                tbody.appendChild(newRow);
+                // Insert before placeholder row
+                const placeholder = tbody.querySelector('.placeholder-row');
+                if (placeholder) {
+                    tbody.insertBefore(newRow, placeholder);
+                } else {
+                    tbody.appendChild(newRow);
+                }
             }
 
             if (focusAmount) {
@@ -1532,32 +1683,16 @@ async function addNewRow(accountType = 'cash', focusAmount = true) {
     }
 }
 
-// Ensure there's always an empty row at the bottom of a section
+// Ensure there's always a placeholder row at the bottom of a section
+// This replaces the old ensureEmptyRowInSection that created DB entries
 function ensureEmptyRowInSection(accountType) {
-    const tbody = document.getElementById(`drafts-tbody-${accountType}`);
-    if (!tbody) return;
-
-    // Check if last row is empty (amount = 0 and description empty)
-    const rows = tbody.querySelectorAll('.draft-row');
-    if (rows.length > 0) {
-        const lastRow = rows[rows.length - 1];
-        const amount = parseFloat(lastRow.querySelector('.edit-amount')?.value) || 0;
-        const desc = lastRow.querySelector('.edit-description')?.value?.trim() || '';
-
-        if (amount === 0 && desc === '') {
-            // Last row is already empty
-            return;
-        }
-    }
-
-    // Add new empty row in this section
-    addNewRow(accountType, false);
+    ensurePlaceholderRow(accountType);
 }
 
-// Ensure empty rows in all sections
+// Ensure placeholder rows in all sections
 function ensureEmptyRowInAllSections() {
     ['cash', 'kaspi', 'halyk'].forEach(type => {
-        ensureEmptyRowInSection(type);
+        ensurePlaceholderRow(type);
     });
 }
 
@@ -1635,10 +1770,14 @@ function createRowElement(draft) {
 }
 
 function updateSummaryGlobal() {
-    const rows = document.querySelectorAll('.draft-row');
+    // Exclude placeholder rows from summary
+    const rows = document.querySelectorAll('.draft-row:not(.placeholder-row)');
     let total = 0;
     let transactions = 0;
     let supplies = 0;
+
+    // Section totals
+    const sectionTotals = { cash: 0, kaspi: 0, halyk: 0 };
 
     rows.forEach(row => {
         const amount = parseFloat(row.querySelector('.edit-amount').value) || 0;
@@ -1648,12 +1787,25 @@ function updateSummaryGlobal() {
         } else {
             transactions++;
         }
+        // Add to section total
+        const accountType = row.dataset.accountType || 'cash';
+        if (sectionTotals.hasOwnProperty(accountType)) {
+            sectionTotals[accountType] += amount;
+        }
     });
 
     document.getElementById('total-count').textContent = rows.length;
     document.getElementById('transaction-count').textContent = transactions;
     document.getElementById('supply-count').textContent = supplies;
     document.getElementById('total-sum').textContent = total.toLocaleString('ru-RU');
+
+    // Update section summaries
+    for (const [type, sum] of Object.entries(sectionTotals)) {
+        const summaryEl = document.querySelector(`#summary-${type} .sum`);
+        if (summaryEl) {
+            summaryEl.textContent = sum.toLocaleString('ru-RU') + '₸';
+        }
+    }
 }
 
 // ============ SORTING FUNCTIONALITY ============
@@ -1710,8 +1862,8 @@ function sortSection(section, column) {
     // Update header icons
     updateSortIcons(section, column, newDirection);
 
-    // Get all rows (excluding empty rows at the end)
-    const rows = Array.from(tbody.querySelectorAll('.draft-row'));
+    // Get all rows (excluding placeholder rows)
+    const rows = Array.from(tbody.querySelectorAll('.draft-row:not(.placeholder-row)'));
 
     // Separate empty rows (amount=0 and no description) to keep them at the end
     const emptyRows = [];
@@ -1725,6 +1877,9 @@ function sortSection(section, column) {
             dataRows.push(row);
         }
     });
+
+    // Also get the placeholder row to keep at the very end
+    const placeholderRow = tbody.querySelector('.placeholder-row');
 
     // Sort data rows if direction is set
     if (newDirection) {
@@ -1743,8 +1898,11 @@ function sortSection(section, column) {
         });
     }
 
-    // Re-append rows in sorted order (data rows first, then empty rows)
+    // Re-append rows in sorted order (data rows first, then empty rows, then placeholder)
     [...dataRows, ...emptyRows].forEach(row => tbody.appendChild(row));
+    if (placeholderRow) {
+        tbody.appendChild(placeholderRow);
+    }
 }
 
 // Update sort icons in headers
