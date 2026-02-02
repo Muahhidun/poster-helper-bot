@@ -217,14 +217,29 @@ export function getAccountType(
   draft: { account_id: number | null; source?: string },
   accounts: ExpenseAccount[]
 ): 'cash' | 'kaspi' | 'halyk' {
-  const accountName = accounts.find(a => a.account_id === draft.account_id)?.name?.toLowerCase() || ''
+  // PRIORITY: check source first (reliably set during sync from Poster)
   const source = (draft.source || '').toLowerCase()
 
-  if (accountName.includes('kaspi') || source.includes('kaspi')) {
+  if (source === 'kaspi' || source.includes('kaspi')) {
     return 'kaspi'
-  } else if (accountName.includes('халык') || accountName.includes('halyk')) {
+  }
+  if (source === 'halyk' || source.includes('halyk') || source.includes('халык')) {
     return 'halyk'
   }
+
+  // Fallback: check account name if source = 'cash' or empty
+  const accountName = accounts.find(a =>
+    a.account_id === draft.account_id ||
+    String(a.account_id) === String(draft.account_id)
+  )?.name?.toLowerCase() || ''
+
+  if (accountName.includes('kaspi')) {
+    return 'kaspi'
+  }
+  if (accountName.includes('халык') || accountName.includes('halyk')) {
+    return 'halyk'
+  }
+
   return 'cash'
 }
 
