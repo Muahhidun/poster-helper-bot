@@ -29,6 +29,44 @@ TELEGRAM_USER_ID = 167084307
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
 
+def get_date_in_kz_tz(dt_value, kz_tz) -> str:
+    """Convert a datetime value to Kazakhstan timezone and return date string.
+
+    Args:
+        dt_value: datetime object or string timestamp (assumed UTC if no timezone)
+        kz_tz: Kazakhstan timezone object
+
+    Returns:
+        Date string in YYYY-MM-DD format
+    """
+    from datetime import datetime, timezone
+
+    if not dt_value:
+        return ""
+
+    if isinstance(dt_value, str):
+        # Parse string timestamp (assume UTC if no timezone info)
+        try:
+            # Handle various formats
+            dt_value = dt_value.replace('Z', '+00:00')
+            if '+' not in dt_value and 'T' in dt_value:
+                dt_value = dt_value + '+00:00'
+            created_dt = datetime.fromisoformat(dt_value)
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+        except:
+            return ""
+    else:
+        # Already a datetime object
+        created_dt = dt_value
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+
+    # Convert to Kazakhstan time and get date
+    created_kz = created_dt.astimezone(kz_tz)
+    return created_kz.strftime("%Y-%m-%d")
+
+
 def load_items_from_csv():
     """Load ingredients and products from CSV files"""
     items = []
@@ -1938,9 +1976,9 @@ def api_get_supply_drafts():
     # Load items for each draft and linked expense amount
     drafts = []
     for draft_raw in drafts_raw:
-        # Filter by today's date
-        created_at = str(draft_raw.get('created_at', ''))[:10]
-        if created_at != today:
+        # Filter by today's date (convert created_at from UTC to Kazakhstan time)
+        created_date = get_date_in_kz_tz(draft_raw.get('created_at'), kz_tz)
+        if created_date != today:
             continue
 
         draft = db.get_supply_draft_with_items(draft_raw['id'])
@@ -2379,9 +2417,9 @@ def list_supplies():
     # Load items for each draft and linked expense amount
     drafts = []
     for draft_raw in drafts_raw:
-        # Filter by today's date
-        created_at = str(draft_raw.get('created_at', ''))[:10]
-        if created_at != today:
+        # Filter by today's date (convert created_at from UTC to Kazakhstan time)
+        created_date = get_date_in_kz_tz(draft_raw.get('created_at'), kz_tz)
+        if created_date != today:
             continue
 
         draft = db.get_supply_draft_with_items(draft_raw['id'])
