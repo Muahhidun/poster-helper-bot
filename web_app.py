@@ -2489,9 +2489,14 @@ def list_supplies():
                             'poster_account_name': acc.get('account_name', '')
                         })
 
-                    # Also fetch products (товары) - items like Ayran, Coca-Cola, etc.
+                    # Also fetch products (товары) - only drinks like Ayran, Coca-Cola, etc.
+                    # Skip tech cards (pizzas, burgers, doner, etc.)
                     products = loop.run_until_complete(poster_client.get_products())
                     for prod in products:
+                        # Only include products from "Напитки" category for supplies
+                        category = prod.get('category_name', '')
+                        if category != 'Напитки':
+                            continue
                         name = prod.get('product_name', '')
                         items.append({
                             'id': int(prod.get('product_id', 0)),
