@@ -489,6 +489,9 @@ def search_items():
                     # that are not ingredients but can be supplied and sold
                     if source in ['all', 'product', 'ingredient']:
                         products = loop.run_until_complete(poster_client.get_products())
+                        print(f"[DEBUG] Fetched {len(products)} products from {acc['account_name']}", flush=True)
+                        if products:
+                            print(f"[DEBUG] First 3 products: {[p.get('product_name') for p in products[:3]]}", flush=True)
                         for prod in products:
                             name = prod.get('product_name', '')
                             name_lower = name.lower()
@@ -523,8 +526,13 @@ def search_items():
     # For 'all' and 'ingredient' - show both ingredients and products (for supply autocomplete)
 
     # Filter by query
+    print(f"[DEBUG] Total items before query filter: {len(items)} (ingredients + products)", flush=True)
+    products_count = len([i for i in items if i['type'] == 'product'])
+    print(f"[DEBUG] Products in list: {products_count}", flush=True)
+
     if query:
         items = [item for item in items if query in item['name'].lower()]
+        print(f"[DEBUG] Items after query filter '{query}': {len(items)}", flush=True)
 
     # Limit results
     items = items[:50]
