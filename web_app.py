@@ -508,6 +508,11 @@ def search_items():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
 
+                    # Load storages for this account
+                    storages = loop.run_until_complete(poster_client.get_storages())
+                    storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
+                    default_storage_id = int(storages[0]['storage_id']) if storages else 1
+
                     if source in ['all', 'ingredient']:
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
                         for ing in ingredients:
@@ -519,12 +524,18 @@ def search_items():
                                 continue
                             seen_names.add(name_lower)
 
+                            # Get storage_id from ingredient
+                            storage_id = int(ing.get('storage_id', default_storage_id))
+                            storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
+
                             items.append({
                                 'id': int(ing.get('ingredient_id', 0)),
                                 'name': name,
                                 'type': 'ingredient',
                                 'poster_account_id': acc['id'],
-                                'poster_account_name': acc['account_name']
+                                'poster_account_name': acc['account_name'],
+                                'storage_id': storage_id,
+                                'storage_name': storage_name
                             })
 
                     # Also fetch products (товары) - only drinks like Ayran, Coca-Cola, etc.
@@ -549,13 +560,19 @@ def search_items():
                                 continue
                             seen_names.add(name_lower)
 
+                            # Get storage_id from product
+                            prod_storage_id = int(prod.get('storage_id', default_storage_id))
+                            prod_storage_name = storage_map.get(prod_storage_id, f'Storage {prod_storage_id}')
+
                             # Products use product_id in Poster
                             items.append({
                                 'id': int(prod.get('product_id', 0)),
                                 'name': name,
                                 'type': 'product',
                                 'poster_account_id': acc['id'],
-                                'poster_account_name': acc['account_name']
+                                'poster_account_name': acc['account_name'],
+                                'storage_id': prod_storage_id,
+                                'storage_name': prod_storage_name
                             })
 
                     loop.close()
@@ -2084,12 +2101,14 @@ def api_add_supply_draft_item(draft_id):
 
     item_id = db.add_supply_draft_item(
         supply_draft_id=draft_id,
-        ingredient_id=data.get('ingredient_id'),
-        ingredient_name=data.get('ingredient_name', ''),
+        poster_ingredient_id=data.get('ingredient_id'),
+        poster_ingredient_name=data.get('ingredient_name', ''),
         quantity=data.get('quantity', 1),
-        price=data.get('price', 0),
+        price_per_unit=data.get('price', 0),
         unit=data.get('unit', 'шт'),
-        poster_account_id=data.get('poster_account_id')
+        poster_account_id=data.get('poster_account_id'),
+        storage_id=data.get('storage_id'),
+        storage_name=data.get('storage_name')
     )
 
     return jsonify({'success': True, 'id': item_id})

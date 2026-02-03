@@ -601,6 +601,8 @@ export function SupplyDrafts() {
           price: 0,
           unit: 'шт',
           poster_account_id: ingredient.poster_account_id,
+          storage_id: ingredient.storage_id,
+          storage_name: ingredient.storage_name,
         },
       })
       if (result.id) {

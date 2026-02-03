@@ -79,6 +79,8 @@ export function useAddSupplyDraftItem() {
         price: number
         unit: string
         poster_account_id?: number
+        storage_id?: number
+        storage_name?: string
       }
     }) => {
       const response = await fetch(`/api/supply-drafts/${draftId}/items`, {
