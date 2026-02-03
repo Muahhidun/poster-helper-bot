@@ -558,26 +558,28 @@ document.addEventListener('DOMContentLoaded', function() {
         // Keyboard navigation
         input.addEventListener('keydown', function(e) {
             const items = resultsDiv.querySelectorAll('.supplier-result-item[data-id]');
-            if (items.length === 0 && e.key !== 'Enter') return;
 
             if (e.key === 'ArrowDown') {
+                if (items.length === 0) return;
                 e.preventDefault();
                 selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
                 updateSupplierSelection(items);
             } else if (e.key === 'ArrowUp') {
+                if (items.length === 0) return;
                 e.preventDefault();
                 selectedIndex = Math.max(selectedIndex - 1, 0);
                 updateSupplierSelection(items);
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (selectedIndex >= 0 && items[selectedIndex]) {
-                    selectSupplier(items[selectedIndex], input);
-                } else if (items.length === 1) {
-                    selectSupplier(items[0], input);
-                } else if (resultsDiv.style.display === 'none') {
-                    // Just save the manual input
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                // Select first item if dropdown is open with results
+                if (resultsDiv.style.display !== 'none' && items.length > 0) {
+                    e.preventDefault();
+                    const itemToSelect = selectedIndex >= 0 ? items[selectedIndex] : items[0];
+                    selectSupplier(itemToSelect, input, true);
+                } else if (e.key === 'Enter' && resultsDiv.style.display === 'none' && this.value) {
+                    // Just save the manual input on Enter
                     saveSupplierName(input);
                 }
+                // Tab without dropdown - let browser handle natural focus
             } else if (e.key === 'Escape') {
                 resultsDiv.style.display = 'none';
             }
@@ -611,7 +613,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 200);
         });
 
-        async function selectSupplier(item, inputEl) {
+        async function selectSupplier(item, inputEl, focusNext = false) {
             const draftId = inputEl.dataset.id;
             const supplierId = parseInt(item.dataset.id);
             const supplierName = item.dataset.name;
@@ -627,6 +629,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Load last supply from this supplier
             loadLastSupplyForDraft(draftId, supplierId, supplierName);
+
+            // Focus next field (ingredient search) if requested
+            if (focusNext) {
+                const card = inputEl.closest('.supply-card');
+                const searchInput = card.querySelector('.item-search-input');
+                if (searchInput) {
+                    setTimeout(() => searchInput.focus(), 50);
+                }
+            }
         }
 
         async function saveSupplierName(inputEl) {
