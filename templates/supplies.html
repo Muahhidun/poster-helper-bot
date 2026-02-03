@@ -392,17 +392,13 @@ h1 { margin: 0; }
 
 .last-price-hint {
     font-size: 11px;
-    color: #17a2b8;
+    color: #888;
     cursor: pointer;
     white-space: nowrap;
-    padding: 2px 4px;
-    border-radius: 3px;
-    background: #e3f7fc;
 }
 
 .last-price-hint:hover {
-    background: #17a2b8;
-    color: white;
+    color: #555;
 }
 
 .ingredient-name {
@@ -504,11 +500,62 @@ function evaluateExpression(str) {
     return parseFloat(str) || 0;
 }
 
+// Cache for last prices by ingredient ID
+const lastPriceCache = {};
+
+// Fetch last price for an ingredient
+async function fetchLastPrice(ingredientId) {
+    if (lastPriceCache[ingredientId] !== undefined) {
+        return lastPriceCache[ingredientId];
+    }
+    try {
+        const response = await fetch(`/api/items/price-history/${ingredientId}`);
+        const data = await response.json();
+        if (data.history && data.history.length > 0) {
+            lastPriceCache[ingredientId] = parseFloat(data.history[0].price);
+        } else {
+            lastPriceCache[ingredientId] = null;
+        }
+    } catch (e) {
+        console.log('Could not fetch price history:', e);
+        lastPriceCache[ingredientId] = null;
+    }
+    return lastPriceCache[ingredientId];
+}
+
+// Load last prices for all items in all drafts
+async function loadAllLastPrices() {
+    const allIngredientIds = new Set();
+    Object.values(supplyItems).forEach(items => {
+        items.forEach(item => {
+            if (item.poster_ingredient_id) {
+                allIngredientIds.add(item.poster_ingredient_id);
+            }
+        });
+    });
+
+    // Fetch all prices in parallel
+    await Promise.all([...allIngredientIds].map(id => fetchLastPrice(id)));
+
+    // Update items with last prices
+    Object.keys(supplyItems).forEach(draftId => {
+        supplyItems[draftId].forEach(item => {
+            if (item.poster_ingredient_id && !item.lastPrice) {
+                item.lastPrice = lastPriceCache[item.poster_ingredient_id];
+            }
+        });
+        renderItems(parseInt(draftId));
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Render initial items
+    // Render initial items (without prices first for immediate display)
     Object.keys(supplyItems).forEach(draftId => {
         renderItems(parseInt(draftId));
     });
+
+    // Then load last prices asynchronously
+    loadAllLastPrices();
 
     // Add new supply button
     document.getElementById('add-supply-btn').addEventListener('click', async function() {
@@ -916,6 +963,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const accountId = item.dataset.accountId ? parseInt(item.dataset.accountId) : null;
             const accountName = item.dataset.accountName || '';
 
+            // Fetch last price using cached function
+            const lastPrice = await fetchLastPrice(ingredientId);
+
             // Check if we have last supply data for this ingredient (autofill)
             let autoQty = 0;
             let autoPrice = 0;
@@ -956,7 +1006,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     quantity: autoQty,
                     price_per_unit: autoPrice,
                     total: autoQty * autoPrice,
-                    lastPrice: autoPrice > 0 ? autoPrice : null  // Store for hint
+                    lastPrice: lastPrice  // Always store last price from history
                 });
 
                 // Re-render items
@@ -1022,7 +1072,7 @@ function renderItems(draftId) {
                 <div class="price-cell">
                     <input type="text" class="item-input price" value="${item.price_per_unit || 0}"
                            data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
-                    ${lastPrice && lastPrice != item.price_per_unit ?
+                    ${lastPrice ?
                         `<span class="last-price-hint" data-price="${lastPrice}" title="Последняя цена">${lastPrice}</span>` : ''}
                 </div>
             </td>
