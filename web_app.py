@@ -2663,7 +2663,8 @@ def add_supply_item(draft_id):
         price_per_unit=float(data.get('price', data.get('price_per_unit', 0))),
         poster_ingredient_id=data.get('poster_ingredient_id') or data.get('id'),
         poster_ingredient_name=data.get('poster_ingredient_name') or data.get('name'),
-        poster_account_id=data.get('poster_account_id')
+        poster_account_id=data.get('poster_account_id'),
+        item_type=data.get('item_type', 'ingredient')  # 'ingredient' or 'product'
     )
 
     if item_id:
@@ -2766,7 +2767,8 @@ def process_all_supplies():
                             ingredients.append({
                                 'id': item['poster_ingredient_id'],
                                 'num': float(item['quantity']),
-                                'price': float(item['price_per_unit'])
+                                'price': float(item['price_per_unit']),
+                                'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
                             })
 
                         supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
@@ -3013,7 +3015,8 @@ def process_supply(draft_id):
                         ingredients.append({
                             'id': item['poster_ingredient_id'],
                             'num': float(item['quantity']),
-                            'price': float(item['price_per_unit'])
+                            'price': float(item['price_per_unit']),
+                            'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
                         })
 
                     # Create supply

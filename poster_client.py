@@ -340,7 +340,7 @@ class PosterClient:
         supplier_id: int,
         storage_id: int,
         date: str,
-        ingredients: List[Dict],  # [{"id": 198, "num": 5, "price": 250}, ...]
+        ingredients: List[Dict],  # [{"id": 198, "num": 5, "price": 250, "type": "ingredient"}, ...]
         account_id: int = 1,
         comment: str = ""
     ) -> int:
@@ -351,7 +351,9 @@ class PosterClient:
             supplier_id: Supplier ID
             storage_id: Warehouse ID (default: 1 for "Продукты")
             date: Date in format "YYYY-MM-DD HH:MM:SS"
-            ingredients: List of ingredients with id, num (quantity), price
+            ingredients: List of items with id, num (quantity), price, and optional type
+                        type can be 'ingredient' (default) or 'product'
+                        Poster API uses: 1=ingredient, 2=product
             account_id: Payment account ID (default: 1 for Kaspi Pay)
             comment: Supply comment
 
@@ -397,7 +399,12 @@ class PosterClient:
             # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
             ingredient_sum = round(num * price_for_api)
 
+            # Poster API type: 1=ingredient, 2=product
+            item_type = item.get('type', 'ingredient')
+            poster_type = 2 if item_type == 'product' else 1
+
             data[f'ingredients[{idx}][id]'] = item['id']
+            data[f'ingredients[{idx}][type]'] = poster_type
             data[f'ingredients[{idx}][num]'] = num_for_api
             data[f'ingredients[{idx}][price]'] = price_for_api
             data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
