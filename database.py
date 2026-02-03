@@ -736,6 +736,30 @@ class UserDatabase:
         except Exception as e:
             logger.info(f"✅ Supply items migration: item_type column already exists or error: {e}")
 
+        # Add storage_id and storage_name columns to supply_draft_items
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                try:
+                    cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN storage_id INTEGER DEFAULT 1")
+                except:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN storage_name TEXT")
+                except:
+                    pass
+            else:
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS storage_id INTEGER DEFAULT 1")
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS storage_name TEXT")
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Supply items migration: added storage_id and storage_name columns")
+        except Exception as e:
+            logger.info(f"✅ Supply items migration: storage columns already exist or error: {e}")
+
     def get_user(self, telegram_user_id: int) -> Optional[Dict]:
         """Get user by Telegram ID"""
         conn = self._get_connection()
@@ -2632,7 +2656,9 @@ class UserDatabase:
         poster_ingredient_id: int = None,
         poster_ingredient_name: str = None,
         poster_account_id: int = None,
-        item_type: str = 'ingredient'  # 'ingredient' or 'product'
+        item_type: str = 'ingredient',  # 'ingredient' or 'product'
+        storage_id: int = None,
+        storage_name: str = None
     ) -> Optional[int]:
         """
         Добавить позицию в черновик поставки
@@ -2649,20 +2675,24 @@ class UserDatabase:
                 cursor.execute("""
                     INSERT INTO supply_draft_items
                     (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                     poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type,
+                     storage_id, storage_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                      poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type))
+                      poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type,
+                      storage_id, storage_name))
                 item_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO supply_draft_items
                     (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                     poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type,
+                     storage_id, storage_name)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                      poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type))
+                      poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type,
+                      storage_id, storage_name))
                 item_id = cursor.fetchone()[0]
 
             conn.commit()
