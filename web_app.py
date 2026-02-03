@@ -3012,7 +3012,12 @@ def process_supply(draft_id):
         items_by_account = defaultdict(list)
         for item in items:
             acc_id = item.get('poster_account_id') or primary_account['id']
+            print(f"[SUPPLY DEBUG] Item '{item.get('poster_ingredient_name')}' has poster_account_id={item.get('poster_account_id')}, storage_id={item.get('storage_id')}, using acc_id={acc_id}")
             items_by_account[acc_id].append(item)
+
+        print(f"[SUPPLY DEBUG] items_by_account keys: {list(items_by_account.keys())}")
+        print(f"[SUPPLY DEBUG] accounts_by_id keys: {list(accounts_by_id.keys())}")
+        print(f"[SUPPLY DEBUG] primary_account id: {primary_account['id']}")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
