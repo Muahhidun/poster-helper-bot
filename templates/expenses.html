@@ -107,16 +107,14 @@
                             </div>
                         </td>
                         <td class="poster-account">
-                            <select class="edit-poster-account" data-id="{{ draft.id }}">
+                            <button type="button" class="btn-poster-account"
+                                    data-id="{{ draft.id }}"
+                                    data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}">
+                                {% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}
                                 {% for pa in poster_accounts %}
-                                <option value="{{ pa.id }}"
-                                        {% if draft.poster_account_id == pa.id %}selected
-                                        {% elif not draft.poster_account_id and pa.is_primary %}selected
-                                        {% endif %}>
-                                    {{ pa.name }}
-                                </option>
+                                    {% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}
                                 {% endfor %}
-                            </select>
+                            </button>
                         </td>
                         <td class="actions">
                             <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
@@ -210,16 +208,14 @@
                             </div>
                         </td>
                         <td class="poster-account">
-                            <select class="edit-poster-account" data-id="{{ draft.id }}">
+                            <button type="button" class="btn-poster-account"
+                                    data-id="{{ draft.id }}"
+                                    data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}">
+                                {% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}
                                 {% for pa in poster_accounts %}
-                                <option value="{{ pa.id }}"
-                                        {% if draft.poster_account_id == pa.id %}selected
-                                        {% elif not draft.poster_account_id and pa.is_primary %}selected
-                                        {% endif %}>
-                                    {{ pa.name }}
-                                </option>
+                                    {% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}
                                 {% endfor %}
-                            </select>
+                            </button>
                         </td>
                         <td class="actions">
                             <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
@@ -313,16 +309,14 @@
                             </div>
                         </td>
                         <td class="poster-account">
-                            <select class="edit-poster-account" data-id="{{ draft.id }}">
+                            <button type="button" class="btn-poster-account"
+                                    data-id="{{ draft.id }}"
+                                    data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}">
+                                {% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}
                                 {% for pa in poster_accounts %}
-                                <option value="{{ pa.id }}"
-                                        {% if draft.poster_account_id == pa.id %}selected
-                                        {% elif not draft.poster_account_id and pa.is_primary %}selected
-                                        {% endif %}>
-                                    {{ pa.name }}
-                                </option>
+                                    {% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}
                                 {% endfor %}
-                            </select>
+                            </button>
                         </td>
                         <td class="actions">
                             <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
@@ -647,27 +641,22 @@ h1 {
     box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.1);
 }
 
-/* Select dropdown */
-.edit-poster-account {
-    padding: 6px 10px;
+/* Poster account (department) button */
+.btn-poster-account {
+    padding: 4px 10px;
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
+    border-radius: 20px;
     background: white;
-    font-size: 14px;
-    color: var(--text-primary);
     cursor: pointer;
-    min-width: 120px;
+    font-size: 12px;
+    white-space: nowrap;
+    transition: all 0.15s;
+    min-width: 100px;
 }
 
-.edit-poster-account:hover {
-    border-color: #d1d5db;
-    background: #fafafa;
-}
-
-.edit-poster-account:focus {
-    outline: none;
-    border-color: var(--accent-blue);
-    box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.1);
+.btn-poster-account:hover {
+    background: var(--bg-secondary);
+    border-color: var(--text-muted);
 }
 
 /* Completion button */
@@ -1051,8 +1040,8 @@ function updateRowSyncStatus(row) {
     const category = row.querySelector('.edit-category').value;
     // Get account_id from row dataset (set based on section)
     const accountId = row.dataset.accountId || null;
-    const posterAccountSelect = row.querySelector('.edit-poster-account');
-    const posterAccountId = posterAccountSelect ? posterAccountSelect.value : null;
+    const posterAccountBtn = row.querySelector('.btn-poster-account');
+    const posterAccountId = posterAccountBtn ? posterAccountBtn.dataset.posterAccountId : null;
 
     // Get expense type from the type button
     const typeBtn = row.querySelector('.btn-type');
@@ -1273,6 +1262,40 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.error('Error:', err);
             }
         }
+
+        // Poster account (department) toggle - single click to switch
+        if (e.target.classList.contains('btn-poster-account')) {
+            const btn = e.target;
+            const id = btn.dataset.id;
+            const currentPosterAccountId = parseInt(btn.dataset.posterAccountId);
+
+            // Find next poster account (cycle through available accounts)
+            const currentIndex = posterAccounts.findIndex(pa => pa.id == currentPosterAccountId);
+            const nextIndex = (currentIndex + 1) % posterAccounts.length;
+            const nextAccount = posterAccounts[nextIndex];
+
+            if (nextAccount) {
+                try {
+                    const response = await fetch(`/expenses/update/${id}`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ poster_account_id: nextAccount.id })
+                    });
+
+                    if (response.ok) {
+                        btn.dataset.posterAccountId = nextAccount.id;
+                        btn.textContent = nextAccount.name;
+                        btn.classList.add('saved');
+                        setTimeout(() => btn.classList.remove('saved'), 300);
+                        const row = btn.closest('tr');
+                        row.dataset.posterAccountId = nextAccount.id;
+                        updateRowSyncStatus(row);
+                    }
+                } catch (err) {
+                    console.error('Error:', err);
+                }
+            }
+        }
     });
 
     // Clear '0' on focus for amount fields - user expects empty field to type into
@@ -1285,29 +1308,67 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, true);
 
-    // Handle placeholder row input - when user starts typing, convert to real row
-    // Debounced to prevent multiple rapid calls
-    let placeholderConvertTimeout = null;
-    document.addEventListener('input', function(e) {
-        if (e.target.classList.contains('edit-amount') || e.target.classList.contains('edit-description')) {
+    // Handle placeholder row conversion - convert when user leaves the row (blur)
+    // This prevents focus jumping while user is still typing
+    document.addEventListener('blur', function(e) {
+        if (e.target.classList.contains('edit-amount') ||
+            e.target.classList.contains('edit-description') ||
+            e.target.classList.contains('edit-category')) {
             const row = e.target.closest('tr');
-            if (!row) return;
+            if (!row || !row.classList.contains('placeholder-row')) return;
 
-            // Check if this is a placeholder row (no DB ID)
-            if (row.classList.contains('placeholder-row')) {
+            const tbody = row.parentElement;
+            const accountType = tbody?.dataset.accountType || 'cash';
+
+            // Check if user entered actual data
+            const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
+            const desc = (row.querySelector('.edit-description')?.value || '').trim();
+
+            if (amount > 0 || desc.length > 0) {
+                // Small delay to allow focus to move to next field in the same row
+                // Only convert if focus has left the entire placeholder row
+                setTimeout(() => {
+                    const activeElement = document.activeElement;
+                    const isStillInRow = activeElement && row.contains(activeElement);
+
+                    // Only convert if focus has moved outside this placeholder row
+                    if (!isStillInRow && row.classList.contains('placeholder-row')) {
+                        convertPlaceholderToRealRow(row, accountType, false);
+                    }
+                }, 100);
+            }
+        }
+    }, true);
+
+    // Also convert placeholder on Enter key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            const row = e.target.closest('tr');
+            if (!row || !row.classList.contains('placeholder-row')) return;
+
+            if (e.target.classList.contains('edit-amount') ||
+                e.target.classList.contains('edit-description')) {
                 const tbody = row.parentElement;
                 const accountType = tbody?.dataset.accountType || 'cash';
 
-                // Check if user entered actual data
                 const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
                 const desc = (row.querySelector('.edit-description')?.value || '').trim();
 
                 if (amount > 0 || desc.length > 0) {
-                    // Debounce - wait for user to stop typing then convert to real row
-                    clearTimeout(placeholderConvertTimeout);
-                    placeholderConvertTimeout = setTimeout(() => {
-                        convertPlaceholderToRealRow(row, accountType);
-                    }, 500);
+                    e.preventDefault();
+                    // Convert and focus the description field in the new row
+                    convertPlaceholderToRealRow(row, accountType, true).then(newRow => {
+                        if (newRow) {
+                            // Focus description if coming from amount, or category if from description
+                            if (e.target.classList.contains('edit-amount')) {
+                                const descInput = newRow.querySelector('.edit-description');
+                                if (descInput) descInput.focus();
+                            } else {
+                                const catInput = newRow.querySelector('.edit-category');
+                                if (catInput) catInput.focus();
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -1335,17 +1396,6 @@ document.addEventListener('DOMContentLoaded', function() {
             updateRowSyncStatus(input.closest('tr'));
         }
 
-        // Poster account select (department change)
-        if (e.target.classList.contains('edit-poster-account')) {
-            const select = e.target;
-            const id = select.dataset.id;
-            const posterAccountId = select.value;
-            await updateField(id, 'poster_account_id', posterAccountId);
-            select.classList.add('saved');
-            setTimeout(() => select.classList.remove('saved'), 300);
-            const row = select.closest('tr');
-            updateRowSyncStatus(row);
-        }
     });
 
     // Category autocomplete - use event delegation
@@ -1444,6 +1494,26 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, true);
 
+    // Tab navigation for placeholder row - prevent jumping to new placeholder
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab' && !e.shiftKey) {
+            const row = e.target.closest('tr');
+            if (!row || !row.classList.contains('placeholder-row')) return;
+
+            // In placeholder row: Tab from amount -> description -> category (in same row)
+            if (e.target.classList.contains('edit-amount')) {
+                e.preventDefault();
+                const descInput = row.querySelector('.edit-description');
+                if (descInput) descInput.focus();
+            } else if (e.target.classList.contains('edit-description')) {
+                e.preventDefault();
+                const catInput = row.querySelector('.edit-category');
+                if (catInput) catInput.focus();
+            }
+            // From category, let it go naturally (will trigger blur and conversion if needed)
+        }
+    });
+
     // Category keyboard navigation
     document.addEventListener('keydown', function(e) {
         if (e.target.classList.contains('edit-category')) {
@@ -1504,13 +1574,10 @@ function createPlaceholderRow(accountType) {
     tr.dataset.accountType = accountType;
     tr.dataset.id = 'placeholder-' + accountType;
 
-    // Build poster accounts options with default selection
-    let posterAccountOptions = '';
-    const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id;
-    posterAccounts.forEach(pa => {
-        const selected = pa.id == defaultPosterAccountId ? 'selected' : '';
-        posterAccountOptions += `<option value="${pa.id}" ${selected}>${pa.name}</option>`;
-    });
+    // Get default poster account
+    const defaultPosterAccount = posterAccounts.find(pa => pa.is_primary) || posterAccounts[0];
+    const defaultPosterAccountId = defaultPosterAccount?.id || '';
+    const defaultPosterAccountName = defaultPosterAccount?.name || '';
 
     tr.innerHTML = `
         <td>
@@ -1541,9 +1608,10 @@ function createPlaceholderRow(accountType) {
             </div>
         </td>
         <td class="poster-account">
-            <select class="edit-poster-account" style="opacity:0.7" disabled>
-                ${posterAccountOptions}
-            </select>
+            <span class="btn-poster-account" style="opacity:0.5;cursor:default"
+                  data-poster-account-id="${defaultPosterAccountId}">
+                ${defaultPosterAccountName}
+            </span>
         </td>
         <td class="actions">
         </td>
@@ -1566,12 +1634,21 @@ function ensurePlaceholderRow(accountType) {
 }
 
 // Convert placeholder row to a real row by creating DB entry
-async function convertPlaceholderToRealRow(placeholderRow, accountType) {
+async function convertPlaceholderToRealRow(placeholderRow, accountType, preserveFocus = true) {
     // Prevent duplicate conversions
     if (pendingPlaceholderConversion[accountType]) {
         return null;
     }
     pendingPlaceholderConversion[accountType] = true;
+
+    // Remember which field was focused before conversion
+    let focusedFieldClass = null;
+    const activeElement = document.activeElement;
+    if (preserveFocus && activeElement && placeholderRow.contains(activeElement)) {
+        if (activeElement.classList.contains('edit-amount')) focusedFieldClass = 'edit-amount';
+        else if (activeElement.classList.contains('edit-description')) focusedFieldClass = 'edit-description';
+        else if (activeElement.classList.contains('edit-category')) focusedFieldClass = 'edit-category';
+    }
 
     try {
         // Get values from placeholder
@@ -1587,6 +1664,10 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType) {
         // Get account_id for this section
         const accountId = accountTypeMap[accountType];
 
+        // Get poster account id from placeholder
+        const posterAccountBtn = placeholderRow.querySelector('.btn-poster-account');
+        const posterAccountId = posterAccountBtn ? posterAccountBtn.dataset.posterAccountId : null;
+
         // Create real DB entry with the data (pass both account_id AND source for proper grouping)
         const response = await fetch('/expenses/create', {
             method: 'POST',
@@ -1596,7 +1677,8 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType) {
                 source: accountType,  // Also set source field for consistent grouping
                 amount: amount,
                 description: description,
-                category: category || undefined
+                category: category || undefined,
+                poster_account_id: posterAccountId || undefined
             })
         });
 
@@ -1607,6 +1689,7 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType) {
             result.draft.amount = amount;
             result.draft.description = description;
             result.draft.category = category;
+            result.draft.poster_account_id = posterAccountId;
             const newRow = createRowElement(result.draft);
 
             // Replace placeholder with real row
@@ -1615,6 +1698,19 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType) {
 
             // Add new placeholder at the end
             ensurePlaceholderRow(accountType);
+
+            // Restore focus to the same field in the new row
+            if (focusedFieldClass) {
+                const fieldToFocus = newRow.querySelector('.' + focusedFieldClass);
+                if (fieldToFocus) {
+                    fieldToFocus.focus();
+                    // For text inputs, put cursor at the end
+                    if (fieldToFocus.type === 'text' || fieldToFocus.type === 'number') {
+                        const len = fieldToFocus.value.length;
+                        fieldToFocus.setSelectionRange(len, len);
+                    }
+                }
+            }
 
             updateSummaryGlobal();
             return newRow;
@@ -1711,12 +1807,10 @@ function createRowElement(draft) {
     tr.dataset.completionStatus = completionStatus;
     tr.dataset.accountType = accountType;
 
-    // Build poster accounts options
-    let posterAccountOptions = '';
-    posterAccounts.forEach(pa => {
-        const selected = pa.id == draft.poster_account_id || (!draft.poster_account_id && pa.is_primary) ? 'selected' : '';
-        posterAccountOptions += `<option value="${pa.id}" ${selected}>${pa.name}</option>`;
-    });
+    // Find the current poster account or default to primary
+    const currentPosterAccountId = draft.poster_account_id || posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id;
+    const currentPosterAccount = posterAccounts.find(pa => pa.id == currentPosterAccountId);
+    const posterAccountName = currentPosterAccount ? currentPosterAccount.name : '';
 
     // Completion status icon
     const statusIcons = { pending: '⚪', partial: '🟡', completed: '✅' };
@@ -1757,9 +1851,11 @@ function createRowElement(draft) {
             </div>
         </td>
         <td class="poster-account">
-            <select class="edit-poster-account" data-id="${draft.id}">
-                ${posterAccountOptions}
-            </select>
+            <button type="button" class="btn-poster-account"
+                    data-id="${draft.id}"
+                    data-poster-account-id="${currentPosterAccountId}">
+                ${posterAccountName}
+            </button>
         </td>
         <td class="actions">
             <button type="button" class="btn-delete" data-id="${draft.id}" title="Удалить">🗑️</button>

@@ -360,9 +360,10 @@ class PosterClient:
 
         Note: Uses form-urlencoded format, not JSON
         """
-        # Calculate total amount (use round() for consistent rounding, not int() which truncates)
+        # Calculate total amount using rounded prices (same as ingredient_sum calculation)
+        # This ensures transaction amount matches sum of ingredient_sums
         total_amount = sum(
-            round(item['num'] * item['price'])
+            round(item['num'] * round(item['price']))
             for item in ingredients
         )
 
@@ -389,11 +390,16 @@ class PosterClient:
                     # Send as string for decimal values (e.g., "4.5", "1.2", "0.38")
                     num_for_api = str(num)
 
-            # For calculations, use original numeric value
-            ingredient_sum = round(num * item['price'])
+            # Calculate price for API (round to nearest integer, not truncate)
+            price_for_api = round(item['price'])
+
+            # Calculate ingredient_sum using the same price that goes to API
+            # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
+            ingredient_sum = round(num * price_for_api)
+
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][num]'] = num_for_api
-            data[f'ingredients[{idx}][price]'] = int(item['price'])
+            data[f'ingredients[{idx}][price]'] = price_for_api
             data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
             data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
             data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
@@ -447,9 +453,10 @@ class PosterClient:
 
         Note: Requires ALL supply parameters, not just status
         """
-        # Calculate total amount (use round() for consistent rounding, not int() which truncates)
+        # Calculate total amount using rounded prices (same as ingredient_sum calculation)
+        # This ensures transaction amount matches sum of ingredient_sums
         total_amount = sum(
-            round(item['num'] * item['price'])
+            round(item['num'] * round(item['price']))
             for item in ingredients
         )
 
@@ -475,10 +482,16 @@ class PosterClient:
                 else:
                     num_for_api = str(num)
 
-            ingredient_sum = round(num * item['price'])
+            # Calculate price for API (round to nearest integer, not truncate)
+            price_for_api = round(item['price'])
+
+            # Calculate ingredient_sum using the same price that goes to API
+            # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
+            ingredient_sum = round(num * price_for_api)
+
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][num]'] = num_for_api
-            data[f'ingredients[{idx}][price]'] = int(item['price'])
+            data[f'ingredients[{idx}][price]'] = price_for_api
             data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
             data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
             data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
