@@ -166,6 +166,8 @@ export interface PosterItem {
   type: 'ingredient' | 'product'
   poster_account_id?: number    // Which Poster business account this item belongs to
   poster_account_name?: string  // Display name (e.g., "PizzBurg", "PizzBurg Cafe")
+  storage_id?: number           // Storage/warehouse ID in Poster
+  storage_name?: string         // Storage name (e.g., "Pizzburg-cafe")
 }
 
 // Shipment Templates
