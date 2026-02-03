@@ -384,6 +384,27 @@ h1 { margin: 0; }
 .item-input.price { width: 80px; }
 .item-input.sum { width: 90px; font-weight: 600; }
 
+.price-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.last-price-hint {
+    font-size: 11px;
+    color: #17a2b8;
+    cursor: pointer;
+    white-space: nowrap;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: #e3f7fc;
+}
+
+.last-price-hint:hover {
+    background: #17a2b8;
+    color: white;
+}
+
 .ingredient-name {
     font-weight: 500;
 }
@@ -972,7 +993,20 @@ function renderItems(draftId) {
         return;
     }
 
-    tbody.innerHTML = items.map((item, i) => `
+    // Get last supply data for this draft (if available)
+    const lastSupply = lastSupplyByDraft[draftId];
+
+    tbody.innerHTML = items.map((item, i) => {
+        // Get last price: from item itself or from last supply data
+        let lastPrice = item.lastPrice;
+        if (!lastPrice && lastSupply && lastSupply.items) {
+            const lastItem = lastSupply.items.find(li =>
+                li.id === item.poster_ingredient_id || li.name === item.poster_ingredient_name
+            );
+            if (lastItem) lastPrice = lastItem.price;
+        }
+
+        return `
         <tr data-item-id="${item.id}">
             <td>
                 <span class="ingredient-name">${item.poster_ingredient_name || item.item_name}</span>
@@ -985,8 +1019,12 @@ function renderItems(draftId) {
                        data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
             </td>
             <td>
-                <input type="text" class="item-input price" value="${item.price_per_unit || 0}"
-                       data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
+                <div class="price-cell">
+                    <input type="text" class="item-input price" value="${item.price_per_unit || 0}"
+                           data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
+                    ${lastPrice && lastPrice != item.price_per_unit ?
+                        `<span class="last-price-hint" data-price="${lastPrice}" title="Последняя цена">${lastPrice}</span>` : ''}
+                </div>
             </td>
             <td>
                 <input type="text" class="item-input sum" value="${(item.quantity || 0) * (item.price_per_unit || 0)}"
@@ -995,8 +1033,8 @@ function renderItems(draftId) {
             <td>
                 <button type="button" class="btn-delete-item" data-item-id="${item.id}" data-draft-id="${draftId}">🗑️</button>
             </td>
-        </tr>
-    `).join('');
+        </tr>`;
+    }).join('');
 
     // Attach event listeners for all three fields (qty, price, sum)
     tbody.querySelectorAll('.item-input.qty, .item-input.price, .item-input.sum').forEach(input => {
@@ -1101,6 +1139,22 @@ function renderItems(draftId) {
             // Re-render
             renderItems(draftId);
             updateTotals();
+        });
+    });
+
+    // Click on last price hint to fill price
+    tbody.querySelectorAll('.last-price-hint').forEach(hint => {
+        hint.addEventListener('click', function() {
+            const price = parseFloat(this.dataset.price);
+            const row = this.closest('tr');
+            const priceInput = row.querySelector('.item-input.price');
+            const itemId = parseInt(priceInput.dataset.itemId);
+
+            priceInput.value = price;
+            priceInput.dispatchEvent(new Event('change'));
+
+            // Hide hint after use
+            this.style.display = 'none';
         });
     });
 
