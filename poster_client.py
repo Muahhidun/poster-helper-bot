@@ -415,7 +415,16 @@ class PosterClient:
         logger.info(f"Supply data: {data}")
 
         # storage.createSupply требует form-urlencoded, не JSON!
-        result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
+        try:
+            result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
+        except Exception as e:
+            error_msg = str(e)
+            # Error 32 usually means invalid ingredient ID
+            if 'error (32)' in error_msg.lower():
+                ingredient_ids = [item['id'] for item in ingredients]
+                logger.error(f"Error 32 - likely invalid ingredient ID. IDs used: {ingredient_ids}")
+                raise Exception(f"Ошибка Poster API (32): Возможно один из ингредиентов не существует в Poster. ID: {ingredient_ids}")
+            raise
 
         supply_id = result.get('response')
         if supply_id:
