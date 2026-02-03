@@ -720,6 +720,22 @@ class UserDatabase:
         except Exception as e:
             logger.info(f"✅ Supply drafts migration: columns already exist or error: {e}")
 
+        # Add item_type column to supply_draft_items (ingredient vs product)
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN item_type TEXT DEFAULT 'ingredient'")
+            else:
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS item_type TEXT DEFAULT 'ingredient'")
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Supply items migration: added item_type column")
+        except Exception as e:
+            logger.info(f"✅ Supply items migration: item_type column already exists or error: {e}")
+
     def get_user(self, telegram_user_id: int) -> Optional[Dict]:
         """Get user by Telegram ID"""
         conn = self._get_connection()
@@ -2615,7 +2631,8 @@ class UserDatabase:
         price_per_unit: float = 0,
         poster_ingredient_id: int = None,
         poster_ingredient_name: str = None,
-        poster_account_id: int = None
+        poster_account_id: int = None,
+        item_type: str = 'ingredient'  # 'ingredient' or 'product'
     ) -> Optional[int]:
         """
         Добавить позицию в черновик поставки
@@ -2632,20 +2649,20 @@ class UserDatabase:
                 cursor.execute("""
                     INSERT INTO supply_draft_items
                     (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                     poster_ingredient_id, poster_ingredient_name, poster_account_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                      poster_ingredient_id, poster_ingredient_name, poster_account_id))
+                      poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type))
                 item_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO supply_draft_items
                     (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                     poster_ingredient_id, poster_ingredient_name, poster_account_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
-                      poster_ingredient_id, poster_ingredient_name, poster_account_id))
+                      poster_ingredient_id, poster_ingredient_name, poster_account_id, item_type))
                 item_id = cursor.fetchone()[0]
 
             conn.commit()

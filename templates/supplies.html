@@ -776,7 +776,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         name: ing.name,
                         quantity: lastItem.quantity || 1,
                         price: lastItem.price || 0,
-                        poster_account_id: ing.poster_account_id || null
+                        poster_account_id: ing.poster_account_id || null,
+                        item_type: ing.type || 'ingredient'
                     })
                 });
 
@@ -790,6 +791,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         poster_ingredient_name: ing.name,
                         poster_account_id: ing.poster_account_id,
                         poster_account_name: ing.poster_account_name || '',
+                        item_type: ing.type || 'ingredient',
                         quantity: lastItem.quantity || 1,
                         price_per_unit: lastItem.price || 0,
                         total: (lastItem.quantity || 1) * (lastItem.price || 0)
@@ -902,7 +904,8 @@ document.addEventListener('DOMContentLoaded', function() {
                              data-id="${ing.id}"
                              data-name="${ing.name}"
                              data-account-id="${ing.poster_account_id || ''}"
-                             data-account-name="${ing.poster_account_name || ''}">
+                             data-account-name="${ing.poster_account_name || ''}"
+                             data-item-type="${ing.type || 'ingredient'}">
                             <span>${ing.name}</span>
                             ${ing.poster_account_name ? `<span class="account-tag">${ing.poster_account_name}</span>` : ''}
                         </div>
@@ -962,6 +965,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const ingredientName = item.dataset.name;
             const accountId = item.dataset.accountId ? parseInt(item.dataset.accountId) : null;
             const accountName = item.dataset.accountName || '';
+            const itemType = item.dataset.itemType || 'ingredient';
 
             // Fetch last price using cached function
             const lastPrice = await fetchLastPrice(ingredientId);
@@ -988,7 +992,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     name: ingredientName,
                     quantity: autoQty,
                     price: autoPrice,
-                    poster_account_id: accountId
+                    poster_account_id: accountId,
+                    item_type: itemType
                 })
             });
 
@@ -1003,6 +1008,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     poster_ingredient_name: ingredientName,
                     poster_account_id: accountId,
                     poster_account_name: accountName,
+                    item_type: itemType,
                     quantity: autoQty,
                     price_per_unit: autoPrice,
                     total: autoQty * autoPrice,
