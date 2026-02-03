@@ -1379,21 +1379,27 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.target.classList.contains('edit-amount')) {
             const input = e.target;
             const id = input.dataset.id;
-            await updateField(id, 'amount', input.value);
-            input.classList.add('saved');
-            setTimeout(() => input.classList.remove('saved'), 300);
+            // Skip placeholder rows (no real ID yet)
+            if (id && !id.startsWith('placeholder')) {
+                await updateField(id, 'amount', input.value);
+                input.classList.add('saved');
+                setTimeout(() => input.classList.remove('saved'), 300);
+                updateRowSyncStatus(input.closest('tr'));
+            }
             updateSummary();
-            updateRowSyncStatus(input.closest('tr'));
         }
 
         // Description editing
         if (e.target.classList.contains('edit-description')) {
             const input = e.target;
             const id = input.dataset.id;
-            await updateField(id, 'description', input.value);
-            input.classList.add('saved');
-            setTimeout(() => input.classList.remove('saved'), 300);
-            updateRowSyncStatus(input.closest('tr'));
+            // Skip placeholder rows (no real ID yet)
+            if (id && !id.startsWith('placeholder')) {
+                await updateField(id, 'description', input.value);
+                input.classList.add('saved');
+                setTimeout(() => input.classList.remove('saved'), 300);
+                updateRowSyncStatus(input.closest('tr'));
+            }
         }
 
     });
@@ -1471,10 +1477,13 @@ document.addEventListener('DOMContentLoaded', function() {
             resultsDiv.style.display = 'none';
 
             const id = input.dataset.id;
-            await updateField(id, 'category', name);
-            input.classList.add('saved');
-            setTimeout(() => input.classList.remove('saved'), 300);
-            updateRowSyncStatus(input.closest('tr'));
+            // Only save to server for real rows (not placeholders)
+            if (id && !id.startsWith('placeholder')) {
+                await updateField(id, 'category', name);
+                input.classList.add('saved');
+                setTimeout(() => input.classList.remove('saved'), 300);
+                updateRowSyncStatus(input.closest('tr'));
+            }
         }
     });
 
@@ -1486,10 +1495,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
             setTimeout(async () => {
                 resultsDiv.style.display = 'none';
-                // Save value
+                // Save value only for real rows (not placeholders)
                 const id = input.dataset.id;
-                await updateField(id, 'category', input.value);
-                updateRowSyncStatus(input.closest('tr'));
+                if (id && !id.startsWith('placeholder')) {
+                    await updateField(id, 'category', input.value);
+                    updateRowSyncStatus(input.closest('tr'));
+                }
             }, 200);
         }
     }, true);
