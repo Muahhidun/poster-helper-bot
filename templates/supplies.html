@@ -913,7 +913,7 @@ document.addEventListener('DOMContentLoaded', function() {
                              data-storage-name="${ing.storage_name || ''}"
                              data-item-type="${ing.type || 'ingredient'}">
                             <span>${ing.name}</span>
-                            ${ing.poster_account_name ? `<span class="account-tag">${ing.poster_account_name}</span>` : ''}
+                            ${ing.storage_name ? `<span class="account-tag">${ing.storage_name}</span>` : (ing.poster_account_name ? `<span class="account-tag">${ing.poster_account_name}</span>` : '')}
                         </div>
                     `).join('');
                 }
@@ -1080,7 +1080,7 @@ function renderItems(draftId) {
                 <span class="ingredient-name">${item.poster_ingredient_name || item.item_name}</span>
             </td>
             <td>
-                ${item.poster_account_name ? `<span class="account-badge">${item.poster_account_name}</span>` : '-'}
+                ${item.storage_name ? `<span class="account-badge">${item.storage_name}</span>` : (item.poster_account_name ? `<span class="account-badge">${item.poster_account_name}</span>` : '-')}
             </td>
             <td>
                 <input type="text" class="item-input qty" value="${item.quantity || 0}"
