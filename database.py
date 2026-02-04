@@ -2697,6 +2697,8 @@ class UserDatabase:
 
             conn.commit()
             conn.close()
+            logger.info(f"[DB] Added supply item id={item_id}: ingredient_id={poster_ingredient_id}, "
+                        f"poster_account_id={poster_account_id}, storage_id={storage_id}")
             return item_id
 
         except Exception as e:
