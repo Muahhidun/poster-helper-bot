@@ -5852,11 +5852,15 @@ async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE
                     ingredients_dict[item_id]['num'] += item['num']
                 else:
                     # Новый ингредиент - только нужные поля
-                    ingredients_dict[item_id] = {
+                    # item_type: 'ingredient', 'semi_product', or 'product'
+                    ingredient_data = {
                         'id': item_id,
                         'num': item['num'],
                         'price': item['price']
                     }
+                    if item.get('item_type'):
+                        ingredient_data['type'] = item['item_type']
+                    ingredients_dict[item_id] = ingredient_data
 
             # Конвертируем в список
             ingredients_for_api = list(ingredients_dict.values())

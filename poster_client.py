@@ -352,8 +352,8 @@ class PosterClient:
             storage_id: Warehouse ID (default: 1 for "Продукты")
             date: Date in format "YYYY-MM-DD HH:MM:SS"
             ingredients: List of items with id, num (quantity), price, and optional type
-                        type can be 'ingredient' (default) or 'product'
-                        Poster API uses: 1=ingredient, 2=product
+                        type can be 'ingredient' (default), 'semi_product', or 'product'
+                        Poster API uses: 1=ingredient, 2=semi-product, 4=product
             account_id: Payment account ID (default: 1 for Kaspi Pay)
             comment: Supply comment
 
@@ -399,9 +399,10 @@ class PosterClient:
             # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
             ingredient_sum = round(num * price_for_api)
 
-            # Poster API type: 1=ingredient, 2=product
+            # Poster API type: 1=ingredient, 2=semi-product (полуфабрикат), 4=product (товар)
             item_type = item.get('type', 'ingredient')
-            poster_type = 2 if item_type == 'product' else 1
+            type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+            poster_type = type_map.get(item_type, 1)
 
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][type]'] = poster_type

@@ -519,10 +519,14 @@ def search_items():
                                 continue
                             seen_names.add(name_lower)
 
+                            # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
+                            poster_ing_type = str(ing.get('type', '1'))
+                            item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
+
                             items.append({
                                 'id': int(ing.get('ingredient_id', 0)),
                                 'name': name,
-                                'type': 'ingredient',
+                                'type': item_type,
                                 'poster_account_id': acc['id'],
                                 'poster_account_name': acc['account_name']
                             })
@@ -2494,11 +2498,14 @@ def list_supplies():
                         # Always use default (main) storage for the establishment
                         storage_id = default_storage_id
                         storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
+                        # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
+                        poster_ing_type = str(ing.get('type', '1'))
+                        item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
                         # Don't deduplicate - show from all accounts with account tag
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
-                            'type': 'ingredient',
+                            'type': item_type,
                             'poster_account_id': acc['id'],
                             'poster_account_name': acc.get('account_name', ''),
                             'storage_id': storage_id,
@@ -2590,10 +2597,14 @@ def view_all_supplies():
                             continue
                         seen_names.add(name_lower)
 
+                        # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
+                        poster_ing_type = str(ing.get('type', '1'))
+                        item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
+
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
-                            'type': 'ingredient',
+                            'type': item_type,
                             'poster_account_id': acc['id'],
                             'poster_account_name': acc.get('name', '')
                         })
@@ -2804,7 +2815,7 @@ def process_all_supplies():
                                 'id': item['poster_ingredient_id'],
                                 'num': float(item['quantity']),
                                 'price': float(item['price_per_unit']),
-                                'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
+                                'type': item.get('item_type', 'ingredient')  # 'ingredient', 'semi_product', or 'product'
                             })
 
                         supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
@@ -2897,10 +2908,14 @@ def view_supply(draft_id):
                             continue
                         seen_names.add(name_lower)
 
+                        # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
+                        poster_ing_type = str(ing.get('type', '1'))
+                        item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
+
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
-                            'type': 'ingredient',
+                            'type': item_type,
                             'poster_account_id': acc['id'],
                             'poster_account_name': acc['account_name']
                         })
@@ -3057,10 +3072,11 @@ def process_supply(draft_id):
                             'id': item['poster_ingredient_id'],
                             'num': float(item['quantity']),
                             'price': float(item['price_per_unit']),
-                            'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
+                            'type': item.get('item_type', 'ingredient')  # 'ingredient', 'semi_product', or 'product'
                         })
 
-                    print(f"Creating supply with storage_id={supply_storage_id} (default for {account.get('account_name', '')})")
+                    ingredient_types = {i['id']: i['type'] for i in ingredients}
+                    logger.info(f"Supply for {account.get('account_name', '')}: storage_id={supply_storage_id}, ingredient types: {ingredient_types}")
 
                     # Create supply
                     supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
