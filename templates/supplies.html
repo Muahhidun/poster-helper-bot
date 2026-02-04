@@ -777,6 +777,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         quantity: lastItem.quantity || 1,
                         price: lastItem.price || 0,
                         poster_account_id: ing.poster_account_id || null,
+                        poster_account_name: ing.poster_account_name || '',
                         storage_id: ing.storage_id || null,
                         storage_name: ing.storage_name || '',
                         item_type: ing.type || 'ingredient'
@@ -1001,6 +1002,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     quantity: autoQty,
                     price: autoPrice,
                     poster_account_id: accountId,
+                    poster_account_name: accountName,
                     storage_id: storageId,
                     storage_name: storageName,
                     item_type: itemType
