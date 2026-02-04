@@ -3015,6 +3015,12 @@ def process_supply(draft_id):
             for poster_account_id, account_items in items_by_account.items():
                 account = accounts_by_id.get(poster_account_id, primary_account)
 
+                # Log account details for debugging multi-account issues
+                token_prefix = account['poster_token'][:8] if account.get('poster_token') else 'N/A'
+                logger.info(f"Processing supply for account '{account.get('account_name')}' "
+                           f"(db_id={poster_account_id}, base_url={account.get('poster_base_url')}, "
+                           f"token={token_prefix}...)")
+
                 client = PosterClient(
                     telegram_user_id=TELEGRAM_USER_ID,
                     poster_token=account['poster_token'],
