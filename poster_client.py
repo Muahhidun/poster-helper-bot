@@ -399,11 +399,11 @@ class PosterClient:
             # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
             ingredient_sum = round(num * price_for_api)
 
-            # Poster API createSupply type: product/dish/prepack=1, ingredient=4, modifier=5
-            # See: https://github.com/joinposter/docs/blob/master/en/web/storage/createSupply.md
+            # Poster API type: 1=ingredient, 2=semi-product (полуфабрикат), 4=product (товар)
+            # Note: Poster GitHub docs have labels swapped, but actual API matches getIngredients types
             item_type = item.get('type', 'ingredient')
-            type_map = {'ingredient': 4, 'semi_product': 4, 'product': 1}
-            poster_type = type_map.get(item_type, 4)
+            type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+            poster_type = type_map.get(item_type, 1)
 
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][type]'] = poster_type
