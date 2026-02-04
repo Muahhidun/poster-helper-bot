@@ -98,7 +98,8 @@ def load_items_from_csv():
                 for row in reader:
                     # Only include products from "Напитки" category
                     # Skip tech cards (pizzas, burgers, doner, etc.)
-                    if row.get('category_name', '') != 'Напитки':
+                    # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
+                    if not row.get('category_name', '').startswith('Напитки'):
                         continue
                     items.append({
                         'id': int(row['product_id']),
@@ -537,8 +538,9 @@ def search_items():
                                 continue
                             # Only include products from "Напитки" category for supplies
                             # Tech cards (Pizzas, Burgers, Doner etc.) should not appear in supplies
+                            # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
                             category = prod.get('category_name', '')
-                            if category != 'Напитки':
+                            if not category.startswith('Напитки'):
                                 continue
 
                             name = prod.get('product_name', '')
@@ -2511,8 +2513,9 @@ def list_supplies():
                         if str(prod.get('delete', '0')) == '1':
                             continue
                         # Only include products from "Напитки" category for supplies
+                        # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
                         category = prod.get('category_name', '')
-                        if category != 'Напитки':
+                        if not category.startswith('Напитки'):
                             continue
                         name = prod.get('product_name', '')
                         # Always use default (main) storage for the establishment
