@@ -508,11 +508,6 @@ def search_items():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
 
-                    # Load storages for this account
-                    storages = loop.run_until_complete(poster_client.get_storages())
-                    storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
-                    default_storage_id = int(storages[0]['storage_id']) if storages else 1
-
                     if source in ['all', 'ingredient']:
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
                         for ing in ingredients:
@@ -524,18 +519,12 @@ def search_items():
                                 continue
                             seen_names.add(name_lower)
 
-                            # Get storage_id from ingredient
-                            storage_id = int(ing.get('storage_id', default_storage_id))
-                            storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
-
                             items.append({
                                 'id': int(ing.get('ingredient_id', 0)),
                                 'name': name,
                                 'type': 'ingredient',
                                 'poster_account_id': acc['id'],
-                                'poster_account_name': acc['account_name'],
-                                'storage_id': storage_id,
-                                'storage_name': storage_name
+                                'poster_account_name': acc['account_name']
                             })
 
                     # Also fetch products (товары) - only drinks like Ayran, Coca-Cola, etc.
@@ -560,19 +549,13 @@ def search_items():
                                 continue
                             seen_names.add(name_lower)
 
-                            # Get storage_id from product
-                            prod_storage_id = int(prod.get('storage_id', default_storage_id))
-                            prod_storage_name = storage_map.get(prod_storage_id, f'Storage {prod_storage_id}')
-
                             # Products use product_id in Poster
                             items.append({
                                 'id': int(prod.get('product_id', 0)),
                                 'name': name,
                                 'type': 'product',
                                 'poster_account_id': acc['id'],
-                                'poster_account_name': acc['account_name'],
-                                'storage_id': prod_storage_id,
-                                'storage_name': prod_storage_name
+                                'poster_account_name': acc['account_name']
                             })
 
                     loop.close()
@@ -2101,14 +2084,12 @@ def api_add_supply_draft_item(draft_id):
 
     item_id = db.add_supply_draft_item(
         supply_draft_id=draft_id,
-        poster_ingredient_id=data.get('ingredient_id'),
-        poster_ingredient_name=data.get('ingredient_name', ''),
+        ingredient_id=data.get('ingredient_id'),
+        ingredient_name=data.get('ingredient_name', ''),
         quantity=data.get('quantity', 1),
-        price_per_unit=data.get('price', 0),
+        price=data.get('price', 0),
         unit=data.get('unit', 'шт'),
-        poster_account_id=data.get('poster_account_id'),
-        storage_id=data.get('storage_id'),
-        storage_name=data.get('storage_name')
+        poster_account_id=data.get('poster_account_id')
     )
 
     return jsonify({'success': True, 'id': item_id})
@@ -2467,10 +2448,8 @@ def list_supplies():
     items = []
     poster_accounts_list = []
 
-    logger.info(f"[SUPPLIES PAGE] Loading ingredients for supplies page...")
     try:
         accounts = db.get_accounts(TELEGRAM_USER_ID)
-        logger.info(f"[SUPPLIES PAGE] Found {len(accounts) if accounts else 0} poster accounts")
         if accounts:
             from poster_client import PosterClient
 
@@ -2504,10 +2483,12 @@ def list_supplies():
                     storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
                     # Get first storage ID as default
                     default_storage_id = int(storages[0]['storage_id']) if storages else 1
-                    logger.info(f"[SUPPLIES PAGE] Storages for {acc.get('account_name', '')} (id={acc['id']}): {storage_map}, default={default_storage_id}")
+                    print(f"  Storages for {acc.get('account_name', '')}: {storage_map}, default={default_storage_id}")
 
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
-                    logger.info(f"[SUPPLIES PAGE] Loaded {len(ingredients)} ingredients from {acc.get('account_name', '')} (id={acc['id']})")
+                    # Log first ingredient fields to understand structure
+                    if ingredients:
+                        print(f"  First ingredient fields: {list(ingredients[0].keys())}")
                     for ing in ingredients:
                         name = ing.get('ingredient_name', '')
                         # Get storage_id from ingredient if available, otherwise use default
@@ -2549,16 +2530,10 @@ def list_supplies():
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
-                    logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                    print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
-        logger.error(f"Error loading ingredients: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-
-    logger.info(f"[SUPPLIES PAGE] Total items loaded: {len(items)}")
+        print(f"Error loading ingredients: {e}")
 
     # Load suppliers for autocomplete
     suppliers = load_suppliers_from_csv()
@@ -2706,14 +2681,6 @@ def add_supply_item(draft_id):
     if storage_id is not None:
         storage_id = int(storage_id)
 
-    poster_account_id = data.get('poster_account_id')
-    if poster_account_id is not None:
-        poster_account_id = int(poster_account_id)
-
-    logger.info(f"[ADD-ITEM] draft={draft_id}, ingredient={data.get('poster_ingredient_id') or data.get('id')}, "
-               f"poster_account_id={poster_account_id} (type={type(poster_account_id).__name__}), "
-               f"storage_id={storage_id}, storage_name={data.get('storage_name')}")
-
     item_id = db.add_supply_draft_item(
         supply_draft_id=draft_id,
         item_name=data.get('item_name', data.get('name', '')),
@@ -2722,7 +2689,7 @@ def add_supply_item(draft_id):
         price_per_unit=float(data.get('price', data.get('price_per_unit', 0))),
         poster_ingredient_id=data.get('poster_ingredient_id') or data.get('id'),
         poster_ingredient_name=data.get('poster_ingredient_name') or data.get('name'),
-        poster_account_id=poster_account_id,
+        poster_account_id=data.get('poster_account_id'),
         item_type=data.get('item_type', 'ingredient'),  # 'ingredient' or 'product'
         storage_id=storage_id,
         storage_name=data.get('storage_name')
@@ -2842,9 +2809,7 @@ def process_all_supplies():
 
                         supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
 
-                        logger.info(f"[PROCESS-ALL] Creating supply for account {acc_id} ({account.get('account_name')}) "
-                                   f"with storage_id={supply_storage_id}, {len(ingredients)} items, "
-                                   f"ingredient_ids={[i['id'] for i in ingredients]}")
+                        print(f"Creating supply with storage_id={supply_storage_id}")
                         supply_id = await client.create_supply(
                             supplier_id=supplier_id,
                             storage_id=supply_storage_id,
@@ -3001,13 +2966,6 @@ def process_supply(draft_id):
 
     # Check all items have matched ingredients
     items = draft.get('items', [])
-    if items:
-        logger.info(f"[PROCESS] Item DB columns: {list(items[0].keys())}")
-    for item in items:
-        logger.info(f"[PROCESS] Item from DB: id={item.get('id')}, name={item.get('poster_ingredient_name')}, "
-                    f"poster_account_id={item.get('poster_account_id')} (type={type(item.get('poster_account_id')).__name__}), "
-                    f"storage_id={item.get('storage_id')}, poster_ingredient_id={item.get('poster_ingredient_id')}, "
-                    f"has_key_poster_account_id={'poster_account_id' in item}")
     unmatched = [i for i in items if not i.get('poster_ingredient_id')]
 
     if unmatched:
@@ -3034,19 +2992,8 @@ def process_supply(draft_id):
         # Group items by poster_account_id
         items_by_account = defaultdict(list)
         for item in items:
-            raw_acc_id = item.get('poster_account_id')
-            acc_id = raw_acc_id or primary_account['id']
-            if raw_acc_id is None:
-                logger.warning(f"[SUPPLY] Item '{item.get('poster_ingredient_name')}' (ingredient_id={item.get('poster_ingredient_id')}) "
-                               f"has poster_account_id=None! Falling back to primary account {primary_account['id']} ({primary_account.get('account_name')})")
-            else:
-                logger.info(f"[SUPPLY] Item '{item.get('poster_ingredient_name')}' poster_account_id={raw_acc_id}, "
-                            f"storage_id={item.get('storage_id')}, using acc_id={acc_id}")
+            acc_id = item.get('poster_account_id') or primary_account['id']
             items_by_account[acc_id].append(item)
-
-        logger.info(f"[SUPPLY] items_by_account keys: {list(items_by_account.keys())}")
-        logger.info(f"[SUPPLY] accounts_by_id keys: {list(accounts_by_id.keys())}")
-        logger.info(f"[SUPPLY] primary_account id: {primary_account['id']} ({primary_account.get('account_name')})")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -3054,73 +3001,7 @@ def process_supply(draft_id):
         async def create_supplies_in_poster():
             created_supplies = []
 
-            # Step 1: Load ingredients from ALL accounts to verify correct routing
-            # This prevents Error 32 when poster_account_id is missing or wrong
-            account_ingredient_ids = {}  # {db_account_id: set of ingredient_ids}
-            account_product_ids = {}  # {db_account_id: set of product_ids}
-            account_storage_map = {}  # {db_account_id: {storage_id: storage_name}}
-
-            for acc in poster_accounts:
-                acc_client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
-                    poster_token=acc['poster_token'],
-                    poster_user_id=acc['poster_user_id'],
-                    poster_base_url=acc['poster_base_url']
-                )
-                try:
-                    ings = await acc_client.get_ingredients()
-                    account_ingredient_ids[acc['id']] = {int(i.get('ingredient_id', 0)) for i in ings}
-
-                    prods = await acc_client.get_products()
-                    account_product_ids[acc['id']] = {int(p.get('product_id', 0)) for p in prods}
-
-                    storages = await acc_client.get_storages()
-                    account_storage_map[acc['id']] = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
-
-                    logger.info(f"[SUPPLY VERIFY] Account {acc['id']} ({acc['account_name']}): "
-                                f"{len(account_ingredient_ids[acc['id']])} ingredients, "
-                                f"{len(account_product_ids[acc['id']])} products")
-                finally:
-                    await acc_client.close()
-
-            # Step 2: Re-verify and re-group items based on actual ingredient existence
-            verified_items_by_account = defaultdict(list)
-            for item in items:
-                item_id = int(item['poster_ingredient_id'])
-                item_type = item.get('item_type', 'ingredient')
-                original_acc_id = item.get('poster_account_id') or primary_account['id']
-
-                # Check if ingredient exists on the assigned account
-                if item_type == 'product':
-                    ids_map = account_product_ids
-                else:
-                    ids_map = account_ingredient_ids
-
-                if original_acc_id in ids_map and item_id in ids_map[original_acc_id]:
-                    # Correct account
-                    verified_items_by_account[original_acc_id].append(item)
-                else:
-                    # Wrong account! Find the correct one
-                    correct_acc_id = None
-                    for acc_id, id_set in ids_map.items():
-                        if item_id in id_set:
-                            correct_acc_id = acc_id
-                            break
-
-                    if correct_acc_id:
-                        logger.warning(f"[SUPPLY VERIFY] Item '{item.get('poster_ingredient_name')}' (id={item_id}) "
-                                       f"was assigned to account {original_acc_id} but found on account {correct_acc_id} "
-                                       f"({accounts_by_id.get(correct_acc_id, {}).get('account_name', '?')}). Rerouting!")
-                        verified_items_by_account[correct_acc_id].append(item)
-                    else:
-                        logger.error(f"[SUPPLY VERIFY] Item '{item.get('poster_ingredient_name')}' (id={item_id}) "
-                                     f"NOT FOUND on any account! Keeping original assignment {original_acc_id}")
-                        verified_items_by_account[original_acc_id].append(item)
-
-            logger.info(f"[SUPPLY] Verified items_by_account keys: {list(verified_items_by_account.keys())}")
-
-            # Step 3: Create supplies per verified account
-            for poster_account_id, account_items in verified_items_by_account.items():
+            for poster_account_id, account_items in items_by_account.items():
                 account = accounts_by_id.get(poster_account_id, primary_account)
 
                 client = PosterClient(
@@ -3167,21 +3048,13 @@ def process_supply(draft_id):
 
                     # Prepare ingredients for this account
                     ingredients = []
-                    # Determine storage_id from items or from account's storages
-                    supply_storage_id = None
+                    # Determine storage_id from items (use first item's storage_id, or 1 as default)
+                    supply_storage_id = 1
                     for item in account_items:
                         item_storage_id = item.get('storage_id')
                         if item_storage_id:
                             supply_storage_id = int(item_storage_id)
-                            break
-
-                    # If no storage_id from items, use first storage of this account
-                    if not supply_storage_id:
-                        acc_storages = account_storage_map.get(poster_account_id, {})
-                        if acc_storages:
-                            supply_storage_id = next(iter(acc_storages.keys()))
-                        else:
-                            supply_storage_id = 1
+                            break  # Use first item's storage_id
 
                     for item in account_items:
                         ingredients.append({
@@ -3191,9 +3064,7 @@ def process_supply(draft_id):
                             'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
                         })
 
-                    logger.info(f"[SUPPLY] Creating supply for account {poster_account_id} ({account.get('account_name')}) "
-                               f"with storage_id={supply_storage_id}, {len(ingredients)} items, "
-                               f"ingredient_ids={[i['id'] for i in ingredients]}")
+                    print(f"Creating supply with storage_id={supply_storage_id} (from items)")
 
                     # Create supply
                     supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
@@ -3215,7 +3086,7 @@ def process_supply(draft_id):
                             'items_count': len(account_items),
                             'total': account_total
                         })
-                        logger.info(f"Created supply #{supply_id} in {account['account_name']}: {len(account_items)} items, {account_total}")
+                        print(f"✅ Created supply #{supply_id} in {account['account_name']}: {len(account_items)} items, {account_total}₸")
 
                 finally:
                     await client.close()
