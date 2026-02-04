@@ -2491,8 +2491,8 @@ def list_supplies():
                         print(f"  First ingredient fields: {list(ingredients[0].keys())}")
                     for ing in ingredients:
                         name = ing.get('ingredient_name', '')
-                        # Get storage_id from ingredient if available, otherwise use default
-                        storage_id = int(ing.get('storage_id', default_storage_id))
+                        # Always use default (main) storage for the establishment
+                        storage_id = default_storage_id
                         storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
                         # Don't deduplicate - show from all accounts with account tag
                         items.append({
@@ -2514,8 +2514,8 @@ def list_supplies():
                         if category != 'Напитки':
                             continue
                         name = prod.get('product_name', '')
-                        # Products may also have storage_id
-                        storage_id = int(prod.get('storage_id', default_storage_id))
+                        # Always use default (main) storage for the establishment
+                        storage_id = default_storage_id
                         storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
                         items.append({
                             'id': int(prod.get('product_id', 0)),
@@ -3048,13 +3048,9 @@ def process_supply(draft_id):
 
                     # Prepare ingredients for this account
                     ingredients = []
-                    # Determine storage_id from items (use first item's storage_id, or 1 as default)
-                    supply_storage_id = 1
-                    for item in account_items:
-                        item_storage_id = item.get('storage_id')
-                        if item_storage_id:
-                            supply_storage_id = int(item_storage_id)
-                            break  # Use first item's storage_id
+                    # Always use default (main) storage for the establishment
+                    storages = await client.get_storages()
+                    supply_storage_id = int(storages[0]['storage_id']) if storages else 1
 
                     for item in account_items:
                         ingredients.append({
@@ -3064,7 +3060,7 @@ def process_supply(draft_id):
                             'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
                         })
 
-                    print(f"Creating supply with storage_id={supply_storage_id} (from items)")
+                    print(f"Creating supply with storage_id={supply_storage_id} (default for {account.get('account_name', '')})")
 
                     # Create supply
                     supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
