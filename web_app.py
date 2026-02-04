@@ -3095,6 +3095,23 @@ def process_supply(draft_id):
                         valid_product_ids[prod_id] = prod_name
                         ingredient_name_to_id[prod_name.lower()] = (prod_id, 'product')
 
+                    acc_name = account.get('account_name', poster_account_id)
+                    deleted_count = sum(1 for ing in account_ingredients if str(ing.get('delete', '0')) == '1')
+                    hidden_count = sum(1 for ing in account_ingredients if str(ing.get('hidden', '0')) == '1')
+                    logger.info(f"Validation for {acc_name}: {len(account_ingredients)} total ingredients "
+                               f"({deleted_count} deleted, {hidden_count} hidden), "
+                               f"{len(valid_ingredient_ids)} valid ingredient IDs, "
+                               f"{len(valid_product_ids)} valid product IDs")
+
+                    # Log details for each item being validated
+                    for item in account_items:
+                        item_id = item['poster_ingredient_id']
+                        item_name = item.get('poster_ingredient_name', item.get('item_name', ''))
+                        in_ingredients = item_id in valid_ingredient_ids
+                        in_products = item_id in valid_product_ids
+                        logger.info(f"  Item '{item_name}' (ID={item_id}): "
+                                   f"in_ingredients={in_ingredients}, in_products={in_products}")
+
                     # Use item's storage_id if available, otherwise use API default
                     supply_storage_id = api_default_storage_id
                     for item in account_items:
