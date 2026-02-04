@@ -493,12 +493,7 @@ def search_items():
         if accounts:
             from poster_client import PosterClient
 
-            # Sort accounts: primary first (PizzBurg takes priority for deduplication)
-            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
-
-            seen_names = set()  # Track ingredient names for deduplication
-
-            for acc in accounts_sorted:
+            for acc in accounts:
                 try:
                     poster_client = PosterClient(
                         telegram_user_id=g.user_id,
@@ -515,17 +510,12 @@ def search_items():
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
                         for ing in ingredients:
                             name = ing.get('ingredient_name', '')
-                            name_lower = name.lower()
-
-                            # Skip if already seen (primary account takes priority)
-                            if name_lower in seen_names:
-                                continue
-                            seen_names.add(name_lower)
 
                             # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
                             poster_ing_type = str(ing.get('type', '1'))
                             item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
 
+                            # Don't deduplicate - show from all accounts with account tag
                             items.append({
                                 'id': int(ing.get('ingredient_id', 0)),
                                 'name': name,
@@ -538,9 +528,6 @@ def search_items():
                     # that can be supplied to warehouse. Skip tech cards (pizzas, burgers, etc.)
                     if source in ['all', 'product', 'ingredient']:
                         products = loop.run_until_complete(poster_client.get_products())
-                        print(f"[DEBUG] Fetched {len(products)} products from {acc['account_name']}", flush=True)
-                        if products:
-                            print(f"[DEBUG] First 3 products: {[p.get('product_name') for p in products[:3]]}", flush=True)
                         for prod in products:
                             # Only include products from "Напитки" category for supplies
                             # Tech cards (Pizzas, Burgers, Doner etc.) should not appear in supplies
@@ -549,12 +536,6 @@ def search_items():
                                 continue
 
                             name = prod.get('product_name', '')
-                            name_lower = name.lower()
-
-                            # Skip if already seen (primary account or same product)
-                            if name_lower in seen_names:
-                                continue
-                            seen_names.add(name_lower)
 
                             # Products use product_id in Poster
                             items.append({
@@ -2113,7 +2094,7 @@ def api_update_supply_draft_item(item_id):
     data = request.get_json() or {}
 
     updates = {}
-    for field in ['ingredient_id', 'ingredient_name', 'quantity', 'price', 'unit', 'poster_account_id']:
+    for field in ['ingredient_id', 'ingredient_name', 'quantity', 'price', 'unit', 'poster_account_id', 'poster_account_name']:
         if field in data:
             updates[field] = data[field]
 
@@ -2472,11 +2453,8 @@ def list_supplies():
                     'is_primary': acc.get('is_primary', False)
                 })
 
-            # Load ingredients with deduplication
-            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
-            seen_names = set()
-
-            for acc in accounts_sorted:
+            # Load ingredients from all accounts (no deduplication)
+            for acc in accounts:
                 try:
                     poster_client = PosterClient(
                         telegram_user_id=TELEGRAM_USER_ID,
@@ -2577,10 +2555,7 @@ def view_all_supplies():
         if accounts:
             from poster_client import PosterClient
 
-            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
-            seen_names = set()
-
-            for acc in accounts_sorted:
+            for acc in accounts:
                 try:
                     poster_client = PosterClient(
                         telegram_user_id=TELEGRAM_USER_ID,
@@ -2595,28 +2570,24 @@ def view_all_supplies():
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
                     for ing in ingredients:
                         name = ing.get('ingredient_name', '')
-                        name_lower = name.lower()
-
-                        if name_lower in seen_names:
-                            continue
-                        seen_names.add(name_lower)
 
                         # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
                         poster_ing_type = str(ing.get('type', '1'))
                         item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
 
+                        # Don't deduplicate - show from all accounts with account tag
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
                             'type': item_type,
                             'poster_account_id': acc['id'],
-                            'poster_account_name': acc.get('name', '')
+                            'poster_account_name': acc.get('account_name', '')
                         })
 
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
-                    print(f"Error loading ingredients from account {acc.get('name', acc['id'])}: {e}")
+                    print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
         print(f"Error loading ingredients: {e}")
@@ -2705,6 +2676,7 @@ def add_supply_item(draft_id):
         poster_ingredient_id=data.get('poster_ingredient_id') or data.get('id'),
         poster_ingredient_name=data.get('poster_ingredient_name') or data.get('name'),
         poster_account_id=data.get('poster_account_id'),
+        poster_account_name=data.get('poster_account_name'),
         item_type=data.get('item_type', 'ingredient'),  # 'ingredient' or 'product'
         storage_id=storage_id,
         storage_name=data.get('storage_name')
@@ -2895,12 +2867,7 @@ def view_supply(draft_id):
         if accounts:
             from poster_client import PosterClient
 
-            # Sort accounts: primary first (PizzBurg takes priority for deduplication)
-            accounts_sorted = sorted(accounts, key=lambda a: (not a.get('is_primary', False), a['id']))
-
-            seen_names = set()
-
-            for acc in accounts_sorted:
+            for acc in accounts:
                 try:
                     poster_client = PosterClient(
                         telegram_user_id=TELEGRAM_USER_ID,
@@ -2915,17 +2882,12 @@ def view_supply(draft_id):
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
                     for ing in ingredients:
                         name = ing.get('ingredient_name', '')
-                        name_lower = name.lower()
-
-                        # Skip if already seen (primary account takes priority)
-                        if name_lower in seen_names:
-                            continue
-                        seen_names.add(name_lower)
 
                         # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
                         poster_ing_type = str(ing.get('type', '1'))
                         item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
 
+                        # Don't deduplicate - show from all accounts with account tag
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
@@ -2967,6 +2929,8 @@ def update_supply_item(item_id):
         update_fields['poster_ingredient_name'] = data['poster_ingredient_name']
     if 'poster_account_id' in data:
         update_fields['poster_account_id'] = data['poster_account_id']
+    if 'poster_account_name' in data:
+        update_fields['poster_account_name'] = data['poster_account_name']
     if 'quantity' in data:
         update_fields['quantity'] = data['quantity']
     if 'price_per_unit' in data:
@@ -3085,6 +3049,27 @@ def process_supply(draft_id):
                     except Exception:
                         api_default_storage_id = 1
 
+                    # Fetch actual ingredients/products from this account to validate IDs
+                    account_ingredients = await client.get_ingredients()
+                    account_products = await client.get_products()
+
+                    # Build lookups: by ID and by name (lowercase)
+                    valid_ingredient_ids = {}  # id -> name
+                    ingredient_name_to_id = {}  # lowercase_name -> (id, type)
+                    for ing in account_ingredients:
+                        ing_id = int(ing.get('ingredient_id', 0))
+                        ing_name = ing.get('ingredient_name', '')
+                        poster_ing_type = str(ing.get('type', '1'))
+                        item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
+                        valid_ingredient_ids[ing_id] = ing_name
+                        ingredient_name_to_id[ing_name.lower()] = (ing_id, item_type)
+
+                    for prod in account_products:
+                        prod_id = int(prod.get('product_id', 0))
+                        prod_name = prod.get('product_name', '')
+                        valid_ingredient_ids[prod_id] = prod_name
+                        ingredient_name_to_id[prod_name.lower()] = (prod_id, 'product')
+
                     # Use item's storage_id if available, otherwise use API default
                     supply_storage_id = api_default_storage_id
                     for item in account_items:
@@ -3093,13 +3078,39 @@ def process_supply(draft_id):
                             supply_storage_id = int(item_storage_id)
                             break  # Use first item's storage_id
 
+                    missing_items = []
                     for item in account_items:
+                        item_id = item['poster_ingredient_id']
+                        item_name = item.get('poster_ingredient_name', item.get('item_name', ''))
+                        item_type = item.get('item_type', 'ingredient')
+
+                        # Validate: does this ingredient ID exist in this account?
+                        if item_id not in valid_ingredient_ids:
+                            # Try to find by name in this account
+                            name_lower = item_name.lower()
+                            if name_lower in ingredient_name_to_id:
+                                resolved_id, resolved_type = ingredient_name_to_id[name_lower]
+                                logger.info(f"Resolved ingredient '{item_name}' for {account.get('account_name')}: "
+                                           f"ID {item_id} -> {resolved_id}")
+                                item_id = resolved_id
+                                item_type = resolved_type
+                            else:
+                                missing_items.append(item_name)
+                                continue
+
                         ingredients.append({
-                            'id': item['poster_ingredient_id'],
+                            'id': item_id,
                             'num': float(item['quantity']),
                             'price': float(item['price_per_unit']),
-                            'type': item.get('item_type', 'ingredient')  # 'ingredient', 'semi_product', or 'product'
+                            'type': item_type
                         })
+
+                    if missing_items:
+                        acc_name = account.get('account_name', poster_account_id)
+                        raise Exception(
+                            f"В аккаунте {acc_name} не найдены ингредиенты: {', '.join(missing_items)}. "
+                            f"Проверьте, что ингредиенты существуют в этом заведении."
+                        )
 
                     ingredient_types = {i['id']: i['type'] for i in ingredients}
                     logger.info(f"Supply for {account.get('account_name', poster_account_id)}: "
