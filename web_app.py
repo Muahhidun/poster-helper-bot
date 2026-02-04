@@ -792,11 +792,15 @@ def api_create_supply():
                 # Prepare ingredients list for this account
                 ingredients = []
                 for item in account_items:
-                    ingredients.append({
+                    ing_data = {
                         'id': item['id'],
                         'num': float(item['quantity']),
                         'price': float(item['price'])
-                    })
+                    }
+                    # Pass type from frontend: 'ingredient', 'semi_product', or 'product'
+                    if item.get('type'):
+                        ing_data['type'] = item['type']
+                    ingredients.append(ing_data)
 
                 try:
                     # Find supplier by name in THIS specific Poster account

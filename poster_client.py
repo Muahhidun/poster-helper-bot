@@ -506,7 +506,13 @@ class PosterClient:
             # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
             ingredient_sum = round(num * price_for_api)
 
+            # Poster API type: 1=ingredient, 2=semi-product (полуфабрикат), 4=product (товар)
+            item_type = item.get('type', 'ingredient')
+            type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+            poster_type = type_map.get(item_type, 1)
+
             data[f'ingredients[{idx}][id]'] = item['id']
+            data[f'ingredients[{idx}][type]'] = poster_type
             data[f'ingredients[{idx}][num]'] = num_for_api
             data[f'ingredients[{idx}][price]'] = price_for_api
             data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
