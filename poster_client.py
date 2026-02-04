@@ -399,11 +399,12 @@ class PosterClient:
             # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
             ingredient_sum = round(num * price_for_api)
 
-            # Poster API type: 1=ingredient, 2=semi-product (полуфабрикат), 4=product (товар)
-            # Note: Poster GitHub docs have labels swapped, but actual API matches getIngredients types
+            # Poster API storage.createSupply type field:
+            # 1=product (товар), 4=ingredient (ингредиент), 5=product modifier
+            # See: https://dev.joinposter.com/en/docs/v3/web/storage/createSupply
             item_type = item.get('type', 'ingredient')
-            type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
-            poster_type = type_map.get(item_type, 1)
+            type_map = {'ingredient': 4, 'semi_product': 4, 'product': 1}
+            poster_type = type_map.get(item_type, 4)
 
             data[f'ingredients[{idx}][id]'] = item['id']
             data[f'ingredients[{idx}][type]'] = poster_type
@@ -428,12 +429,34 @@ class PosterClient:
             result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
         except Exception as e:
             error_msg = str(e)
-            # Error 32 usually means invalid ingredient ID
+            # Error 32 usually means invalid ingredient ID or wrong type
             if 'error (32)' in error_msg.lower():
                 ingredient_ids = [item['id'] for item in ingredients]
-                logger.error(f"Error 32 - likely invalid ingredient ID. IDs used: {ingredient_ids}")
-                raise Exception(f"Ошибка Poster API (32): Возможно один из ингредиентов не существует в Poster. ID: {ingredient_ids}")
-            raise
+                logger.warning(f"Error 32 with type mapping ingredient=4,product=1. IDs: {ingredient_ids}. "
+                              f"Retrying with alternate type mapping...")
+
+                # Retry with alternate type mapping (ingredient=1, product=4)
+                # Some Poster accounts may use inverted type codes
+                alt_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+                retry_data = dict(data)
+                for idx, item in enumerate(ingredients):
+                    item_type = item.get('type', 'ingredient')
+                    retry_data[f'ingredients[{idx}][type]'] = alt_type_map.get(item_type, 1)
+
+                logger.info(f"Retry supply data: {retry_data}")
+                try:
+                    result = await self._request('POST', 'storage.createSupply', data=retry_data, use_json=False)
+                except Exception as retry_e:
+                    retry_msg = str(retry_e)
+                    if 'error (32)' in retry_msg.lower():
+                        logger.error(f"Error 32 persists with both type mappings. IDs: {ingredient_ids}")
+                        raise Exception(
+                            f"Ошибка Poster API (32): Ингредиент не найден в Poster. ID: {ingredient_ids}. "
+                            f"Проверьте, что ингредиент существует в этом заведении."
+                        )
+                    raise
+            else:
+                raise
 
         supply_id = result.get('response')
         if supply_id:
