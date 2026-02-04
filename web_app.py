@@ -2467,8 +2467,10 @@ def list_supplies():
     items = []
     poster_accounts_list = []
 
+    logger.info(f"[SUPPLIES PAGE] Loading ingredients for supplies page...")
     try:
         accounts = db.get_accounts(TELEGRAM_USER_ID)
+        logger.info(f"[SUPPLIES PAGE] Found {len(accounts) if accounts else 0} poster accounts")
         if accounts:
             from poster_client import PosterClient
 
@@ -2547,10 +2549,16 @@ def list_supplies():
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
-                    print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
+                    logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
 
     except Exception as e:
-        print(f"Error loading ingredients: {e}")
+        logger.error(f"Error loading ingredients: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+    logger.info(f"[SUPPLIES PAGE] Total items loaded: {len(items)}")
 
     # Load suppliers for autocomplete
     suppliers = load_suppliers_from_csv()
