@@ -353,110 +353,140 @@ class PosterClient:
             date: Date in format "YYYY-MM-DD HH:MM:SS"
             ingredients: List of items with id, num (quantity), price, and optional type
                         type can be 'ingredient' (default), 'semi_product', or 'product'
-                        Poster API uses: 1=ingredient, 2=semi-product, 4=product
-            account_id: Payment account ID (default: 1 for Kaspi Pay)
+            account_id: Payment account ID
             comment: Supply comment
 
         Returns:
             Supply ID
 
-        Note: Uses form-urlencoded format, not JSON
+        Note: Uses form-urlencoded format with supply[] wrapper per Poster API docs
         """
-        # Calculate total amount using rounded prices (same as ingredient_sum calculation)
-        # This ensures transaction amount matches sum of ingredient_sums
-        total_amount = sum(
-            round(item['num'] * round(item['price']))
-            for item in ingredients
-        )
+        # Poster API storage.createSupply uses supply[] wrapper for parameters
+        # and ingredient[] (singular) for items array
+        # See: https://dev.joinposter.com/en/docs/v3/web/storage/createSupply
 
-        # Build form data
-        data = {
-            'date': date,
-            'supplier_id': supplier_id,
-            'storage_id': storage_id,
-            'source': 'manage',
-            'type': 1,  # Normal supply
-            'supply_comment': comment
-        }
+        def _build_supply_data(type_map):
+            """Build form data in official Poster API format"""
+            data = {
+                'supply[date]': date,
+                'supply[supplier_id]': supplier_id,
+                'supply[storage_id]': storage_id,
+                'supply[supply_comment]': comment,
+                'supply[account_id]': account_id,
+            }
 
-        # Add ingredients
-        for idx, item in enumerate(ingredients):
-            # Poster API num field: convert floats to string to avoid error 701
-            # Integer values are kept as int for compatibility
-            num = item['num']
-            num_for_api = num
-            if isinstance(num, float):
-                if num.is_integer():
-                    num_for_api = int(num)
-                else:
-                    # Send as string for decimal values (e.g., "4.5", "1.2", "0.38")
-                    num_for_api = str(num)
+            for idx, item in enumerate(ingredients):
+                num = item['num']
+                num_for_api = num
+                if isinstance(num, float):
+                    if num.is_integer():
+                        num_for_api = int(num)
+                    else:
+                        num_for_api = str(num)
 
-            # Calculate price for API (round to nearest integer, not truncate)
-            price_for_api = round(item['price'])
+                price_for_api = round(item['price'])
 
-            # Calculate ingredient_sum using the same price that goes to API
-            # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
-            ingredient_sum = round(num * price_for_api)
+                item_type = item.get('type', 'ingredient')
+                poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
 
-            # Poster API storage.createSupply type field:
-            # 1=product (товар), 4=ingredient (ингредиент), 5=product modifier
-            # See: https://dev.joinposter.com/en/docs/v3/web/storage/createSupply
-            item_type = item.get('type', 'ingredient')
-            type_map = {'ingredient': 4, 'semi_product': 4, 'product': 1}
-            poster_type = type_map.get(item_type, 4)
+                data[f'ingredient[{idx}][id]'] = item['id']
+                data[f'ingredient[{idx}][type]'] = poster_type
+                data[f'ingredient[{idx}][num]'] = num_for_api
+                data[f'ingredient[{idx}][sum]'] = price_for_api
+                if item.get('packing'):
+                    data[f'ingredient[{idx}][packing]'] = item['packing']
 
-            data[f'ingredients[{idx}][id]'] = item['id']
-            data[f'ingredients[{idx}][type]'] = poster_type
-            data[f'ingredients[{idx}][num]'] = num_for_api
-            data[f'ingredients[{idx}][price]'] = price_for_api
-            data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
-            data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
-            data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
+            return data
 
-        # Add transaction (payment)
-        # Note: transaction_id should be omitted for new transactions
-        data['transactions[0][account_id]'] = account_id
-        data['transactions[0][date]'] = date
-        data['transactions[0][amount]'] = total_amount
-        data['transactions[0][delete]'] = 0
+        def _build_legacy_data(type_map):
+            """Build form data in legacy flat format (works for some accounts)"""
+            total_amount = sum(
+                round(item['num'] * round(item['price']))
+                for item in ingredients
+            )
 
-        logger.info(f"Creating supply: supplier={supplier_id}, items={len(ingredients)}, total={total_amount}")
-        logger.info(f"Supply data: {data}")
+            data = {
+                'date': date,
+                'supplier_id': supplier_id,
+                'storage_id': storage_id,
+                'source': 'manage',
+                'type': 1,
+                'supply_comment': comment
+            }
 
-        # storage.createSupply требует form-urlencoded, не JSON!
+            for idx, item in enumerate(ingredients):
+                num = item['num']
+                num_for_api = num
+                if isinstance(num, float):
+                    if num.is_integer():
+                        num_for_api = int(num)
+                    else:
+                        num_for_api = str(num)
+
+                price_for_api = round(item['price'])
+                ingredient_sum = round(num * price_for_api)
+
+                item_type = item.get('type', 'ingredient')
+                poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
+
+                data[f'ingredients[{idx}][id]'] = item['id']
+                data[f'ingredients[{idx}][type]'] = poster_type
+                data[f'ingredients[{idx}][num]'] = num_for_api
+                data[f'ingredients[{idx}][price]'] = price_for_api
+                data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
+                data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
+                data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
+
+            data['transactions[0][account_id]'] = account_id
+            data['transactions[0][date]'] = date
+            data['transactions[0][amount]'] = total_amount
+            data['transactions[0][delete]'] = 0
+
+            return data
+
+        # Poster API docs type mapping: product=1, ingredient=4, modifier=5
+        docs_type_map = {'ingredient': 4, 'semi_product': 4, 'product': 1}
+        # Legacy type mapping (worked for some accounts): ingredient=1, semi_product=2, product=4
+        legacy_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+
+        logger.info(f"Creating supply: supplier={supplier_id}, storage={storage_id}, "
+                    f"items={len(ingredients)}, account_id={account_id}")
+
+        # Try documented format first (supply[] wrapper, ingredient singular, type: ingredient=4)
+        data = _build_supply_data(docs_type_map)
+        logger.info(f"Supply data (docs format): {data}")
+
         try:
             result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
-        except Exception as e:
-            error_msg = str(e)
-            # Error 32 usually means invalid ingredient ID or wrong type
-            if 'error (32)' in error_msg.lower():
-                ingredient_ids = [item['id'] for item in ingredients]
-                logger.warning(f"Error 32 with type mapping ingredient=4,product=1. IDs: {ingredient_ids}. "
-                              f"Retrying with alternate type mapping...")
+        except Exception as e1:
+            error_msg1 = str(e1)
+            logger.warning(f"Docs format failed: {error_msg1}. Trying legacy format...")
 
-                # Retry with alternate type mapping (ingredient=1, product=4)
-                # Some Poster accounts may use inverted type codes
-                alt_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
-                retry_data = dict(data)
-                for idx, item in enumerate(ingredients):
-                    item_type = item.get('type', 'ingredient')
-                    retry_data[f'ingredients[{idx}][type]'] = alt_type_map.get(item_type, 1)
+            # Try legacy flat format with legacy type mapping (ingredient=1)
+            data = _build_legacy_data(legacy_type_map)
+            logger.info(f"Supply data (legacy format): {data}")
 
-                logger.info(f"Retry supply data: {retry_data}")
+            try:
+                result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
+            except Exception as e2:
+                error_msg2 = str(e2)
+                logger.warning(f"Legacy format also failed: {error_msg2}. Trying docs format with legacy types...")
+
+                # Try docs format but with legacy type mapping
+                data = _build_supply_data(legacy_type_map)
+                logger.info(f"Supply data (docs format + legacy types): {data}")
+
                 try:
-                    result = await self._request('POST', 'storage.createSupply', data=retry_data, use_json=False)
-                except Exception as retry_e:
-                    retry_msg = str(retry_e)
-                    if 'error (32)' in retry_msg.lower():
-                        logger.error(f"Error 32 persists with both type mappings. IDs: {ingredient_ids}")
-                        raise Exception(
-                            f"Ошибка Poster API (32): Ингредиент не найден в Poster. ID: {ingredient_ids}. "
-                            f"Проверьте, что ингредиент существует в этом заведении."
-                        )
-                    raise
-            else:
-                raise
+                    result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
+                except Exception as e3:
+                    ingredient_ids = [item['id'] for item in ingredients]
+                    logger.error(f"All supply formats failed. IDs: {ingredient_ids}. "
+                                f"Errors: docs={error_msg1}, legacy={error_msg2}, mixed={e3}")
+                    raise Exception(
+                        f"Ошибка Poster API: Не удалось создать поставку. "
+                        f"Ингредиенты ID: {ingredient_ids}. "
+                        f"Проверьте, что ингредиенты существуют в этом заведении."
+                    )
 
         supply_id = result.get('response')
         if supply_id:
