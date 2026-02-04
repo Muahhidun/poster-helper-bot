@@ -6,12 +6,15 @@ import hmac
 import hashlib
 import json
 import asyncio
+import logging
 from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g
 from database import get_database
 import config
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -2483,12 +2486,9 @@ def list_supplies():
                     storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
                     # Get first storage ID as default
                     default_storage_id = int(storages[0]['storage_id']) if storages else 1
-                    print(f"  Storages for {acc.get('account_name', '')}: {storage_map}, default={default_storage_id}")
+                    logger.info(f"Storages for {acc.get('account_name', '')}: {storage_map}, default={default_storage_id}")
 
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
-                    # Log first ingredient fields to understand structure
-                    if ingredients:
-                        print(f"  First ingredient fields: {list(ingredients[0].keys())}")
                     for ing in ingredients:
                         name = ing.get('ingredient_name', '')
                         # Get storage_id from ingredient if available, otherwise use default
@@ -2530,10 +2530,10 @@ def list_supplies():
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
-                    print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
+                    logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
-        print(f"Error loading ingredients: {e}")
+        logger.error(f"Error loading ingredients: {e}")
 
     # Load suppliers for autocomplete
     suppliers = load_suppliers_from_csv()
@@ -2791,8 +2791,16 @@ def process_all_supplies():
                             account_id_poster = int(poster_accounts[0]['account_id'])
 
                         ingredients = []
-                        # Determine storage_id from items
-                        supply_storage_id = 1
+
+                        # Get correct default storage for this account from Poster API
+                        try:
+                            storages = await client.get_storages()
+                            api_default_storage_id = int(storages[0]['storage_id']) if storages else 1
+                        except Exception:
+                            api_default_storage_id = 1
+
+                        # Use item's storage_id if available, otherwise use API default
+                        supply_storage_id = api_default_storage_id
                         for item in acc_items:
                             item_storage_id = item.get('storage_id')
                             if item_storage_id:
@@ -2809,7 +2817,9 @@ def process_all_supplies():
 
                         supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
 
-                        print(f"Creating supply with storage_id={supply_storage_id}")
+                        logger.info(f"Supply (batch) for {account.get('account_name', acc_id)}: "
+                                    f"{len(acc_items)} items, storage_id={supply_storage_id}, "
+                                    f"api_default={api_default_storage_id}")
                         supply_id = await client.create_supply(
                             supplier_id=supplier_id,
                             storage_id=supply_storage_id,
@@ -3048,8 +3058,16 @@ def process_supply(draft_id):
 
                     # Prepare ingredients for this account
                     ingredients = []
-                    # Determine storage_id from items (use first item's storage_id, or 1 as default)
-                    supply_storage_id = 1
+
+                    # Get correct default storage for this account from Poster API
+                    try:
+                        storages = await client.get_storages()
+                        api_default_storage_id = int(storages[0]['storage_id']) if storages else 1
+                    except Exception:
+                        api_default_storage_id = 1
+
+                    # Use item's storage_id if available, otherwise use API default
+                    supply_storage_id = api_default_storage_id
                     for item in account_items:
                         item_storage_id = item.get('storage_id')
                         if item_storage_id:
@@ -3064,7 +3082,10 @@ def process_supply(draft_id):
                             'type': item.get('item_type', 'ingredient')  # 'ingredient' or 'product'
                         })
 
-                    print(f"Creating supply with storage_id={supply_storage_id} (from items)")
+                    logger.info(f"Supply for {account.get('account_name', poster_account_id)}: "
+                                f"{len(account_items)} items, storage_id={supply_storage_id}, "
+                                f"api_default={api_default_storage_id}, "
+                                f"ingredient_ids={[item['poster_ingredient_id'] for item in account_items]}")
 
                     # Create supply
                     supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
@@ -3086,7 +3107,7 @@ def process_supply(draft_id):
                             'items_count': len(account_items),
                             'total': account_total
                         })
-                        print(f"✅ Created supply #{supply_id} in {account['account_name']}: {len(account_items)} items, {account_total}₸")
+                        logger.info(f"Created supply #{supply_id} in {account['account_name']}: {len(account_items)} items, {account_total} tg")
 
                 finally:
                     await client.close()
