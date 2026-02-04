@@ -509,6 +509,9 @@ def search_items():
                     if source in ['all', 'ingredient']:
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
                         for ing in ingredients:
+                            # Skip deleted ingredients
+                            if str(ing.get('delete', '0')) == '1':
+                                continue
                             name = ing.get('ingredient_name', '')
 
                             # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
@@ -529,6 +532,9 @@ def search_items():
                     if source in ['all', 'product', 'ingredient']:
                         products = loop.run_until_complete(poster_client.get_products())
                         for prod in products:
+                            # Skip deleted products
+                            if str(prod.get('delete', '0')) == '1':
+                                continue
                             # Only include products from "Напитки" category for supplies
                             # Tech cards (Pizzas, Burgers, Doner etc.) should not appear in supplies
                             category = prod.get('category_name', '')
@@ -2476,6 +2482,9 @@ def list_supplies():
 
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
                     for ing in ingredients:
+                        # Skip deleted ingredients
+                        if str(ing.get('delete', '0')) == '1':
+                            continue
                         name = ing.get('ingredient_name', '')
                         # Always use default (main) storage for the establishment
                         storage_id = default_storage_id
@@ -2498,6 +2507,9 @@ def list_supplies():
                     # Skip tech cards (pizzas, burgers, doner, etc.)
                     products = loop.run_until_complete(poster_client.get_products())
                     for prod in products:
+                        # Skip deleted products
+                        if str(prod.get('delete', '0')) == '1':
+                            continue
                         # Only include products from "Напитки" category for supplies
                         category = prod.get('category_name', '')
                         if category != 'Напитки':
@@ -2569,6 +2581,9 @@ def view_all_supplies():
 
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
                     for ing in ingredients:
+                        # Skip deleted ingredients
+                        if str(ing.get('delete', '0')) == '1':
+                            continue
                         name = ing.get('ingredient_name', '')
 
                         # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
@@ -2881,6 +2896,9 @@ def view_supply(draft_id):
 
                     ingredients = loop.run_until_complete(poster_client.get_ingredients())
                     for ing in ingredients:
+                        # Skip deleted ingredients
+                        if str(ing.get('delete', '0')) == '1':
+                            continue
                         name = ing.get('ingredient_name', '')
 
                         # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
@@ -3053,21 +3071,28 @@ def process_supply(draft_id):
                     account_ingredients = await client.get_ingredients()
                     account_products = await client.get_products()
 
-                    # Build lookups: by ID and by name (lowercase)
-                    valid_ingredient_ids = {}  # id -> name
+                    # Build SEPARATE lookups for ingredients and products (different ID namespaces in Poster)
+                    valid_ingredient_ids = {}  # ingredient_id -> (name, type_str)
+                    valid_product_ids = {}     # product_id -> name
                     ingredient_name_to_id = {}  # lowercase_name -> (id, type)
                     for ing in account_ingredients:
+                        # Skip deleted ingredients
+                        if str(ing.get('delete', '0')) == '1':
+                            continue
                         ing_id = int(ing.get('ingredient_id', 0))
                         ing_name = ing.get('ingredient_name', '')
                         poster_ing_type = str(ing.get('type', '1'))
                         item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
-                        valid_ingredient_ids[ing_id] = ing_name
+                        valid_ingredient_ids[ing_id] = (ing_name, item_type)
                         ingredient_name_to_id[ing_name.lower()] = (ing_id, item_type)
 
                     for prod in account_products:
+                        # Skip deleted products
+                        if str(prod.get('delete', '0')) == '1':
+                            continue
                         prod_id = int(prod.get('product_id', 0))
                         prod_name = prod.get('product_name', '')
-                        valid_ingredient_ids[prod_id] = prod_name
+                        valid_product_ids[prod_id] = prod_name
                         ingredient_name_to_id[prod_name.lower()] = (prod_id, 'product')
 
                     # Use item's storage_id if available, otherwise use API default
@@ -3084,16 +3109,40 @@ def process_supply(draft_id):
                         item_name = item.get('poster_ingredient_name', item.get('item_name', ''))
                         item_type = item.get('item_type', 'ingredient')
 
-                        # Validate: does this ingredient ID exist in this account?
-                        if item_id not in valid_ingredient_ids:
-                            # Try to find by name in this account
+                        # Type-aware validation: ingredient_id and product_id are separate namespaces in Poster
+                        id_valid = False
+                        if item_type in ('ingredient', 'semi_product') and item_id in valid_ingredient_ids:
+                            # ID exists as ingredient/semi-product in this account - correct type from account data
+                            _, resolved_type = valid_ingredient_ids[item_id]
+                            item_type = resolved_type
+                            id_valid = True
+                        elif item_type == 'product' and item_id in valid_product_ids:
+                            # ID exists as product in this account
+                            id_valid = True
+                        elif item_id in valid_ingredient_ids:
+                            # ID exists as ingredient but item was typed as product - fix type
+                            _, resolved_type = valid_ingredient_ids[item_id]
+                            logger.info(f"Type correction for '{item_name}' in {account.get('account_name')}: "
+                                       f"type '{item_type}' -> '{resolved_type}' (ID {item_id})")
+                            item_type = resolved_type
+                            id_valid = True
+                        elif item_id in valid_product_ids:
+                            # ID exists as product but item was typed as ingredient - fix type
+                            logger.info(f"Type correction for '{item_name}' in {account.get('account_name')}: "
+                                       f"type '{item_type}' -> 'product' (ID {item_id})")
+                            item_type = 'product'
+                            id_valid = True
+
+                        if not id_valid:
+                            # ID not found in any namespace - try to find by name
                             name_lower = item_name.lower()
                             if name_lower in ingredient_name_to_id:
                                 resolved_id, resolved_type = ingredient_name_to_id[name_lower]
                                 logger.info(f"Resolved ingredient '{item_name}' for {account.get('account_name')}: "
-                                           f"ID {item_id} -> {resolved_id}")
+                                           f"ID {item_id} -> {resolved_id} (type: {resolved_type})")
                                 item_id = resolved_id
                                 item_type = resolved_type
+                                id_valid = True
                             else:
                                 missing_items.append(item_name)
                                 continue
