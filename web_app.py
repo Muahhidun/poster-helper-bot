@@ -2700,6 +2700,13 @@ def add_supply_item(draft_id):
     if storage_id is not None:
         storage_id = int(storage_id)
 
+    poster_account_id = data.get('poster_account_id')
+    if poster_account_id is not None:
+        poster_account_id = int(poster_account_id)
+
+    print(f"[ADD-ITEM DEBUG] draft={draft_id}, ingredient={data.get('poster_ingredient_id') or data.get('id')}, "
+          f"poster_account_id={poster_account_id}, storage_id={storage_id}, storage_name={data.get('storage_name')}")
+
     item_id = db.add_supply_draft_item(
         supply_draft_id=draft_id,
         item_name=data.get('item_name', data.get('name', '')),
@@ -2708,7 +2715,7 @@ def add_supply_item(draft_id):
         price_per_unit=float(data.get('price', data.get('price_per_unit', 0))),
         poster_ingredient_id=data.get('poster_ingredient_id') or data.get('id'),
         poster_ingredient_name=data.get('poster_ingredient_name') or data.get('name'),
-        poster_account_id=data.get('poster_account_id'),
+        poster_account_id=poster_account_id,
         item_type=data.get('item_type', 'ingredient'),  # 'ingredient' or 'product'
         storage_id=storage_id,
         storage_name=data.get('storage_name')
@@ -2985,6 +2992,10 @@ def process_supply(draft_id):
 
     # Check all items have matched ingredients
     items = draft.get('items', [])
+    for item in items:
+        print(f"[PROCESS DEBUG] Item from DB: id={item.get('id')}, name={item.get('poster_ingredient_name')}, "
+              f"poster_account_id={item.get('poster_account_id')}, storage_id={item.get('storage_id')}, "
+              f"poster_ingredient_id={item.get('poster_ingredient_id')}")
     unmatched = [i for i in items if not i.get('poster_ingredient_id')]
 
     if unmatched:
