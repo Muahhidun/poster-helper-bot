@@ -375,11 +375,18 @@ class IngredientMatcher:
                 unit = row.get('unit', '').strip()
                 account_name = row.get('account_name', 'Unknown').strip()
 
+                # Poster API type: "1"=ingredient, "2"=semi-product
+                # Map to internal type names for Poster supply API
+                poster_type = row.get('type', '1').strip()
+                type_map = {'1': 'ingredient', '2': 'semi_product'}
+                item_type = type_map.get(poster_type, 'ingredient')
+
                 self.ingredients[ingredient_id] = {
                     'id': ingredient_id,
                     'name': name,
                     'unit': unit,
-                    'account_name': account_name
+                    'account_name': account_name,
+                    'type': item_type
                 }
 
                 # Add name for matching

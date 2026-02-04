@@ -46,14 +46,15 @@ async def sync_ingredients(telegram_user_id: int = None):
             ingredient_ids = []
             with open(csv_path, 'w', encoding='utf-8', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['ingredient_id', 'ingredient_name', 'unit'])
+                writer.writerow(['ingredient_id', 'ingredient_name', 'unit', 'type'])
 
                 for ingredient in ingredients:
                     ingredient_id = ingredient.get('ingredient_id')
                     name = ingredient.get('ingredient_name', '')
                     unit = ingredient.get('unit', '')
+                    ing_type = str(ingredient.get('type', '1'))
 
-                    writer.writerow([ingredient_id, name, unit])
+                    writer.writerow([ingredient_id, name, unit, ing_type])
                     ingredient_ids.append(ingredient_id)
 
             logger.info(f"✅ Saved {len(ingredients)} ingredients to {csv_path}")
@@ -119,18 +120,20 @@ async def sync_ingredients(telegram_user_id: int = None):
         shutil.copy(csv_path, backup_path)
         logger.info(f"Backup created: {backup_path}")
 
-    # Save to CSV with account_name field
+    # Save to CSV with account_name and type fields
     with open(csv_path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['ingredient_id', 'ingredient_name', 'unit', 'account_name'])
+        writer.writerow(['ingredient_id', 'ingredient_name', 'unit', 'account_name', 'type'])
 
         for ingredient in all_ingredients:
             ingredient_id = ingredient.get('ingredient_id')
             name = ingredient.get('ingredient_name', '')
             unit = ingredient.get('unit', '')
             account_name = ingredient.get('account_name', 'Unknown')
+            # Poster API type: "1"=ingredient, "2"=semi-product, "4"=product
+            ing_type = str(ingredient.get('type', '1'))
 
-            writer.writerow([ingredient_id, name, unit, account_name])
+            writer.writerow([ingredient_id, name, unit, account_name, ing_type])
 
     logger.info(f"✅ Saved {len(all_ingredients)} total ingredients to {csv_path}")
     for account_name, ids in account_ingredient_map.items():

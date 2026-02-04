@@ -157,9 +157,13 @@ class InvoiceProcessor:
                 ingredient_id = match_result[0]
                 account_name = match_result[4]
                 candidates = None
+                # Look up ingredient type from matcher data
+                ing_info = self.ingredient_matcher.ingredients.get(ingredient_id, {})
+                item_type = ing_info.get('type', 'ingredient')
             else:
                 ingredient_id = None
                 account_name = None
+                item_type = None
                 # Товар не найден - ищем похожие для ручного выбора (score 60-75)
                 candidates = self.ingredient_matcher.get_top_matches(item['name'], limit=5, score_cutoff=60)
                 logger.debug(f"  ℹ️ Found {len(candidates)} candidates for '{item['name']}'")
@@ -172,6 +176,7 @@ class InvoiceProcessor:
                 'name': item['name'],
                 'ingredient_id': ingredient_id,
                 'account_name': account_name,
+                'item_type': item_type,
                 'quantity': qty,
                 'unit': item['unit'],
                 'price': price,
@@ -295,11 +300,15 @@ class InvoiceProcessor:
                 added_items = []
 
                 for item in account_items:
-                    ingredients_for_poster.append({
+                    ing_data = {
                         'id': item['ingredient_id'],
                         'num': item['quantity'],
                         'price': item['price']
-                    })
+                    }
+                    # Pass ingredient type for Poster API
+                    if item.get('item_type'):
+                        ing_data['type'] = item['item_type']
+                    ingredients_for_poster.append(ing_data)
 
                     added_items.append({
                         'name': item['name'],

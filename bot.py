@@ -2305,20 +2305,30 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 'пэт', 'pet',  # упаковка
             ])
 
+            is_product_match = False
             if ingredient_match and product_match:
                 # Оба найдены - выбор зависит от типа товара
                 if item_is_beverage:
                     # Напиток: приоритет товарам при равном или близком score
                     logger.info(f"   🥤 Beverage detected: prioritizing product over ingredient")
                     # Используем product если score >= ingredient_score - 5 (допускаем небольшую погрешность)
-                    best_match = product_match if product_match[3] >= ingredient_match[3] - 5 else ingredient_match
+                    if product_match[3] >= ingredient_match[3] - 5:
+                        best_match = product_match
+                        is_product_match = True
+                    else:
+                        best_match = ingredient_match
                 else:
                     # Не напиток: приоритет ингредиентам
-                    best_match = ingredient_match if ingredient_match[3] >= product_match[3] else product_match
+                    if ingredient_match[3] >= product_match[3]:
+                        best_match = ingredient_match
+                    else:
+                        best_match = product_match
+                        is_product_match = True
             elif ingredient_match:
                 best_match = ingredient_match
             elif product_match:
                 best_match = product_match
+                is_product_match = True
 
             # Check if match is good enough (score >= 75 or exact match)
             if not best_match or best_match[3] < 75:
@@ -2342,6 +2352,14 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
 
             item_sum = int(adjusted_qty * adjusted_price)
 
+            # Determine item_type for Poster API
+            if is_product_match:
+                item_type = 'product'
+            else:
+                # Look up ingredient type from matcher data
+                ing_info = ingredient_matcher.ingredients.get(item_id, {})
+                item_type = ing_info.get('type', 'ingredient')
+
             matched_items.append({
                 'id': item_id,
                 'name': item_name,
@@ -2351,7 +2369,8 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 'match_score': match_score,
                 'original_name': item['name'],
                 'packing_size': packing_size,
-                'account_name': account_name  # Добавляем информацию об аккаунте
+                'account_name': account_name,  # Добавляем информацию об аккаунте
+                'item_type': item_type  # 'ingredient', 'semi_product', or 'product'
             })
 
             total_amount += item_sum
@@ -2857,18 +2876,24 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
 
         # Use best match
         best_match = None
+        is_product_match = False
         if ingredient_match and product_match:
-            best_match = ingredient_match if ingredient_match[3] >= product_match[3] else product_match
+            if ingredient_match[3] >= product_match[3]:
+                best_match = ingredient_match
+            else:
+                best_match = product_match
+                is_product_match = True
         elif ingredient_match:
             best_match = ingredient_match
         elif product_match:
             best_match = product_match
+            is_product_match = True
 
         if not best_match or best_match[3] < 75:
             unmatched_items.append(item)
             continue
 
-        item_id, item_name, unit, match_score = best_match
+        item_id, item_name, unit, match_score, account_name_match = best_match
         qty = item['qty']
         price = item.get('price')
 
@@ -2884,6 +2909,13 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
 
         item_sum = int(adjusted_qty * adjusted_price)
 
+        # Determine item_type for Poster API
+        if is_product_match:
+            item_type = 'product'
+        else:
+            ing_info = ingredient_matcher.ingredients.get(item_id, {})
+            item_type = ing_info.get('type', 'ingredient')
+
         matched_items.append({
             'id': item_id,
             'name': item_name,
@@ -2892,7 +2924,9 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
             'sum': item_sum,
             'match_score': match_score,
             'original_name': item['name'],
-            'packing_size': packing_size
+            'packing_size': packing_size,
+            'account_name': account_name_match,
+            'item_type': item_type
         })
 
         total_amount += item_sum
@@ -5852,11 +5886,15 @@ async def confirm_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE
                     ingredients_dict[item_id]['num'] += item['num']
                 else:
                     # Новый ингредиент - только нужные поля
-                    ingredients_dict[item_id] = {
+                    # item_type: 'ingredient', 'semi_product', or 'product'
+                    ingredient_data = {
                         'id': item_id,
                         'num': item['num'],
                         'price': item['price']
                     }
+                    if item.get('item_type'):
+                        ingredient_data['type'] = item['item_type']
+                    ingredients_dict[item_id] = ingredient_data
 
             # Конвертируем в список
             ingredients_for_api = list(ingredients_dict.values())
