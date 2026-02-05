@@ -447,7 +447,7 @@ function EmptyDraftRow({
   const defaultPosterAccountId = posterAccounts.find(pa => pa.is_primary)?.id || posterAccounts[0]?.id
 
   return (
-    <tr ref={rowRef} className="draft-row border-l-4 border-l-gray-200 bg-gray-50/50 hover:bg-gray-100/50 transition-colors">
+    <tr ref={rowRef} className="draft-row border-l-[5px] border-l-gray-200 bg-gray-50/50 hover:bg-gray-100/50 transition-colors">
       <td className="px-3 py-2 border-b border-gray-100">
         <input type="checkbox" disabled className="w-4 h-4 opacity-30" />
       </td>
@@ -583,8 +583,8 @@ function DraftRow({
 
   const rowClasses = cn(
     'draft-row transition-colors',
-    draft.expense_type === 'supply' ? 'border-l-4 border-l-blue-500' :
-      draft.is_income ? 'border-l-4 border-l-amber-400 bg-amber-50/50' : 'border-l-4 border-l-emerald-500',
+    draft.expense_type === 'supply' ? 'border-l-[5px] border-l-orange-500' :
+      draft.is_income ? 'border-l-[5px] border-l-amber-400 bg-amber-50/50' : 'border-l-[5px] border-l-emerald-500',
     draft.completion_status === 'completed' && 'bg-emerald-50/70 opacity-70',
     draft.completion_status === 'partial' && 'bg-amber-50/70',
     syncMatches >= 4 && 'bg-emerald-50',
