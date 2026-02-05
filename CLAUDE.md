@@ -201,6 +201,62 @@ TIMEZONE                    # Часовой пояс (Asia/Almaty)
 2. Парсинг имён → расчёт зарплат по продажам
 3. Создание транзакций (кассиры, донерщик, помощник)
 
+## Known Issues & Solutions (История отладки)
+
+### createSupply: типы ингредиентов и мульти-аккаунт (PRs #119–#128)
+
+**Проблема:** При создании поставок через `finance.createSupply` Poster API возвращал ошибки 32 и 50. Работало для одного заведения (Pizzburg), но ломалось для другого (Pizzburg-cafe).
+
+**Корневые причины (было несколько слоёв проблем):**
+
+1. **Неправильный формат запроса к API.** Код отправлял плоские поля (`date`, `supplier_id`, `ingredients[N]`) вместо формата из документации (`supply[date]`, `supply[supplier_id]`, `ingredient[N]`). Также использовал `price` вместо `sum`. Для Pizzburg это работало по совпадению, для Pizzburg-cafe — нет.
+
+2. **Путаница с type mapping.** Документация Poster противоречива — в разных местах типы описаны по-разному. После многих итераций выяснили рабочую схему:
+   - В `createSupply` (формат docs): `ingredient=4`, `product=1`
+   - В `createSupply` (формат legacy/flat): `ingredient=1`, `semi_product=2`, `product=4`
+   - Финальное решение — fallback-стратегия: пробуем docs-формат, при ошибке 32 пробуем legacy, при повторной ошибке — смешанный формат.
+
+3. **Кросс-аккаунтные ID ингредиентов.** У разных заведений (Pizzburg и Pizzburg-cafe) разные наборы ингредиентов с разными ID. Ингредиент "Фри" в Pizzburg имеет `id=83`, а в Pizzburg-cafe — `id=295`. Если пользователь добавлял ингредиент из одного аккаунта и отправлял в API другого — ошибка 32.
+
+4. **Смешение пространств имён ingredients и products.** Poster использует отдельные ID для ингредиентов (`ingredient_id`) и товаров (`product_id`). Валидация объединяла их в один словарь, что давало ложные срабатывания.
+
+5. **Тип не передавался по всему flow.** Тип ингредиента (ingredient/semi_product/product) корректно читался из Poster API при синхронизации, но терялся по пути: не сохранялся в CSV, не передавался через frontend, не записывался в БД черновиков.
+
+**Решение (файлы, которые были изменены):**
+
+- **`poster_client.py`** — метод `create_supply()`: 3 стратегии формата с fallback (docs → legacy → mixed). Каждая стратегия имеет свой `type_map`.
+- **`web_app.py`** — `process_supply()`: раздельная валидация `valid_ingredient_ids` и `valid_product_ids`, фильтрация удалённых, определение типа каждого item перед отправкой. Привязка ингредиентов к конкретному аккаунту.
+- **`sync_ingredients.py`** — сохранение поля `type` в CSV при синхронизации.
+- **`matchers.py`** — `IngredientMatcher` загружает и возвращает `type` ингредиента.
+- **`database.py`** — колонки `item_type`, `poster_account_id`, `poster_account_name`, `storage_id`, `storage_name` в таблице `supply_draft_items`.
+
+**Как проверить работоспособность:**
+- Создать поставку в веб-интерфейсе (`/supplies`) для каждого заведения
+- Проверить с ингредиентом (Фри) и товаром (Кока-Кола 1л)
+- В логах должно быть `✅ Supply created successfully: ID=XXXX`
+- Типы в логах: ингредиент → `type=4` (docs формат), товар → `type=1`
+
+### Poster API: формат createSupply
+
+Рабочий формат (docs), используется как основной:
+```
+supply[date] = "2026-02-04 12:00:00"
+supply[supplier_id] = 6
+supply[storage_id] = 1
+supply[supply_comment] = "Накладная от Смолл"
+supply[account_id] = 5
+ingredient[0][id] = 295
+ingredient[0][type] = 4        # 4=ingredient, 1=product
+ingredient[0][num] = 1         # количество
+ingredient[0][sum] = 1440      # сумма за единицу (не price!)
+```
+
+Если docs-формат вернул ошибку 32, автоматически пробуется legacy-формат:
+```
+date, supplier_id, storage_id  (без supply[] обёртки)
+ingredients[0][id], ingredients[0][type]=1, ingredients[0][num], ingredients[0][price]
+```
+
 ## Code Style & Conventions
 
 - Язык кода: Python, комментарии и строки — русский/английский
