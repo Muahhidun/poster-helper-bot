@@ -390,6 +390,7 @@ export interface ExpenseDraft {
   completion_status: CompletionStatus
   is_income: boolean
   created_at: string
+  poster_amount: number | null
 }
 
 export interface ExpenseCategory {
@@ -444,6 +445,7 @@ export interface CreateExpenseRequest {
 export interface SyncFromPosterResponse {
   success: boolean
   synced: number
+  updated: number
   skipped: number
   errors: string[]
   message: string

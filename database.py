@@ -276,6 +276,13 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Migration: add poster_amount column for tracking Poster's current amount
+            # Used to detect mismatches when user edits amount on website vs Poster
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN poster_amount REAL")
+            except Exception:
+                pass  # Column already exists
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
@@ -2335,7 +2342,8 @@ class UserDatabase:
         poster_account_id: int = None,
         poster_transaction_id: str = None,
         is_income: bool = False,
-        completion_status: str = "pending"
+        completion_status: str = "pending",
+        poster_amount: float = None
     ) -> Optional[int]:
         """
         Создать один черновик расхода (для ручного ввода или синхронизации из Poster)
@@ -2343,6 +2351,7 @@ class UserDatabase:
         Args:
             is_income: True если это доход (например, продажа масла), False для расхода
             completion_status: 'pending' (не в Poster), 'completed' (в Poster)
+            poster_amount: Текущая сумма в Poster (для отслеживания изменений)
 
         Returns:
             ID созданного черновика или None при ошибке
@@ -2356,17 +2365,17 @@ class UserDatabase:
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status))
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
                 draft_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status))
+                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
                 draft_id = cursor.fetchone()[0]
 
             conn.commit()

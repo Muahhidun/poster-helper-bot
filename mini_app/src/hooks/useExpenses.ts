@@ -109,6 +109,7 @@ export function useCreateExpense() {
         completion_status: 'pending' as const,
         is_income: false,
         created_at: new Date().toISOString(),
+        poster_amount: null,
       }
 
       queryClient.setQueryData<ExpensesResponse>(['expenses'], (old) => {
