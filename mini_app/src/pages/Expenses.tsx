@@ -20,7 +20,7 @@ import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransac
 
 type AccountType = 'cash' | 'kaspi' | 'halyk'
 type SortDirection = 'asc' | 'desc' | null
-type SortColumn = 'amount' | 'description' | 'type' | 'category' | 'department'
+type SortColumn = 'status' | 'amount' | 'description' | 'type' | 'category' | 'department'
 
 interface SortState {
   column: SortColumn | null
@@ -718,6 +718,12 @@ function Section({
       let bVal: string | number = ''
 
       switch (sortState.column) {
+        case 'status': {
+          const statusOrder: Record<string, number> = { pending: 0, partial: 1, completed: 2 }
+          aVal = statusOrder[a.completion_status || 'pending'] ?? 0
+          bVal = statusOrder[b.completion_status || 'pending'] ?? 0
+          break
+        }
         case 'amount':
           aVal = a.amount || 0
           bVal = b.amount || 0
@@ -783,7 +789,12 @@ function Section({
                   className="w-4 h-4 cursor-pointer accent-blue-600"
                 />
               </th>
-              <th className="px-3 py-2.5 text-left w-10">✓</th>
+              <th
+                className="px-3 py-2.5 text-left w-10 cursor-pointer hover:bg-gray-100 transition-colors"
+                onClick={() => onSort(type, 'status')}
+              >
+                ✓ {renderSortIcon('status')}
+              </th>
               <th
                 className="px-3 py-2.5 text-left cursor-pointer hover:bg-gray-100 transition-colors"
                 onClick={() => onSort(type, 'amount')}
@@ -1065,22 +1076,6 @@ export function Expenses() {
         </button>
         <span className="ml-auto text-sm text-gray-500 font-medium">
           Выбрано: <span className="text-gray-900">{selectedIds.size}</span>
-        </span>
-      </div>
-
-      {/* Sync Legend */}
-      <div className="flex gap-5 mb-5 text-xs text-gray-500">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-          Совпало 4/4 (уже в Poster)
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-          Совпало 3/4 (частичное)
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-gray-200"></span>
-          Не найдено в Poster
         </span>
       </div>
 
