@@ -5,17 +5,45 @@ import type {
   UpdateExpenseRequest,
   CreateExpenseRequest,
   SyncFromPosterResponse,
+  ShiftReconciliationResponse,
+  SaveReconciliationRequest,
   PosterTransaction,
   ExpenseAccount,
 } from '@/types'
 
-// Fetch all expenses with related data
-export function useExpenses() {
+// Fetch all expenses with related data, filtered by date
+export function useExpenses(date?: string) {
   return useQuery<ExpensesResponse>({
-    queryKey: ['expenses'],
+    queryKey: ['expenses', date],
     queryFn: async () => {
       const client = getApiClient()
-      return client.getExpenses()
+      return client.getExpenses(date)
+    },
+  })
+}
+
+// Fetch shift reconciliation for a date
+export function useReconciliation(date?: string) {
+  return useQuery<ShiftReconciliationResponse>({
+    queryKey: ['shift-reconciliation', date],
+    queryFn: async () => {
+      const client = getApiClient()
+      return client.getShiftReconciliation(date)
+    },
+  })
+}
+
+// Save shift reconciliation
+export function useSaveReconciliation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (data: SaveReconciliationRequest) => {
+      const client = getApiClient()
+      return client.saveShiftReconciliation(data)
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['shift-reconciliation', variables.date] })
     },
   })
 }
@@ -30,6 +58,28 @@ export function usePosterTransactions() {
     },
     staleTime: 1000 * 60, // 1 minute
   })
+}
+
+// Helper: get the active expenses query key and data (there's only one at a time)
+function getActiveExpensesQuery(queryClient: ReturnType<typeof useQueryClient>) {
+  const queries = queryClient.getQueryCache().findAll({ queryKey: ['expenses'] })
+  const active = queries[0]
+  if (!active) return null
+  return {
+    queryKey: active.queryKey as readonly unknown[],
+    data: active.state.data as ExpensesResponse | undefined,
+  }
+}
+
+// Helper: optimistically update the active expenses query
+function setActiveExpensesData(
+  queryClient: ReturnType<typeof useQueryClient>,
+  updater: (old: ExpensesResponse) => ExpensesResponse
+) {
+  const active = getActiveExpensesQuery(queryClient)
+  if (active?.data) {
+    queryClient.setQueryData(active.queryKey, updater(active.data))
+  }
 }
 
 // Update expense field - with optimistic update for instant UI
@@ -53,25 +103,23 @@ export function useUpdateExpense() {
       await queryClient.cancelQueries({ queryKey: ['expenses'] })
 
       // Snapshot the previous value
-      const previousData = queryClient.getQueryData<ExpensesResponse>(['expenses'])
+      const active = getActiveExpensesQuery(queryClient)
+      const previousData = active?.data
 
       // Optimistically update the cache
-      queryClient.setQueryData<ExpensesResponse>(['expenses'], (old) => {
-        if (!old) return old
-        return {
-          ...old,
-          drafts: old.drafts.map(draft =>
-            draft.id === id ? { ...draft, ...data } : draft
-          ),
-        }
-      })
+      setActiveExpensesData(queryClient, (old) => ({
+        ...old,
+        drafts: old.drafts.map(draft =>
+          draft.id === id ? { ...draft, ...data } : draft
+        ),
+      }))
 
-      return { previousData }
+      return { previousData, queryKey: active?.queryKey }
     },
     // Rollback on error
     onError: (_err, _variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(['expenses'], context.previousData)
+      if (context?.previousData && context?.queryKey) {
+        queryClient.setQueryData(context.queryKey, context.previousData)
       }
     },
     // Always refetch after error or success to ensure consistency
@@ -93,7 +141,8 @@ export function useCreateExpense() {
     // Optimistic update - add temporary item immediately
     onMutate: async (data) => {
       await queryClient.cancelQueries({ queryKey: ['expenses'] })
-      const previousData = queryClient.getQueryData<ExpensesResponse>(['expenses'])
+      const active = getActiveExpensesQuery(queryClient)
+      const previousData = active?.data
 
       // Create temporary draft with negative ID (will be replaced on success)
       const tempDraft = {
@@ -112,16 +161,15 @@ export function useCreateExpense() {
         poster_amount: null,
       }
 
-      queryClient.setQueryData<ExpensesResponse>(['expenses'], (old) => {
-        if (!old) return old
-        return { ...old, drafts: [tempDraft, ...old.drafts] }
-      })
+      setActiveExpensesData(queryClient, (old) => ({
+        ...old, drafts: [tempDraft, ...old.drafts]
+      }))
 
-      return { previousData }
+      return { previousData, queryKey: active?.queryKey }
     },
     onError: (_err, _variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(['expenses'], context.previousData)
+      if (context?.previousData && context?.queryKey) {
+        queryClient.setQueryData(context.queryKey, context.previousData)
       }
     },
     onSettled: () => {
@@ -142,18 +190,18 @@ export function useDeleteExpense() {
     // Optimistic update - remove immediately
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: ['expenses'] })
-      const previousData = queryClient.getQueryData<ExpensesResponse>(['expenses'])
+      const active = getActiveExpensesQuery(queryClient)
+      const previousData = active?.data
 
-      queryClient.setQueryData<ExpensesResponse>(['expenses'], (old) => {
-        if (!old) return old
-        return { ...old, drafts: old.drafts.filter(d => d.id !== id) }
-      })
+      setActiveExpensesData(queryClient, (old) => ({
+        ...old, drafts: old.drafts.filter(d => d.id !== id)
+      }))
 
-      return { previousData }
+      return { previousData, queryKey: active?.queryKey }
     },
     onError: (_err, _variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(['expenses'], context.previousData)
+      if (context?.previousData && context?.queryKey) {
+        queryClient.setQueryData(context.queryKey, context.previousData)
       }
     },
     onSettled: () => {
@@ -206,19 +254,19 @@ export function useDeleteDrafts() {
     // Optimistic update - remove all immediately
     onMutate: async (draftIds) => {
       await queryClient.cancelQueries({ queryKey: ['expenses'] })
-      const previousData = queryClient.getQueryData<ExpensesResponse>(['expenses'])
+      const active = getActiveExpensesQuery(queryClient)
+      const previousData = active?.data
 
-      queryClient.setQueryData<ExpensesResponse>(['expenses'], (old) => {
-        if (!old) return old
+      setActiveExpensesData(queryClient, (old) => {
         const idsSet = new Set(draftIds)
         return { ...old, drafts: old.drafts.filter(d => !idsSet.has(d.id)) }
       })
 
-      return { previousData }
+      return { previousData, queryKey: active?.queryKey }
     },
     onError: (_err, _variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(['expenses'], context.previousData)
+      if (context?.previousData && context?.queryKey) {
+        queryClient.setQueryData(context.queryKey, context.previousData)
       }
     },
     onSettled: () => {
@@ -245,23 +293,21 @@ export function useToggleExpenseType() {
     // Optimistic update - toggle immediately
     onMutate: async ({ id, expenseType }) => {
       await queryClient.cancelQueries({ queryKey: ['expenses'] })
-      const previousData = queryClient.getQueryData<ExpensesResponse>(['expenses'])
+      const active = getActiveExpensesQuery(queryClient)
+      const previousData = active?.data
 
-      queryClient.setQueryData<ExpensesResponse>(['expenses'], (old) => {
-        if (!old) return old
-        return {
-          ...old,
-          drafts: old.drafts.map(draft =>
-            draft.id === id ? { ...draft, expense_type: expenseType } : draft
-          ),
-        }
-      })
+      setActiveExpensesData(queryClient, (old) => ({
+        ...old,
+        drafts: old.drafts.map(draft =>
+          draft.id === id ? { ...draft, expense_type: expenseType } : draft
+        ),
+      }))
 
-      return { previousData }
+      return { previousData, queryKey: active?.queryKey }
     },
     onError: (_err, _variables, context) => {
-      if (context?.previousData) {
-        queryClient.setQueryData(['expenses'], context.previousData)
+      if (context?.previousData && context?.queryKey) {
+        queryClient.setQueryData(context.queryKey, context.previousData)
       }
     },
     onSettled: () => {

@@ -283,6 +283,29 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Table for shift reconciliation (сверка смены по источникам: cash/kaspi/halyk)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS shift_reconciliation (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    date TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    opening_balance REAL,
+                    closing_balance REAL,
+                    total_difference REAL,
+                    notes TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT,
+                    UNIQUE(telegram_user_id, date, source),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_shift_reconciliation_user_date
+                ON shift_reconciliation(telegram_user_id, date)
+            """)
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
@@ -552,6 +575,29 @@ class UserDatabase:
                 cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS poster_amount REAL")
             except Exception:
                 pass  # Column already exists
+
+            # Table for shift reconciliation (сверка смены по источникам: cash/kaspi/halyk)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS shift_reconciliation (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    date DATE NOT NULL,
+                    source TEXT NOT NULL,
+                    opening_balance REAL,
+                    closing_balance REAL,
+                    total_difference REAL,
+                    notes TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
+                    UNIQUE(telegram_user_id, date, source),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_shift_reconciliation_user_date
+                ON shift_reconciliation(telegram_user_id, date)
+            """)
 
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
@@ -2516,6 +2562,73 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to mark drafts in poster: {e}")
             return 0
+
+    # ==================== Shift Reconciliation Methods ====================
+
+    def get_shift_reconciliation(self, telegram_user_id: int, date: str) -> list:
+        """Get shift reconciliation data for a specific date (all sources)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT * FROM shift_reconciliation
+                WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                ORDER BY source
+            """, (telegram_user_id, date))
+
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            conn.close()
+            return rows
+
+        except Exception as e:
+            logger.error(f"Failed to get shift reconciliation: {e}")
+            return []
+
+    def save_shift_reconciliation(self, telegram_user_id: int, date: str, source: str,
+                                   opening_balance=None, closing_balance=None,
+                                   total_difference=None, notes=None) -> bool:
+        """Save or update shift reconciliation for a specific date and source (upsert)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO shift_reconciliation
+                        (telegram_user_id, date, source, opening_balance, closing_balance, total_difference, notes, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date, source)
+                    DO UPDATE SET
+                        opening_balance = excluded.opening_balance,
+                        closing_balance = excluded.closing_balance,
+                        total_difference = excluded.total_difference,
+                        notes = excluded.notes,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (telegram_user_id, date, source, opening_balance, closing_balance, total_difference, notes))
+            else:
+                cursor.execute("""
+                    INSERT INTO shift_reconciliation
+                        (telegram_user_id, date, source, opening_balance, closing_balance, total_difference, notes, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date, source)
+                    DO UPDATE SET
+                        opening_balance = EXCLUDED.opening_balance,
+                        closing_balance = EXCLUDED.closing_balance,
+                        total_difference = EXCLUDED.total_difference,
+                        notes = EXCLUDED.notes,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (telegram_user_id, date, source, opening_balance, closing_balance, total_difference, notes))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save shift reconciliation: {e}")
+            return False
 
     # ==================== Supply Drafts Methods ====================
 

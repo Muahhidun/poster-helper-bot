@@ -23,6 +23,8 @@ import type {
   UpdateExpenseRequest,
   CreateExpenseRequest,
   SyncFromPosterResponse,
+  ShiftReconciliationResponse,
+  SaveReconciliationRequest,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -203,8 +205,12 @@ class ApiClient {
   }
 
   // Expenses
-  async getExpenses(): Promise<ExpensesResponse> {
-    return this.request<ExpensesResponse>('/api/expenses')
+  async getExpenses(date?: string): Promise<ExpensesResponse> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const queryString = params.toString()
+    const endpoint = queryString ? `/api/expenses?${queryString}` : '/api/expenses'
+    return this.request<ExpensesResponse>(endpoint)
   }
 
   async updateExpense(id: number, data: UpdateExpenseRequest): Promise<{ success: boolean }> {
@@ -251,6 +257,22 @@ class ApiClient {
     return this.request(`/api/expenses/${id}/completion-status`, {
       method: 'POST',
       body: JSON.stringify({ completion_status: status }),
+    })
+  }
+
+  // Shift Reconciliation (сверка смены)
+  async getShiftReconciliation(date?: string): Promise<ShiftReconciliationResponse> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const queryString = params.toString()
+    const endpoint = queryString ? `/api/shift-reconciliation?${queryString}` : '/api/shift-reconciliation'
+    return this.request<ShiftReconciliationResponse>(endpoint)
+  }
+
+  async saveShiftReconciliation(data: SaveReconciliationRequest): Promise<{ success: boolean }> {
+    return this.request('/api/shift-reconciliation', {
+      method: 'POST',
+      body: JSON.stringify(data),
     })
   }
 }

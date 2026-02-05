@@ -451,6 +451,28 @@ export interface SyncFromPosterResponse {
   message: string
 }
 
+// Shift Reconciliation (сверка смены)
+export interface ReconciliationData {
+  opening_balance: number | null
+  closing_balance: number | null
+  total_difference: number | null
+  notes: string | null
+}
+
+export interface ShiftReconciliationResponse {
+  date: string
+  reconciliation: Record<ExpenseSource, ReconciliationData>
+}
+
+export interface SaveReconciliationRequest {
+  date: string
+  source: ExpenseSource
+  opening_balance?: number | null
+  closing_balance?: number | null
+  total_difference?: number | null
+  notes?: string | null
+}
+
 // Poster transaction for sync status comparison
 export interface PosterTransaction {
   id: string

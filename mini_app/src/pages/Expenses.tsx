@@ -13,12 +13,14 @@ import {
   useDeleteDrafts,
   useToggleExpenseType,
   usePosterTransactions,
+  useReconciliation,
+  useSaveReconciliation,
   getCategoryDisplayName,
   getAccountType,
   findSyncStatus,
   buildAccountTypeMap,
 } from '@/hooks/useExpenses'
-import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransaction, ExpenseAccount } from '@/types'
+import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransaction, ExpenseAccount, ReconciliationData } from '@/types'
 
 type AccountType = 'cash' | 'kaspi' | 'halyk'
 type SortDirection = 'asc' | 'desc' | null
@@ -683,6 +685,104 @@ function DraftRow({
   )
 }
 
+// Reconciliation Header Component (баланс по источнику: Было/Оставил/Итого)
+function ReconciliationHeader({
+  type,
+  data,
+  onSave,
+}: {
+  type: AccountType
+  data: ReconciliationData | undefined
+  onSave: (source: AccountType, field: keyof ReconciliationData, value: number | null) => void
+}) {
+  const [openingBalance, setOpeningBalance] = useState<number | ''>(data?.opening_balance ?? '')
+  const [closingBalance, setClosingBalance] = useState<number | ''>(data?.closing_balance ?? '')
+  const [totalDifference, setTotalDifference] = useState<number | ''>(data?.total_difference ?? '')
+
+  // Sync from server data when it changes
+  useEffect(() => {
+    setOpeningBalance(data?.opening_balance ?? '')
+    setClosingBalance(data?.closing_balance ?? '')
+    setTotalDifference(data?.total_difference ?? '')
+  }, [data])
+
+  const saveField = (field: keyof ReconciliationData, value: number | '') => {
+    onSave(type, field, value === '' ? null : value)
+  }
+
+  const numericInputClass = cn(
+    'w-28 px-2.5 py-1 border border-gray-200 rounded text-sm text-right font-semibold tabular-nums',
+    'hover:border-gray-300 hover:bg-gray-50',
+    'focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10'
+  )
+
+  const diffValue = typeof totalDifference === 'number' ? totalDifference : 0
+  const diffColor = diffValue > 0 ? 'text-emerald-600' : diffValue < 0 ? 'text-red-600' : 'text-gray-500'
+
+  if (type === 'cash') {
+    return (
+      <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-200 flex flex-wrap items-center gap-4 text-sm">
+        <label className="flex items-center gap-1.5 text-gray-500">
+          Было:
+          <input
+            type="number"
+            value={openingBalance}
+            onChange={e => setOpeningBalance(e.target.value === '' ? '' : Number(e.target.value))}
+            onBlur={() => saveField('opening_balance', openingBalance)}
+            placeholder="0"
+            className={numericInputClass}
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-gray-500">
+          Оставил:
+          <input
+            type="number"
+            value={closingBalance}
+            onChange={e => setClosingBalance(e.target.value === '' ? '' : Number(e.target.value))}
+            onBlur={() => saveField('closing_balance', closingBalance)}
+            placeholder="0"
+            className={numericInputClass}
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-gray-500">
+          Итого:
+          <input
+            type="number"
+            value={totalDifference}
+            onChange={e => setTotalDifference(e.target.value === '' ? '' : Number(e.target.value))}
+            onBlur={() => saveField('total_difference', totalDifference)}
+            placeholder="0"
+            className={cn(numericInputClass, diffColor)}
+          />
+          <span className={cn('font-semibold', diffColor)}>
+            {diffValue > 0 ? '+' : ''}{diffValue !== 0 ? `${diffValue.toLocaleString('ru-RU')}₸` : ''}
+          </span>
+        </label>
+      </div>
+    )
+  }
+
+  // Kaspi / Halyk — only total difference
+  return (
+    <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-200 flex items-center gap-4 text-sm">
+      <label className="flex items-center gap-1.5 text-gray-500">
+        Итого:
+        <input
+          type="number"
+          value={totalDifference}
+          onChange={e => setTotalDifference(e.target.value === '' ? '' : Number(e.target.value))}
+          onBlur={() => saveField('total_difference', totalDifference)}
+          placeholder="0"
+          className={cn(numericInputClass, diffColor)}
+        />
+        <span className={cn('font-semibold', diffColor)}>
+          {diffValue > 0 ? '+' : ''}{diffValue !== 0 ? `${diffValue.toLocaleString('ru-RU')}₸` : ''}
+        </span>
+      </label>
+    </div>
+  )
+}
+
 // Section Component
 function Section({
   type,
@@ -696,6 +796,7 @@ function Section({
   posterTransactions,
   selectedIds,
   sortState,
+  reconciliation,
   onSelectAll,
   onSelect,
   onSort,
@@ -705,6 +806,7 @@ function Section({
   onToggleCompletion,
   onCreate,
   isCreating,
+  onReconciliationSave,
 }: {
   type: AccountType
   label: string
@@ -717,6 +819,7 @@ function Section({
   posterTransactions: PosterTransaction[]
   selectedIds: Set<number>
   sortState: SortState
+  reconciliation: ReconciliationData | undefined
   onSelectAll: (type: AccountType, selected: boolean) => void
   onSelect: (id: number, selected: boolean) => void
   onSort: (type: AccountType, column: SortColumn) => void
@@ -726,6 +829,7 @@ function Section({
   onToggleCompletion: (id: number, newStatus: 'pending' | 'partial' | 'completed') => void
   onCreate: (type: AccountType, data: { amount?: number; description?: string; category?: string }) => void
   isCreating: boolean
+  onReconciliationSave: (source: AccountType, field: keyof ReconciliationData, value: number | null) => void
 }) {
   const allSelected = drafts.length > 0 && drafts.every(d => selectedIds.has(d.id))
   const sectionTotal = drafts.reduce((sum, d) => sum + Number(d.amount || 0), 0)
@@ -796,6 +900,12 @@ function Section({
         <span>{icon}</span>
         {label}
       </h2>
+
+      <ReconciliationHeader
+        type={type}
+        data={reconciliation}
+        onSave={onReconciliationSave}
+      />
 
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -883,10 +993,21 @@ function Section({
   )
 }
 
+// Get today's date in Kazakhstan time (UTC+5)
+function getKazakhstanToday(): string {
+  const now = new Date()
+  const kzOffset = 5 * 60 // UTC+5 in minutes
+  const kzTime = new Date(now.getTime() + (kzOffset + now.getTimezoneOffset()) * 60000)
+  return kzTime.toISOString().slice(0, 10)
+}
+
 // Main Expenses Page
 export function Expenses() {
-  const { data, isLoading, error } = useExpenses()
+  const [selectedDate, setSelectedDate] = useState(getKazakhstanToday)
+
+  const { data, isLoading, error } = useExpenses(selectedDate)
   const { data: posterData } = usePosterTransactions()
+  const { data: reconciliationData } = useReconciliation(selectedDate)
   const updateMutation = useUpdateExpense()
   const deleteMutation = useDeleteExpense()
   const createMutation = useCreateExpense()
@@ -894,6 +1015,7 @@ export function Expenses() {
   const processMutation = useProcessDrafts()
   const deleteDraftsMutation = useDeleteDrafts()
   const toggleTypeMutation = useToggleExpenseType()
+  const saveReconciliationMutation = useSaveReconciliation()
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [sortStates, setSortStates] = useState<Record<AccountType, SortState>>({
@@ -1020,6 +1142,19 @@ export function Expenses() {
     updateMutation.mutate({ id, data: { completion_status: newStatus } })
   }, [updateMutation])
 
+  const handleReconciliationSave = useCallback((source: AccountType, field: keyof ReconciliationData, value: number | null) => {
+    const current: ReconciliationData = reconciliationData?.reconciliation?.[source] || {
+      opening_balance: null, closing_balance: null, total_difference: null, notes: null
+    }
+    saveReconciliationMutation.mutate({
+      date: selectedDate,
+      source,
+      opening_balance: field === 'opening_balance' ? value : current.opening_balance,
+      closing_balance: field === 'closing_balance' ? value : current.closing_balance,
+      total_difference: field === 'total_difference' ? value : current.total_difference,
+    })
+  }, [selectedDate, reconciliationData, saveReconciliationMutation])
+
   // Build account type map to determine which account_id to use for each source type
   const accountTypeMap = useMemo(() => buildAccountTypeMap(accounts), [accounts])
 
@@ -1092,7 +1227,26 @@ export function Expenses() {
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6 tracking-tight">Черновики расходов</h1>
+      <div className="flex items-center gap-4 mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Черновики расходов</h1>
+        <input
+          type="date"
+          value={selectedDate}
+          onChange={e => {
+            setSelectedDate(e.target.value)
+            setSelectedIds(new Set())
+          }}
+          className="px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+        />
+        {selectedDate !== getKazakhstanToday() && (
+          <button
+            onClick={() => { setSelectedDate(getKazakhstanToday()); setSelectedIds(new Set()) }}
+            className="px-3 py-1.5 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+          >
+            Сегодня
+          </button>
+        )}
+      </div>
 
       {/* Actions */}
       <div className="flex flex-wrap gap-3 mb-5 items-center">
@@ -1137,6 +1291,7 @@ export function Expenses() {
           posterTransactions={posterTransactions}
           selectedIds={selectedIds}
           sortState={sortStates[section.type]}
+          reconciliation={reconciliationData?.reconciliation?.[section.type]}
           onSelectAll={handleSelectAll}
           onSelect={handleSelect}
           onSort={handleSort}
@@ -1146,6 +1301,7 @@ export function Expenses() {
           onToggleCompletion={handleToggleCompletion}
           onCreate={handleCreate}
           isCreating={createMutation.isPending}
+          onReconciliationSave={handleReconciliationSave}
         />
       ))}
 
