@@ -1309,8 +1309,12 @@ def sync_expenses_from_poster():
 
     async def fetch_and_sync():
         synced_count = 0
+        updated_count = 0
         skipped_count = 0
         errors = []
+
+        # Load all existing drafts once
+        existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
         for account in poster_accounts:
             try:
@@ -1355,17 +1359,36 @@ def sync_expenses_from_poster():
                         txn_id = txn.get('transaction_id')
                         poster_transaction_id = f"{account['id']}_{txn_id}"
 
-                        # Check if already imported
-                        existing = db.get_expense_draft_by_poster_transaction_id(poster_transaction_id)
-                        if existing:
-                            skipped_count += 1
-                            continue
-
-                        # Extract transaction data
-                        # Amount in Poster is in kopecks (tiyins), divide by 100
-                        # Use absolute value - Poster shows expenses as negative, but we store positive
+                        # Extract amount
                         amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
                         amount = abs(float(amount_raw)) / 100
+
+                        # Check if already imported — find matching draft
+                        existing_draft = next(
+                            (d for d in existing_drafts
+                             if d.get('poster_transaction_id') == poster_transaction_id),
+                            None
+                        )
+
+                        if existing_draft:
+                            # Draft exists — check if amount changed in Poster
+                            old_poster_amount = existing_draft.get('poster_amount')
+                            old_amount = existing_draft.get('amount', 0)
+
+                            if old_poster_amount is None or abs(float(old_poster_amount) - amount) >= 0.01:
+                                update_fields = {'poster_amount': amount}
+                                # Update amount if user hasn't manually changed it
+                                if old_poster_amount is not None and abs(float(old_amount) - float(old_poster_amount)) < 0.01:
+                                    update_fields['amount'] = amount
+                                if old_poster_amount is None:
+                                    update_fields['amount'] = amount
+
+                                db.update_expense_draft(existing_draft['id'], **update_fields)
+                                updated_count += 1
+                                print(f"[SYNC] Updated draft #{existing_draft['id']}: poster_amount {old_poster_amount}→{amount}", flush=True)
+                            else:
+                                skipped_count += 1
+                            continue
 
                         # Description from category name or comment
                         comment = txn.get('comment', '') or ''
@@ -1378,16 +1401,12 @@ def sync_expenses_from_poster():
                             print(f"   💰 Income detected: category='{category_name}', type={txn_type}")
 
                         # Determine source (cash/kaspi/halyk) from account name
-                        # Try both 'account_from_id' and 'account_from' fields
                         account_from_id = txn.get('account_from_id') or txn.get('account_from')
-
-                        # Also check 'account_name' field that might be directly in transaction
                         txn_account_name = txn.get('account_name', '') or ''
 
                         finance_acc = account_map.get(str(account_from_id), {})
                         finance_acc_name = (finance_acc.get('name') or txn_account_name or '').lower()
 
-                        # Debug: print transaction details
                         print(f"   Transaction #{txn_id}: account_from={account_from_id}, acc_name='{finance_acc_name}', desc='{description}'")
 
                         source = 'cash'
@@ -1410,7 +1429,8 @@ def sync_expenses_from_poster():
                             poster_account_id=account['id'],
                             poster_transaction_id=poster_transaction_id,
                             is_income=is_income,
-                            completion_status='completed'  # Already in Poster!
+                            completion_status='completed',
+                            poster_amount=amount
                         )
 
                         if draft_id:
@@ -1427,17 +1447,27 @@ def sync_expenses_from_poster():
                 import traceback
                 traceback.print_exc()
 
-        return synced_count, skipped_count, errors
+        return synced_count, updated_count, skipped_count, errors
 
-    synced, skipped, errors = loop.run_until_complete(fetch_and_sync())
+    synced, updated, skipped, errors = loop.run_until_complete(fetch_and_sync())
     loop.close()
+
+    msg_parts = []
+    if synced > 0:
+        msg_parts.append(f'новых: {synced}')
+    if updated > 0:
+        msg_parts.append(f'обновлено: {updated}')
+    if skipped > 0:
+        msg_parts.append(f'без изменений: {skipped}')
+    message = 'Синхронизация: ' + ', '.join(msg_parts) if msg_parts else 'Нет транзакций'
 
     return jsonify({
         'success': True,
         'synced': synced,
+        'updated': updated,
         'skipped': skipped,
         'errors': errors,
-        'message': f'Синхронизировано: {synced}, пропущено: {skipped}'
+        'message': message
     })
 
 
@@ -1765,11 +1795,15 @@ def api_sync_expenses_from_poster():
     asyncio.set_event_loop(loop)
 
     synced = 0
+    updated = 0
     skipped = 0
     errors = []
 
     async def sync_from_all_accounts():
-        nonlocal synced, skipped, errors
+        nonlocal synced, updated, skipped, errors
+
+        # Load all existing drafts once (not per-transaction)
+        existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
         for account in poster_accounts:
             try:
@@ -1831,16 +1865,38 @@ def api_sync_expenses_from_poster():
                         # Debug: log account lookup
                         print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('name', 'NOT FOUND')}'", flush=True)
 
-                        # Check if already synced
-                        existing = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
-                        already_exists = any(
-                            d.get('poster_transaction_id') == str(txn_id) and
-                            d.get('poster_account_id') == account['id']
-                            for d in existing
+                        # Check if already synced - find matching draft
+                        existing_draft = next(
+                            (d for d in existing_drafts
+                             if d.get('poster_transaction_id') == str(txn_id) and
+                                d.get('poster_account_id') == account['id']),
+                            None
                         )
 
-                        if already_exists:
-                            skipped += 1
+                        if existing_draft:
+                            # Draft exists — check if amount changed in Poster
+                            old_poster_amount = existing_draft.get('poster_amount')
+                            old_amount = existing_draft.get('amount', 0)
+
+                            if old_poster_amount is None or abs(float(old_poster_amount) - amount) >= 0.01:
+                                # Poster amount changed — update draft
+                                update_fields = {'poster_amount': amount}
+
+                                # Also update draft amount if it still matches the old poster_amount
+                                # (user hasn't manually edited it on the website)
+                                if old_poster_amount is not None and abs(float(old_amount) - float(old_poster_amount)) < 0.01:
+                                    update_fields['amount'] = amount
+
+                                # If poster_amount was never set (old drafts), and draft amount matches old Poster amount
+                                # then update both
+                                if old_poster_amount is None:
+                                    update_fields['amount'] = amount
+
+                                db.update_expense_draft(existing_draft['id'], **update_fields)
+                                updated += 1
+                                print(f"[SYNC] Updated draft #{existing_draft['id']}: poster_amount {old_poster_amount}→{amount}, amount {old_amount}→{update_fields.get('amount', old_amount)}", flush=True)
+                            else:
+                                skipped += 1
                             continue
 
                         # Determine source from finance account name (or direct txn account_name)
@@ -1865,7 +1921,8 @@ def api_sync_expenses_from_poster():
                             poster_account_id=account['id'],
                             poster_transaction_id=str(txn_id),
                             is_income=(txn_type == '1'),
-                            completion_status='completed'
+                            completion_status='completed',
+                            poster_amount=amount
                         )
                         synced += 1
 
@@ -1880,14 +1937,24 @@ def api_sync_expenses_from_poster():
         loop.close()
     except Exception as e:
         loop.close()
-        return jsonify({'success': False, 'error': str(e), 'synced': synced, 'skipped': skipped, 'errors': errors})
+        return jsonify({'success': False, 'error': str(e), 'synced': synced, 'updated': updated, 'skipped': skipped, 'errors': errors})
+
+    msg_parts = []
+    if synced > 0:
+        msg_parts.append(f'новых: {synced}')
+    if updated > 0:
+        msg_parts.append(f'обновлено: {updated}')
+    if skipped > 0:
+        msg_parts.append(f'без изменений: {skipped}')
+    message = 'Синхронизация: ' + ', '.join(msg_parts) if msg_parts else 'Нет транзакций'
 
     return jsonify({
         'success': True,
         'synced': synced,
+        'updated': updated,
         'skipped': skipped,
         'errors': errors,
-        'message': f'Синхронизировано: {synced}, пропущено: {skipped}'
+        'message': message
     })
 
 

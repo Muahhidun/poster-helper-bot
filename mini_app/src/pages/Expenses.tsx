@@ -1,5 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
+import { getApiClient } from '@/api/client'
 // v2: Fixed sum calculation with Number() conversion for PostgreSQL DECIMAL
 import {
   useExpenses,
@@ -581,14 +583,22 @@ function DraftRow({
     )
   }, [draft, posterTransactions, accounts])
 
+  // Detect amount mismatch between website draft and Poster
+  const posterAmountMismatch = useMemo(() => {
+    if (draft.poster_amount == null) return false
+    return Math.abs(draft.amount - draft.poster_amount) >= 0.01
+  }, [draft.amount, draft.poster_amount])
+
   const rowClasses = cn(
     'draft-row transition-colors',
     draft.expense_type === 'supply' ? 'border-l-[5px] border-l-orange-500' :
       draft.is_income ? 'border-l-[5px] border-l-amber-400 bg-amber-50/50' : 'border-l-[5px] border-l-emerald-500',
-    draft.completion_status === 'completed' && 'bg-emerald-50/70 opacity-70',
-    draft.completion_status === 'partial' && 'bg-amber-50/70',
-    syncMatches >= 4 && 'bg-emerald-50',
-    syncMatches === 3 && 'bg-amber-50',
+    // Poster amount mismatch overrides completion status colors
+    posterAmountMismatch ? 'bg-yellow-50/80 border-l-yellow-400' :
+      draft.completion_status === 'completed' && 'bg-emerald-50/70 opacity-70',
+    !posterAmountMismatch && draft.completion_status === 'partial' && 'bg-amber-50/70',
+    !posterAmountMismatch && syncMatches >= 4 && 'bg-emerald-50',
+    !posterAmountMismatch && syncMatches === 3 && 'bg-amber-50',
     'hover:bg-gray-50'
   )
 
@@ -610,14 +620,24 @@ function DraftRow({
         />
       </td>
       <td className="px-3 py-2 border-b border-gray-100">
-        <EditableCell
-          value={draft.amount}
-          type="number"
-          draftId={draft.id}
-          field="amount"
-          onSave={onUpdate}
-          className="w-24 text-right font-semibold tabular-nums"
-        />
+        <div className="flex flex-col items-end gap-0.5">
+          <EditableCell
+            value={draft.amount}
+            type="number"
+            draftId={draft.id}
+            field="amount"
+            onSave={onUpdate}
+            className="w-24 text-right font-semibold tabular-nums"
+          />
+          {posterAmountMismatch && (
+            <span
+              className="text-[10px] text-yellow-700 bg-yellow-100 px-1.5 py-0.5 rounded-full whitespace-nowrap"
+              title={`Сумма в Poster: ${draft.poster_amount}₸. Измените на сайте, чтобы совпало.`}
+            >
+              Poster: {draft.poster_amount}₸
+            </span>
+          )}
+        </div>
       </td>
       <td className="px-3 py-2 border-b border-gray-100">
         <EditableCell
@@ -882,6 +902,29 @@ export function Expenses() {
     halyk: { column: null, direction: null },
   })
 
+  const queryClient = useQueryClient()
+
+  // Auto-sync from Poster every 5 minutes (silent, no alerts)
+  useEffect(() => {
+    const AUTO_SYNC_INTERVAL = 5 * 60 * 1000 // 5 minutes
+    const intervalId = setInterval(async () => {
+      try {
+        const client = getApiClient()
+        const result = await client.syncExpensesFromPoster()
+        if (result.synced > 0 || result.updated > 0) {
+          // Refresh data silently
+          queryClient.invalidateQueries({ queryKey: ['expenses'] })
+          queryClient.invalidateQueries({ queryKey: ['poster-transactions'] })
+          console.log(`[Auto-sync] ${result.message}`)
+        }
+      } catch (err) {
+        console.error('[Auto-sync] Error:', err)
+      }
+    }, AUTO_SYNC_INTERVAL)
+
+    return () => clearInterval(intervalId)
+  }, [queryClient])
+
   const drafts = data?.drafts || []
   const categories = data?.categories || []
   const accounts = data?.accounts || []
@@ -996,7 +1039,7 @@ export function Expenses() {
 
   const handleSync = useCallback(async () => {
     const result = await syncMutation.mutateAsync()
-    if (result.synced > 0) {
+    if (result.synced > 0 || result.updated > 0) {
       alert(`✅ ${result.message}`)
     } else {
       alert('ℹ️ Новых транзакций не найдено.\nСтатусы совпадения обновлены.')
