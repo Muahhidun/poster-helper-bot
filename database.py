@@ -546,6 +546,13 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Migration: add poster_amount column for tracking Poster's current amount
+            # Used to detect mismatches when user edits amount on website vs Poster
+            try:
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS poster_amount REAL")
+            except Exception:
+                pass  # Column already exists
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
