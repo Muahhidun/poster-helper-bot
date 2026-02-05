@@ -21,12 +21,6 @@
             <span class="selected-count">Выбрано: <span id="count">0</span></span>
         </div>
 
-        <div class="sync-legend">
-            <span class="legend-item"><span class="dot green"></span> Совпало 4/4 (уже в Poster)</span>
-            <span class="legend-item"><span class="dot yellow"></span> Совпало 3/4 (частичное)</span>
-            <span class="legend-item"><span class="dot none"></span> Не найдено в Poster</span>
-        </div>
-
         <!-- Section: Наличка (Cash) -->
         <div class="account-section" data-account-type="cash">
             <h2 class="section-header">💵 Наличка</h2>
@@ -34,7 +28,7 @@
                 <thead>
                     <tr>
                         <th style="width:40px"><input type="checkbox" class="select-all-section" data-section="cash"></th>
-                        <th style="width:40px">✓</th>
+                        <th class="sortable" style="width:40px" data-sort="status" data-section="cash">✓ <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="amount" data-section="cash">Сумма <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="description" data-section="cash">Описание <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="type" data-section="cash">Тип <span class="sort-icon">↕</span></th>
@@ -136,7 +130,7 @@
                 <thead>
                     <tr>
                         <th style="width:40px"><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
-                        <th style="width:40px">✓</th>
+                        <th class="sortable" style="width:40px" data-sort="status" data-section="kaspi">✓ <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="amount" data-section="kaspi">Сумма <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="description" data-section="kaspi">Описание <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="type" data-section="kaspi">Тип <span class="sort-icon">↕</span></th>
@@ -237,7 +231,7 @@
                 <thead>
                     <tr>
                         <th style="width:40px"><input type="checkbox" class="select-all-section" data-section="halyk"></th>
-                        <th style="width:40px">✓</th>
+                        <th class="sortable" style="width:40px" data-sort="status" data-section="halyk">✓ <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="amount" data-section="halyk">Сумма <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="description" data-section="halyk">Описание <span class="sort-icon">↕</span></th>
                         <th class="sortable" data-sort="type" data-section="halyk">Тип <span class="sort-icon">↕</span></th>
@@ -438,31 +432,6 @@ h1 {
     color: var(--text-secondary);
     font-weight: 500;
 }
-
-/* Sync legend */
-.sync-legend {
-    display: flex;
-    gap: 20px;
-    margin-bottom: 20px;
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-}
-
-.dot.green { background: var(--accent-green); }
-.dot.yellow { background: var(--accent-orange); }
-.dot.none { background: var(--border-color); }
 
 /* Account sections */
 .account-section {
@@ -1927,6 +1896,11 @@ const sortState = {
 // Get value for sorting from a row
 function getSortValue(row, column) {
     switch (column) {
+        case 'status': {
+            const statusOrder = { pending: 0, partial: 1, completed: 2 };
+            const status = row.dataset.completionStatus || 'pending';
+            return statusOrder[status] ?? 0;
+        }
         case 'amount':
             return parseFloat(row.querySelector('.edit-amount')?.value) || 0;
         case 'description':
