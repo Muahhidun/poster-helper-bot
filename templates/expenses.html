@@ -4,7 +4,18 @@
 
 {% block content %}
 <div class="container">
-    <h1>Черновики расходов</h1>
+    <div class="page-header">
+        <h1>Черновики расходов</h1>
+        <div class="date-picker-wrapper">
+            <button type="button" class="btn-date-nav" id="prev-day" title="Предыдущий день">&larr;</button>
+            <input type="date" id="date-picker" value="{{ selected_date }}"
+                   data-today="{{ today }}" class="date-picker">
+            <button type="button" class="btn-date-nav" id="next-day" title="Следующий день">&rarr;</button>
+            {% if selected_date != today %}
+            <a href="{{ url_for('list_expenses') }}" class="btn btn-outline">Сегодня</a>
+            {% endif %}
+        </div>
+    </div>
 
     <form id="drafts-form" method="POST">
         <div class="drafts-actions">
@@ -23,7 +34,22 @@
 
         <!-- Section: Наличка (Cash) -->
         <div class="account-section" data-account-type="cash">
-            <h2 class="section-header">💵 Наличка</h2>
+            <div class="section-header-wrapper">
+                <h2 class="section-header">💵 Наличка</h2>
+                <div class="reconciliation-row" data-source="cash">
+                    <label>Было:</label>
+                    <input type="number" class="reconciliation-input" id="cash-opening"
+                           value="{{ reconciliation.cash.opening_balance|default('', true) }}"
+                           placeholder="0" step="1">
+                    <label>Оставил:</label>
+                    <input type="number" class="reconciliation-input" id="cash-closing"
+                           value="{{ reconciliation.cash.closing_balance|default('', true) }}"
+                           placeholder="0" step="1">
+                    <span class="reconciliation-result">
+                        Итого: <strong id="cash-difference" class="difference-value">0</strong>₸
+                    </span>
+                </div>
+            </div>
             <table class="table">
                 <thead>
                     <tr>
@@ -125,7 +151,18 @@
 
         <!-- Section: Kaspi Pay -->
         <div class="account-section" data-account-type="kaspi">
-            <h2 class="section-header">📱 Kaspi Pay</h2>
+            <div class="section-header-wrapper">
+                <h2 class="section-header">📱 Kaspi Pay</h2>
+                <div class="reconciliation-row" data-source="kaspi">
+                    <label>Разница (факт − Poster):</label>
+                    <input type="number" class="reconciliation-input" id="kaspi-difference-input"
+                           value="{{ reconciliation.kaspi.total_difference|default('', true) }}"
+                           placeholder="0" step="1">
+                    <span class="reconciliation-result">
+                        Итого: <strong id="kaspi-difference" class="difference-value">0</strong>₸
+                    </span>
+                </div>
+            </div>
             <table class="table">
                 <thead>
                     <tr>
@@ -226,7 +263,18 @@
 
         <!-- Section: Халык -->
         <div class="account-section" data-account-type="halyk">
-            <h2 class="section-header">🏦 Халык</h2>
+            <div class="section-header-wrapper">
+                <h2 class="section-header">🏦 Халык</h2>
+                <div class="reconciliation-row" data-source="halyk">
+                    <label>Разница (факт − Poster):</label>
+                    <input type="number" class="reconciliation-input" id="halyk-difference-input"
+                           value="{{ reconciliation.halyk.total_difference|default('', true) }}"
+                           placeholder="0" step="1">
+                    <span class="reconciliation-result">
+                        Итого: <strong id="halyk-difference" class="difference-value">0</strong>₸
+                    </span>
+                </div>
+            </div>
             <table class="table">
                 <thead>
                     <tr>
@@ -377,8 +425,129 @@
 h1 {
     font-size: 28px;
     font-weight: 700;
-    margin-bottom: 24px;
+    margin-bottom: 0;
     letter-spacing: -0.02em;
+}
+
+/* Page header with date picker */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.date-picker-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.date-picker {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    background: white;
+    cursor: pointer;
+}
+
+.date-picker:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.1);
+}
+
+.btn-date-nav {
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: white;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.btn-date-nav:hover {
+    background: var(--bg-secondary);
+    border-color: var(--text-muted);
+}
+
+.btn-outline {
+    background: white;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.btn-outline:hover {
+    background: var(--bg-secondary);
+    border-color: var(--text-muted);
+}
+
+/* Section header with reconciliation */
+.section-header-wrapper {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.section-header-wrapper .section-header {
+    border-bottom: none;
+}
+
+.reconciliation-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px 14px;
+    background: rgba(255, 255, 255, 0.5);
+    flex-wrap: wrap;
+}
+
+.reconciliation-row label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.reconciliation-input {
+    width: 100px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.reconciliation-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(11, 107, 203, 0.1);
+}
+
+.reconciliation-result {
+    margin-left: auto;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.difference-value {
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+}
+
+.difference-value.positive {
+    color: var(--accent-green);
+}
+
+.difference-value.negative {
+    color: var(--accent-red);
 }
 
 /* Action buttons */
@@ -424,6 +593,17 @@ h1 {
     background: #fee2e2;
     border-color: var(--accent-red);
     color: #b91c1c;
+}
+
+.btn-secondary {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
 }
 
 .selected-count {
@@ -1127,6 +1307,11 @@ document.addEventListener('DOMContentLoaded', function() {
             if (summaryEl) {
                 summaryEl.textContent = sum.toLocaleString('ru-RU') + '₸';
             }
+        }
+
+        // Update cash reconciliation difference if function exists
+        if (typeof updateCashDifference === 'function') {
+            updateCashDifference();
         }
     }
 
@@ -1882,6 +2067,11 @@ function updateSummaryGlobal() {
             summaryEl.textContent = sum.toLocaleString('ru-RU') + '₸';
         }
     }
+
+    // Update cash reconciliation difference
+    if (typeof updateCashDifference === 'function') {
+        updateCashDifference();
+    }
 }
 
 // ============ SORTING FUNCTIONALITY ============
@@ -2053,6 +2243,183 @@ document.getElementById('sync-poster-btn').addEventListener('click', async funct
         btn.disabled = false;
         btn.textContent = originalText;
     }
+});
+
+// ============ DATE NAVIGATION ============
+
+const datePicker = document.getElementById('date-picker');
+const prevDayBtn = document.getElementById('prev-day');
+const nextDayBtn = document.getElementById('next-day');
+const selectedDate = datePicker.value;
+const today = datePicker.dataset.today;
+
+// Navigate to date
+function goToDate(dateStr) {
+    window.location.href = '/expenses?date=' + dateStr;
+}
+
+// Format date for URL
+function formatDate(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+// Date picker change
+datePicker.addEventListener('change', function() {
+    goToDate(this.value);
+});
+
+// Previous day
+prevDayBtn.addEventListener('click', function() {
+    const current = new Date(selectedDate);
+    current.setDate(current.getDate() - 1);
+    goToDate(formatDate(current));
+});
+
+// Next day
+nextDayBtn.addEventListener('click', function() {
+    const current = new Date(selectedDate);
+    current.setDate(current.getDate() + 1);
+    goToDate(formatDate(current));
+});
+
+// ============ SHIFT RECONCILIATION ============
+
+let reconciliationTimeout = null;
+
+// Save reconciliation data to server
+async function saveReconciliation(source, data) {
+    try {
+        const payload = {
+            date: selectedDate,
+            source: source,
+            ...data
+        };
+        const response = await fetch('/api/shift-reconciliation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (result.success) {
+            console.log(`Saved reconciliation for ${source}`);
+        } else {
+            console.error('Failed to save reconciliation:', result.error);
+        }
+    } catch (err) {
+        console.error('Error saving reconciliation:', err);
+    }
+}
+
+// Calculate and update cash difference
+function updateCashDifference() {
+    const openingInput = document.getElementById('cash-opening');
+    const closingInput = document.getElementById('cash-closing');
+    const diffEl = document.getElementById('cash-difference');
+
+    const opening = parseFloat(openingInput.value) || 0;
+    const closing = parseFloat(closingInput.value) || 0;
+
+    // Get total expenses for cash section (excluding placeholder rows)
+    let totalExpenses = 0;
+    let totalIncome = 0;
+    document.querySelectorAll('#drafts-tbody-cash .draft-row:not(.placeholder-row)').forEach(row => {
+        const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
+        const isIncome = row.classList.contains('income') || row.dataset.isIncome === '1';
+        if (isIncome) {
+            totalIncome += amount;
+        } else {
+            totalExpenses += amount;
+        }
+    });
+
+    // Cash difference = closing - (opening + income - expenses)
+    // If positive = we have more cash than expected (good)
+    // If negative = we have less cash than expected (shortage)
+    const expected = opening + totalIncome - totalExpenses;
+    const difference = closing - expected;
+
+    // Update display
+    diffEl.textContent = (difference >= 0 ? '+' : '') + difference.toLocaleString('ru-RU');
+    diffEl.classList.remove('positive', 'negative');
+    if (difference > 0) diffEl.classList.add('positive');
+    else if (difference < 0) diffEl.classList.add('negative');
+
+    return { opening_balance: opening, closing_balance: closing, total_difference: difference };
+}
+
+// Update kaspi/halyk difference display
+function updateSimpleDifference(source) {
+    const input = document.getElementById(`${source}-difference-input`);
+    const diffEl = document.getElementById(`${source}-difference`);
+
+    const difference = parseFloat(input.value) || 0;
+
+    diffEl.textContent = (difference >= 0 ? '+' : '') + difference.toLocaleString('ru-RU');
+    diffEl.classList.remove('positive', 'negative');
+    if (difference > 0) diffEl.classList.add('positive');
+    else if (difference < 0) diffEl.classList.add('negative');
+
+    return { total_difference: difference };
+}
+
+// Initialize reconciliation values on load
+function initReconciliation() {
+    // Cash
+    const cashData = updateCashDifference();
+
+    // Kaspi
+    const kaspiData = updateSimpleDifference('kaspi');
+
+    // Halyk
+    const halykData = updateSimpleDifference('halyk');
+}
+
+// Event listeners for reconciliation inputs
+document.getElementById('cash-opening')?.addEventListener('input', function() {
+    const data = updateCashDifference();
+    clearTimeout(reconciliationTimeout);
+    reconciliationTimeout = setTimeout(() => saveReconciliation('cash', data), 500);
+});
+
+document.getElementById('cash-closing')?.addEventListener('input', function() {
+    const data = updateCashDifference();
+    clearTimeout(reconciliationTimeout);
+    reconciliationTimeout = setTimeout(() => saveReconciliation('cash', data), 500);
+});
+
+document.getElementById('kaspi-difference-input')?.addEventListener('input', function() {
+    const data = updateSimpleDifference('kaspi');
+    clearTimeout(reconciliationTimeout);
+    reconciliationTimeout = setTimeout(() => saveReconciliation('kaspi', data), 500);
+});
+
+document.getElementById('halyk-difference-input')?.addEventListener('input', function() {
+    const data = updateSimpleDifference('halyk');
+    clearTimeout(reconciliationTimeout);
+    reconciliationTimeout = setTimeout(() => saveReconciliation('halyk', data), 500);
+});
+
+// Also update cash difference when expense amounts change
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('edit-amount')) {
+        const row = e.target.closest('tr');
+        if (row && row.closest('#drafts-tbody-cash')) {
+            // Debounce to avoid multiple updates
+            clearTimeout(reconciliationTimeout);
+            reconciliationTimeout = setTimeout(() => {
+                const data = updateCashDifference();
+                saveReconciliation('cash', data);
+            }, 500);
+        }
+    }
+});
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    initReconciliation();
 });
 </script>
 {% endblock %}
