@@ -1003,7 +1003,12 @@ def list_expenses():
 
     # Load shift reconciliation data for selected date
     reconciliation_rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, selected_date)
-    reconciliation = {}
+    # Initialize with default empty structures for all expected sources
+    reconciliation = {
+        'cash': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
+        'kaspi': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
+        'halyk': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
+    }
     for row in reconciliation_rows:
         reconciliation[row['source']] = {
             'opening_balance': row.get('opening_balance'),
