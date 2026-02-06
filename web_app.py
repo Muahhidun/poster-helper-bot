@@ -1725,12 +1725,32 @@ def api_get_expenses():
         import traceback
         traceback.print_exc()
 
+    # Calculate account totals (balances) by type
+    # Sum balances from "Оставил в кассе" accounts across all business accounts
+    account_totals = {
+        'kaspi': 0,
+        'halyk': 0,
+        'cash': 0  # This is the "Оставил в кассе" balance from Poster
+    }
+    for acc in accounts:
+        name_lower = (acc.get('name') or '').lower()
+        # Balance is in kopecks/tiyn, convert to tenge
+        balance = float(acc.get('balance') or 0) / 100
+
+        if 'kaspi' in name_lower:
+            account_totals['kaspi'] += balance
+        elif 'халык' in name_lower or 'halyk' in name_lower:
+            account_totals['halyk'] += balance
+        elif 'оставил' in name_lower or 'закуп' in name_lower:
+            account_totals['cash'] += balance
+
     return jsonify({
         'drafts': drafts,
         'categories': categories,
         'accounts': accounts,
         'poster_accounts': poster_accounts_list,
-        'poster_transactions': poster_transactions
+        'poster_transactions': poster_transactions,
+        'account_totals': account_totals
     })
 
 
@@ -3639,7 +3659,7 @@ def api_shift_closing_poster_data():
                             acc_kaspi += amount
                         elif 'халык' in fin_account_name or 'halyk' in fin_account_name:
                             acc_halyk += amount
-                        elif 'налич' in fin_account_name or 'cash' in fin_account_name or 'касса' in fin_account_name:
+                        elif 'налич' in fin_account_name or 'cash' in fin_account_name or 'касса' in fin_account_name or 'оставил' in fin_account_name:
                             acc_cash += amount
 
                     kaspi_expected += acc_kaspi
