@@ -109,7 +109,7 @@ function IngredientSearchAutocomplete({
         )}
       />
       {isOpen && sortedResults.length > 0 && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-50">
+        <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-50">
           {sortedResults.map((ing, i) => (
             <div
               key={`${ing.id}-${ing.poster_account_id}`}
@@ -444,9 +444,9 @@ function DraftCard({
   const currentPosterAccountId = draft.poster_account_id || posterAccounts.find(pa => pa.is_primary)?.id || null
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm mb-6">
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-6">
       {/* Header */}
-      <div className="px-5 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-200">
+      <div className="px-5 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-200 rounded-t-lg">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <span className="text-lg">📦</span>
@@ -543,7 +543,7 @@ function DraftCard({
       </div>
 
       {/* Footer */}
-      <div className="px-5 py-3 bg-gray-50 flex items-center justify-between">
+      <div className="px-5 py-3 bg-gray-50 flex items-center justify-between rounded-b-lg">
         <span className="text-sm font-semibold text-gray-700">
           Итого: <span className="text-gray-900 tabular-nums">{Math.round(totalAmount).toLocaleString('ru-RU')}₸</span>
         </span>
