@@ -543,8 +543,9 @@ h1 {
 <script>
 // Poster data storage
 let posterData = {
-    poster_cash: 0,
-    poster_card: 0,
+    kaspi_expected: 0,
+    halyk_expected: 0,
+    cash_expected: 0,
     loaded: false
 };
 
@@ -588,20 +589,17 @@ async function loadPosterData() {
 
         if (data.success) {
             posterData = {
-                // Poster stores in tiyins, convert to tenge
-                poster_cash: data.poster_cash / 100,
-                poster_card: data.poster_card / 100,
+                // API returns values in tenge (already converted from tiyins)
+                kaspi_expected: data.kaspi_expected || 0,
+                halyk_expected: data.halyk_expected || 0,
+                cash_expected: data.cash_expected || 0,
                 loaded: true
             };
 
-            // Update Poster values display
-            document.getElementById('cash_poster').textContent = formatMoney(posterData.poster_cash) + ' ₸';
-
-            // For Halyk/Kaspi - Poster doesn't distinguish, so we show total card
-            // Note: user needs to enter their own Halyk and Kaspi facts
-            // Poster card = total of all card payments (Halyk + Kaspi combined)
-            document.getElementById('halyk_poster').textContent = '(см. итого)';
-            document.getElementById('kaspi_poster').textContent = '(см. итого)';
+            // Update Poster values display for each payment type
+            document.getElementById('halyk_poster').textContent = formatMoney(posterData.halyk_expected) + ' ₸';
+            document.getElementById('kaspi_poster').textContent = formatMoney(posterData.kaspi_expected) + ' ₸';
+            document.getElementById('cash_poster').textContent = formatMoney(posterData.cash_expected) + ' ₸';
 
             // Show accounts info
             const accountsInfo = document.getElementById('accounts-info');
@@ -634,38 +632,28 @@ function calculate() {
     // Total factual
     const total_fact = halyk_fact + kaspi_fact + cash_fact;
 
-    // Total from Poster
-    const total_poster = posterData.poster_card + posterData.poster_cash;
+    // Total from Poster (sum of all payment types)
+    const total_poster = posterData.halyk_expected + posterData.kaspi_expected + posterData.cash_expected;
 
-    // Card total from Poster (Halyk + Kaspi combined in Poster)
-    const poster_card_total = posterData.poster_card;
-
-    // For individual diffs, we compare:
-    // - Halyk: fact vs portion of poster_card (but Poster doesn't split)
-    // - Kaspi: fact vs portion of poster_card (but Poster doesn't split)
-    // - Cash: fact vs poster_cash
-
-    // Since Poster doesn't distinguish Halyk/Kaspi, we compare totals
-    const fact_card_total = halyk_fact + kaspi_fact;
-    const card_diff = fact_card_total - poster_card_total;
-
-    // Cash diff
-    const cash_diff = cash_fact - posterData.poster_cash;
+    // Calculate individual differences: Fact - Poster
+    const halyk_diff = halyk_fact - posterData.halyk_expected;
+    const kaspi_diff = kaspi_fact - posterData.kaspi_expected;
+    const cash_diff = cash_fact - posterData.cash_expected;
 
     // Total diff
     const total_diff = total_fact - total_poster;
 
     // Update displays
 
-    // Halyk - show combined card diff
+    // Halyk
     document.getElementById('halyk_diff').textContent =
-        (card_diff >= 0 ? '+' : '') + formatMoney(card_diff) + ' ₸ (карты)';
-    setDiffState('halyk_diff_row', card_diff);
+        (halyk_diff >= 0 ? '+' : '') + formatMoney(halyk_diff) + ' ₸';
+    setDiffState('halyk_diff_row', halyk_diff);
 
-    // Kaspi - hide individual diff since it's combined
-    document.getElementById('kaspi_diff').textContent = '—';
-    document.getElementById('kaspi_diff_row').classList.remove('positive', 'negative');
-    document.getElementById('kaspi_diff_row').classList.add('zero');
+    // Kaspi
+    document.getElementById('kaspi_diff').textContent =
+        (kaspi_diff >= 0 ? '+' : '') + formatMoney(kaspi_diff) + ' ₸';
+    setDiffState('kaspi_diff_row', kaspi_diff);
 
     // Cash
     document.getElementById('cash_diff').textContent =

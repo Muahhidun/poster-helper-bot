@@ -3635,7 +3635,10 @@ def api_shift_closing_poster_data():
                         fin_account_name = (fin_account.get('account_name') or fin_account.get('name', '')).lower()
 
                         # Categorize by account name
-                        if 'kaspi' in fin_account_name:
+                        # Exclude "Оставил в кассе (на закупы)" - it's a reserve account, not payment method
+                        if 'оставил' in fin_account_name:
+                            continue  # Skip reserve accounts
+                        elif 'kaspi' in fin_account_name:
                             acc_kaspi += amount
                         elif 'халык' in fin_account_name or 'halyk' in fin_account_name:
                             acc_halyk += amount
