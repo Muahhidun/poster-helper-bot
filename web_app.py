@@ -1004,18 +1004,28 @@ def list_expenses():
     # Load shift reconciliation data for selected date
     reconciliation_rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, selected_date)
     # Initialize with default empty structures for all expected sources
+    # For kaspi/halyk: use opening_balance to store fact_balance (user-entered actual balance)
     reconciliation = {
         'cash': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
-        'kaspi': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
-        'halyk': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
+        'kaspi': {'fact_balance': None, 'total_difference': None, 'notes': None},
+        'halyk': {'fact_balance': None, 'total_difference': None, 'notes': None},
     }
     for row in reconciliation_rows:
-        reconciliation[row['source']] = {
-            'opening_balance': row.get('opening_balance'),
-            'closing_balance': row.get('closing_balance'),
-            'total_difference': row.get('total_difference'),
-            'notes': row.get('notes'),
-        }
+        source = row['source']
+        if source == 'cash':
+            reconciliation[source] = {
+                'opening_balance': row.get('opening_balance'),
+                'closing_balance': row.get('closing_balance'),
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
+        else:
+            # For kaspi/halyk: opening_balance stores fact_balance
+            reconciliation[source] = {
+                'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
 
     # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
@@ -1101,6 +1111,29 @@ def list_expenses():
         import traceback
         traceback.print_exc()
 
+    # Sum balances by account type across all business accounts
+    # Kaspi Pay PizzBurg + Kaspi Pay PizzBurg-cafe = Total Kaspi
+    # Халык банк PizzBurg + Халык банк PizzBurg-cafe = Total Halyk
+    # Оставил в кассе PizzBurg + Оставил в кассе PizzBurg-cafe = Total Cash
+    account_totals = {
+        'kaspi': 0,
+        'halyk': 0,
+        'cash': 0
+    }
+    for acc in accounts:
+        name_lower = (acc.get('name') or '').lower()
+        # Balance is in kopecks/tiyn, convert to tenge
+        balance = float(acc.get('balance') or 0) / 100
+
+        if 'kaspi' in name_lower:
+            account_totals['kaspi'] += balance
+        elif 'халык' in name_lower or 'halyk' in name_lower:
+            account_totals['halyk'] += balance
+        elif 'оставил' in name_lower or 'закуп' in name_lower or 'наличк' in name_lower or 'касс' in name_lower:
+            account_totals['cash'] += balance
+
+    print(f"Account totals: {account_totals}")
+
     return render_template('expenses.html',
                           drafts=drafts,
                           categories=categories,
@@ -1109,7 +1142,8 @@ def list_expenses():
                           poster_transactions=poster_transactions,
                           selected_date=selected_date,
                           today=today,
-                          reconciliation=reconciliation)
+                          reconciliation=reconciliation,
+                          account_totals=account_totals)
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
@@ -1823,14 +1857,23 @@ def api_get_shift_reconciliation():
     rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, date)
 
     # Convert to dict keyed by source for easy frontend access
+    # For kaspi/halyk: opening_balance stores fact_balance
     reconciliation = {}
     for row in rows:
-        reconciliation[row['source']] = {
-            'opening_balance': row.get('opening_balance'),
-            'closing_balance': row.get('closing_balance'),
-            'total_difference': row.get('total_difference'),
-            'notes': row.get('notes'),
-        }
+        source = row['source']
+        if source == 'cash':
+            reconciliation[source] = {
+                'opening_balance': row.get('opening_balance'),
+                'closing_balance': row.get('closing_balance'),
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
+        else:
+            reconciliation[source] = {
+                'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
 
     return jsonify({
         'date': date,
@@ -1856,11 +1899,16 @@ def api_save_shift_reconciliation():
     if not source:
         return jsonify({'success': False, 'error': 'source is required'}), 400
 
+    # For kaspi/halyk: fact_balance is stored in opening_balance column
+    opening_balance = data.get('opening_balance')
+    if data.get('fact_balance') is not None:
+        opening_balance = data.get('fact_balance')
+
     success = db.save_shift_reconciliation(
         telegram_user_id=TELEGRAM_USER_ID,
         date=date,
         source=source,
-        opening_balance=data.get('opening_balance'),
+        opening_balance=opening_balance,
         closing_balance=data.get('closing_balance'),
         total_difference=data.get('total_difference'),
         notes=data.get('notes'),
@@ -3520,7 +3568,7 @@ def shift_closing():
 
 @app.route('/api/shift-closing/poster-data')
 def api_shift_closing_poster_data():
-    """Get Poster data for shift closing (sales, bonuses, cash, card payments)"""
+    """Get Poster data for shift closing - income by finance account (Kaspi, Halyk, Cash) from ALL business accounts"""
     date = request.args.get('date')  # Format: YYYYMMDD
 
     try:
@@ -3531,89 +3579,112 @@ def api_shift_closing_poster_data():
         if not accounts:
             return jsonify({'error': 'No Poster accounts configured'}), 400
 
-        # Use primary account
-        account = next((acc for acc in accounts if acc.get('is_primary')), accounts[0])
-
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        async def get_poster_data():
-            client = PosterClient(
-                telegram_user_id=g.user_id,
-                poster_token=account['poster_token'],
-                poster_user_id=account['poster_user_id'],
-                poster_base_url=account['poster_base_url']
-            )
+        async def get_poster_data_all_accounts():
+            if date is None:
+                date_param = datetime.now().strftime("%Y%m%d")
+            else:
+                date_param = date
 
-            try:
-                if date is None:
-                    date_param = datetime.now().strftime("%Y%m%d")
-                else:
-                    date_param = date
+            # Totals for reconciliation (sum from ALL business accounts)
+            kaspi_expected = 0     # Sum of income to Kaspi accounts (in kopecks/tiyins)
+            halyk_expected = 0     # Sum of income to Halyk accounts (in kopecks/tiyins)
+            cash_expected = 0      # Sum of income to Cash accounts (in kopecks/tiyins)
 
-                # Get transactions for the day (sales data)
-                result = await client._request('GET', 'dash.getTransactions', params={
-                    'dateFrom': date_param,
-                    'dateTo': date_param
-                })
+            # For sales stats
+            total_transactions = 0
+            total_sum = 0
+            bonus_total = 0
 
-                transactions = result.get('response', [])
+            # Details by business account
+            details_by_account = {}
 
-                # Filter only closed orders (status='2')
-                closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
+            for account in accounts:
+                client = PosterClient(
+                    telegram_user_id=g.user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
 
-                # Calculate totals
-                total_cash = 0      # Наличные
-                total_card = 0      # Картой (безнал в Poster)
-                total_sum = 0       # Общая сумма заказов
-                bonus_total = 0     # Бонусы (онлайн-оплата)
+                account_name = account.get('account_name', account.get('poster_base_url', 'unknown'))
 
-                for tx in closed_transactions:
-                    cash = int(tx.get('payed_cash', 0))
-                    card = int(tx.get('payed_card', 0))
-                    total = int(tx.get('payed_sum', 0))
-                    bonus = int(tx.get('payed_bonus', 0))
-
-                    total_cash += cash
-                    total_card += card
-                    total_sum += total
-                    bonus_total += bonus
-
-                # Trade total = cash + card (without bonuses)
-                trade_total = total_cash + total_card
-
-                # Try to get shift start balance from finance API
-                shift_start = 0
                 try:
-                    # Get today's finance report for cash drawer opening balance
-                    finance_result = await client._request('GET', 'finance.getReport', params={
+                    # 1. Get finance accounts to map account_id -> account name
+                    finance_accounts = await client.get_accounts()
+                    account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+
+                    # 2. Get finance transactions for the day
+                    finance_transactions = await client.get_transactions(date_param, date_param)
+
+                    # 3. Sum income (type=1) by finance account type
+                    acc_kaspi = 0
+                    acc_halyk = 0
+                    acc_cash = 0
+
+                    for txn in finance_transactions:
+                        txn_type = str(txn.get('type', ''))
+                        if txn_type != '1':  # Only income transactions
+                            continue
+
+                        amount = abs(int(txn.get('amount', 0)))
+                        acc_id = str(txn.get('account_id', ''))
+                        fin_account = account_map.get(acc_id, {})
+                        fin_account_name = (fin_account.get('account_name') or fin_account.get('name', '')).lower()
+
+                        # Categorize by account name
+                        if 'kaspi' in fin_account_name:
+                            acc_kaspi += amount
+                        elif 'халык' in fin_account_name or 'halyk' in fin_account_name:
+                            acc_halyk += amount
+                        elif 'налич' in fin_account_name or 'cash' in fin_account_name or 'касса' in fin_account_name:
+                            acc_cash += amount
+
+                    kaspi_expected += acc_kaspi
+                    halyk_expected += acc_halyk
+                    cash_expected += acc_cash
+
+                    # Store details
+                    details_by_account[account_name] = {
+                        'kaspi': acc_kaspi / 100,
+                        'halyk': acc_halyk / 100,
+                        'cash': acc_cash / 100
+                    }
+
+                    # 4. Get sales data for stats
+                    result = await client._request('GET', 'dash.getTransactions', params={
                         'dateFrom': date_param,
                         'dateTo': date_param
                     })
-                    # Parse shift start if available
-                    report = finance_result.get('response', {})
-                    if isinstance(report, dict):
-                        shift_start = int(report.get('cash_shift_open', 0))
-                except Exception as e:
-                    print(f"Could not get shift start: {e}")
-                    shift_start = 0
+                    transactions = result.get('response', [])
+                    closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
+                    total_transactions += len(closed_transactions)
 
-                return {
-                    'success': True,
-                    'date': date_param,
-                    'total_sum': total_sum,              # Общая сумма (включая бонусы) - в тийинах
-                    'trade_total': trade_total,          # Торговля за день (без бонусов) - в тийинах
-                    'bonus': bonus_total,                # Бонусы (онлайн-оплата) - в тийинах
-                    'poster_cash': total_cash,           # Наличка в Poster - в тийинах
-                    'poster_card': total_card,           # Безнал в Poster (картой) - в тийинах
-                    'shift_start': shift_start,          # Остаток на начало смены - в тийинах
-                    'transactions_count': len(closed_transactions)
-                }
+                    for tx in closed_transactions:
+                        total_sum += int(tx.get('payed_sum', 0))
+                        bonus_total += int(tx.get('payed_bonus', 0))
 
-            finally:
-                await client.close()
+                finally:
+                    await client.close()
 
-        data = loop.run_until_complete(get_poster_data())
+            return {
+                'success': True,
+                'date': date_param,
+                'transactions_count': total_transactions,
+                'accounts_count': len(accounts),
+                'total_sum': total_sum,
+                'bonus': bonus_total,
+                # For reconciliation (all in tenge):
+                'kaspi_expected': kaspi_expected / 100,   # Kaspi income from all accounts
+                'halyk_expected': halyk_expected / 100,   # Halyk income from all accounts
+                'cash_expected': cash_expected / 100,     # Cash income from all accounts
+                # Details by business account (for debugging)
+                'details_by_account': details_by_account
+            }
+
+        data = loop.run_until_complete(get_poster_data_all_accounts())
         loop.close()
 
         return jsonify(data)

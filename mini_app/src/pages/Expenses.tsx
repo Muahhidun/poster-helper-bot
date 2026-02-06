@@ -689,10 +689,16 @@ function DraftRow({
 function ReconciliationHeader({
   type,
   data,
+  posterTransactions,
+  accounts,
+  sectionTotal,
   onSave,
 }: {
   type: AccountType
   data: ReconciliationData | undefined
+  posterTransactions: PosterTransaction[]
+  accounts: ExpenseAccount[]
+  sectionTotal: number
   onSave: (source: AccountType, field: keyof ReconciliationData, value: number | null) => void
 }) {
   const [openingBalance, setOpeningBalance] = useState<number | ''>(data?.opening_balance ?? '')
@@ -718,6 +724,49 @@ function ReconciliationHeader({
 
   const diffValue = typeof totalDifference === 'number' ? totalDifference : 0
   const diffColor = diffValue > 0 ? 'text-emerald-600' : diffValue < 0 ? 'text-red-600' : 'text-gray-500'
+
+  // Calculate Poster total for this account type (Kaspi/Halyk)
+  const posterAccountTotal = useMemo(() => {
+    if (type === 'cash') return null // Cash uses manual reconciliation
+
+    // Find account names that match this type
+    const matchingAccountNames = accounts
+      .filter(acc => {
+        const name = (acc.name || '').toLowerCase()
+        if (type === 'kaspi') {
+          return name.includes('kaspi')
+        }
+        if (type === 'halyk') {
+          return name.includes('халык') || name.includes('halyk')
+        }
+        return false
+      })
+      .map(acc => (acc.name || '').toLowerCase())
+
+    if (matchingAccountNames.length === 0) return null
+
+    // Sum transactions from Poster for these accounts (expenses only, type=0)
+    const total = posterTransactions
+      .filter(t => {
+        if (t.type !== 0) return false // Only expenses
+        const accountName = (t.account_name || '').toLowerCase()
+        return matchingAccountNames.some(name =>
+          accountName.includes(name) || name.includes(accountName)
+        )
+      })
+      .reduce((sum, t) => sum + Math.abs(t.amount) / 100, 0)
+
+    return total
+  }, [type, posterTransactions, accounts])
+
+  // Auto-calculated difference for Kaspi/Halyk
+  const autoDiff = useMemo(() => {
+    if (posterAccountTotal === null) return null
+    return sectionTotal - posterAccountTotal
+  }, [sectionTotal, posterAccountTotal])
+
+  const autoDiffColor = autoDiff === null ? 'text-gray-500' :
+    autoDiff > 0.01 ? 'text-emerald-600' : autoDiff < -0.01 ? 'text-red-600' : 'text-gray-500'
 
   if (type === 'cash') {
     return (
@@ -762,23 +811,25 @@ function ReconciliationHeader({
     )
   }
 
-  // Kaspi / Halyk — only total difference
+  // Kaspi / Halyk — auto-calculated difference (факт − Poster)
   return (
-    <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-200 flex items-center gap-4 text-sm">
-      <label className="flex items-center gap-1.5 text-gray-500">
-        Итого:
-        <input
-          type="number"
-          value={totalDifference}
-          onChange={e => setTotalDifference(e.target.value === '' ? '' : Number(e.target.value))}
-          onBlur={() => saveField('total_difference', totalDifference)}
-          placeholder="0"
-          className={cn(numericInputClass, diffColor)}
-        />
-        <span className={cn('font-semibold', diffColor)}>
-          {diffValue > 0 ? '+' : ''}{diffValue !== 0 ? `${diffValue.toLocaleString('ru-RU')}₸` : ''}
-        </span>
-      </label>
+    <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-200 flex flex-wrap items-center gap-4 text-sm">
+      <span className="text-gray-500">
+        Разница (факт − Poster):
+      </span>
+      <span className="text-gray-600 tabular-nums">
+        Факт: <span className="font-semibold">{sectionTotal.toLocaleString('ru-RU')}₸</span>
+      </span>
+      <span className="text-gray-600 tabular-nums">
+        Poster: <span className="font-semibold">{posterAccountTotal !== null ? `${posterAccountTotal.toLocaleString('ru-RU')}₸` : '—'}</span>
+      </span>
+      <span className={cn('font-semibold tabular-nums', autoDiffColor)}>
+        = {autoDiff !== null ? (
+          <>
+            {autoDiff > 0.01 ? '+' : ''}{Math.abs(autoDiff) < 0.01 ? '0' : autoDiff.toLocaleString('ru-RU')}₸
+          </>
+        ) : '—'}
+      </span>
     </div>
   )
 }
@@ -904,6 +955,9 @@ function Section({
       <ReconciliationHeader
         type={type}
         data={reconciliation}
+        posterTransactions={posterTransactions}
+        accounts={accounts}
+        sectionTotal={sectionTotal}
         onSave={onReconciliationSave}
       />
 
