@@ -163,7 +163,7 @@ export interface UpdateAliasRequest {
 export interface PosterItem {
   id: number
   name: string
-  type: 'ingredient' | 'product'
+  type: 'ingredient' | 'semi_product' | 'product'
   poster_account_id?: number    // Which Poster business account this item belongs to
   poster_account_name?: string  // Display name (e.g., "PizzBurg", "PizzBurg Cafe")
   storage_id?: number           // Storage/warehouse ID in Poster
@@ -249,7 +249,7 @@ export interface PosterAccountsResponse {
 export interface SupplyItemInput {
   id: number
   name: string
-  type: 'ingredient' | 'product'
+  type: 'ingredient' | 'semi_product' | 'product'
   quantity: number
   price: number
   unit: string
