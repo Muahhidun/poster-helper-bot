@@ -3549,9 +3549,14 @@ def api_shift_closing_poster_data():
             shift_start_total = 0
 
             # Per-account breakdown for Halyk/Kaspi
-            halyk_by_account = {}  # account_name -> halyk amount
-            kaspi_by_account = {}  # account_name -> kaspi amount
-            cash_by_account = {}   # account_name -> cash amount
+            # Primary account (pizz-burg) -> Halyk terminal
+            # Secondary account (pizz-burg-cafe) -> Kaspi terminal
+            card_by_account = {}   # account_name -> card amount (in tiyins)
+            cash_by_account = {}   # account_name -> cash amount (in tiyins)
+
+            # For reconciliation - separate expected amounts
+            halyk_expected = 0     # Card from primary account (Halyk terminal)
+            kaspi_expected = 0     # Card from secondary account (Kaspi terminal)
 
             for account in accounts:
                 client = PosterClient(
@@ -3597,11 +3602,19 @@ def api_shift_closing_poster_data():
 
                     # Store per-account data
                     account_name = account.get('account_name', account.get('poster_base_url', 'unknown'))
-                    # Note: Poster doesn't distinguish Halyk/Kaspi in API, so card = total card payments
-                    # We store it for reference, but UI will need manual split
+                    is_primary = account.get('is_primary', False)
+
+                    # Store card and cash per account (in tiyins)
+                    card_by_account[account_name] = acc_card
                     cash_by_account[account_name] = acc_cash
-                    # For now, we just track total card per account (Poster doesn't split Halyk/Kaspi)
-                    halyk_by_account[account_name] = acc_card  # This is ALL card payments
+
+                    # Map to payment terminals:
+                    # Primary account (PizzBurg) -> Halyk terminal
+                    # Secondary account (PizzBurg-cafe) -> Kaspi terminal
+                    if is_primary:
+                        halyk_expected += acc_card
+                    else:
+                        kaspi_expected += acc_card
 
                     # Try to get shift start balance
                     try:
@@ -3633,7 +3646,11 @@ def api_shift_closing_poster_data():
                 'transactions_count': total_transactions,
                 'accounts_count': len(accounts),
                 'cash_by_account': {k: v / 100 for k, v in cash_by_account.items()},  # в тенге
-                'card_by_account': {k: v / 100 for k, v in halyk_by_account.items()}  # в тенге
+                'card_by_account': {k: v / 100 for k, v in card_by_account.items()},  # в тенге
+                # For reconciliation (all in tenge):
+                'halyk_expected': halyk_expected / 100,   # Card from primary account (Halyk terminal)
+                'kaspi_expected': kaspi_expected / 100,   # Card from secondary account (Kaspi terminal)
+                'cash_expected': total_cash / 100         # Total cash from all accounts
             }
 
         data = loop.run_until_complete(get_poster_data_all_accounts())

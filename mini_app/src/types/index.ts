@@ -320,6 +320,11 @@ export interface ShiftClosingPosterData {
   poster_card: number      // Безнал в Poster (картой) - в тийинах
   shift_start: number      // Остаток на начало смены - в тийинах
   transactions_count: number
+  accounts_count?: number
+  // For reconciliation (in tenge):
+  halyk_expected: number   // Card from primary account (Halyk terminal)
+  kaspi_expected: number   // Card from secondary account (Kaspi terminal)
+  cash_expected: number    // Total cash from all accounts
   error?: string
 }
 
