@@ -20,7 +20,7 @@ import {
   findSyncStatus,
   buildAccountTypeMap,
 } from '@/hooks/useExpenses'
-import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransaction, ExpenseAccount, ReconciliationData } from '@/types'
+import type { ExpenseDraft, ExpenseCategory, ExpensePosterAccount, PosterTransaction, ExpenseAccount, ReconciliationData, AccountTotals } from '@/types'
 
 type AccountType = 'cash' | 'kaspi' | 'halyk'
 type SortDirection = 'asc' | 'desc' | null
@@ -685,35 +685,34 @@ function DraftRow({
   )
 }
 
-// Reconciliation Header Component (баланс по источнику: Было/Оставил/Итого)
+// Reconciliation Header Component (баланс по источнику)
+// - Cash: Fact input vs "Оставил в кассе" balance from Poster
+// - Kaspi/Halyk: Fact input vs Poster income total (without showing Poster amount)
 function ReconciliationHeader({
   type,
   data,
   posterTransactions,
   accounts,
-  sectionTotal,
+  accountTotals,
   onSave,
 }: {
   type: AccountType
   data: ReconciliationData | undefined
   posterTransactions: PosterTransaction[]
   accounts: ExpenseAccount[]
-  sectionTotal: number
+  accountTotals?: AccountTotals
   onSave: (source: AccountType, field: keyof ReconciliationData, value: number | null) => void
 }) {
-  const [openingBalance, setOpeningBalance] = useState<number | ''>(data?.opening_balance ?? '')
-  const [closingBalance, setClosingBalance] = useState<number | ''>(data?.closing_balance ?? '')
-  const [totalDifference, setTotalDifference] = useState<number | ''>(data?.total_difference ?? '')
+  // opening_balance is used to store the "fact" value user enters
+  const [factValue, setFactValue] = useState<number | ''>(data?.opening_balance ?? '')
 
   // Sync from server data when it changes
   useEffect(() => {
-    setOpeningBalance(data?.opening_balance ?? '')
-    setClosingBalance(data?.closing_balance ?? '')
-    setTotalDifference(data?.total_difference ?? '')
+    setFactValue(data?.opening_balance ?? '')
   }, [data])
 
-  const saveField = (field: keyof ReconciliationData, value: number | '') => {
-    onSave(type, field, value === '' ? null : value)
+  const saveField = (value: number | '') => {
+    onSave(type, 'opening_balance', value === '' ? null : value)
   }
 
   const numericInputClass = cn(
@@ -722,13 +721,8 @@ function ReconciliationHeader({
     'focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10'
   )
 
-  const diffValue = typeof totalDifference === 'number' ? totalDifference : 0
-  const diffColor = diffValue > 0 ? 'text-emerald-600' : diffValue < 0 ? 'text-red-600' : 'text-gray-500'
-
-  // Calculate Poster total for this account type (Kaspi/Halyk)
-  const posterAccountTotal = useMemo(() => {
-    if (type === 'cash') return null // Cash uses manual reconciliation
-
+  // Calculate Poster total for this account type (income from transactions)
+  const posterIncomeTotal = useMemo(() => {
     // Find account names that match this type
     const matchingAccountNames = accounts
       .filter(acc => {
@@ -739,16 +733,19 @@ function ReconciliationHeader({
         if (type === 'halyk') {
           return name.includes('халык') || name.includes('halyk')
         }
+        if (type === 'cash') {
+          return name.includes('оставил') || name.includes('закуп')
+        }
         return false
       })
       .map(acc => (acc.name || '').toLowerCase())
 
     if (matchingAccountNames.length === 0) return null
 
-    // Sum transactions from Poster for these accounts (expenses only, type=0)
+    // Sum income transactions from Poster for these accounts (type=1 is income)
     const total = posterTransactions
       .filter(t => {
-        if (t.type !== 0) return false // Only expenses
+        if (t.type !== 1) return false // Only income
         const accountName = (t.account_name || '').toLowerCase()
         return matchingAccountNames.some(name =>
           accountName.includes(name) || name.includes(accountName)
@@ -759,76 +756,44 @@ function ReconciliationHeader({
     return total
   }, [type, posterTransactions, accounts])
 
-  // Auto-calculated difference for Kaspi/Halyk
-  const autoDiff = useMemo(() => {
-    if (posterAccountTotal === null) return null
-    return sectionTotal - posterAccountTotal
-  }, [sectionTotal, posterAccountTotal])
+  // For cash: use "Оставил в кассе" balance from accountTotals
+  // For kaspi/halyk: use income total from transactions
+  const posterValue = type === 'cash'
+    ? (accountTotals?.cash ?? null)
+    : posterIncomeTotal
 
-  const autoDiffColor = autoDiff === null ? 'text-gray-500' :
-    autoDiff > 0.01 ? 'text-emerald-600' : autoDiff < -0.01 ? 'text-red-600' : 'text-gray-500'
+  // Calculate difference: fact - poster
+  const difference = useMemo(() => {
+    if (factValue === '' || posterValue === null) return null
+    return factValue - posterValue
+  }, [factValue, posterValue])
 
-  if (type === 'cash') {
-    return (
-      <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-200 flex flex-wrap items-center gap-4 text-sm">
-        <label className="flex items-center gap-1.5 text-gray-500">
-          Было:
-          <input
-            type="number"
-            value={openingBalance}
-            onChange={e => setOpeningBalance(e.target.value === '' ? '' : Number(e.target.value))}
-            onBlur={() => saveField('opening_balance', openingBalance)}
-            placeholder="0"
-            className={numericInputClass}
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-gray-500">
-          Оставил:
-          <input
-            type="number"
-            value={closingBalance}
-            onChange={e => setClosingBalance(e.target.value === '' ? '' : Number(e.target.value))}
-            onBlur={() => saveField('closing_balance', closingBalance)}
-            placeholder="0"
-            className={numericInputClass}
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-gray-500">
-          Итого:
-          <input
-            type="number"
-            value={totalDifference}
-            onChange={e => setTotalDifference(e.target.value === '' ? '' : Number(e.target.value))}
-            onBlur={() => saveField('total_difference', totalDifference)}
-            placeholder="0"
-            className={cn(numericInputClass, diffColor)}
-          />
-          <span className={cn('font-semibold', diffColor)}>
-            {diffValue > 0 ? '+' : ''}{diffValue !== 0 ? `${diffValue.toLocaleString('ru-RU')}₸` : ''}
-          </span>
-        </label>
-      </div>
-    )
-  }
+  const diffColor = difference === null ? 'text-gray-500' :
+    difference > 0.01 ? 'text-emerald-600' : difference < -0.01 ? 'text-red-600' : 'text-gray-500'
 
-  // Kaspi / Halyk — auto-calculated difference (факт − Poster)
+  // All sections now have the same layout: Факт input + Разница display
   return (
     <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-200 flex flex-wrap items-center gap-4 text-sm">
-      <span className="text-gray-500">
-        Разница (факт − Poster):
-      </span>
-      <span className="text-gray-600 tabular-nums">
-        Факт: <span className="font-semibold">{sectionTotal.toLocaleString('ru-RU')}₸</span>
-      </span>
-      <span className="text-gray-600 tabular-nums">
-        Poster: <span className="font-semibold">{posterAccountTotal !== null ? `${posterAccountTotal.toLocaleString('ru-RU')}₸` : '—'}</span>
-      </span>
-      <span className={cn('font-semibold tabular-nums', autoDiffColor)}>
-        = {autoDiff !== null ? (
-          <>
-            {autoDiff > 0.01 ? '+' : ''}{Math.abs(autoDiff) < 0.01 ? '0' : autoDiff.toLocaleString('ru-RU')}₸
-          </>
-        ) : '—'}
+      <label className="flex items-center gap-1.5 text-gray-500">
+        Факт:
+        <input
+          type="number"
+          value={factValue}
+          onChange={e => setFactValue(e.target.value === '' ? '' : Number(e.target.value))}
+          onBlur={() => saveField(factValue)}
+          placeholder="0"
+          className={numericInputClass}
+        />
+      </label>
+      <span className="ml-auto text-gray-500">
+        Разница:{' '}
+        <span className={cn('font-semibold tabular-nums', diffColor)}>
+          {difference !== null ? (
+            <>
+              {difference > 0.01 ? '+' : ''}{Math.abs(difference) < 0.01 ? '0' : difference.toLocaleString('ru-RU')}₸
+            </>
+          ) : '—'}
+        </span>
       </span>
     </div>
   )
@@ -848,6 +813,7 @@ function Section({
   selectedIds,
   sortState,
   reconciliation,
+  accountTotals,
   onSelectAll,
   onSelect,
   onSort,
@@ -871,6 +837,7 @@ function Section({
   selectedIds: Set<number>
   sortState: SortState
   reconciliation: ReconciliationData | undefined
+  accountTotals?: AccountTotals
   onSelectAll: (type: AccountType, selected: boolean) => void
   onSelect: (id: number, selected: boolean) => void
   onSort: (type: AccountType, column: SortColumn) => void
@@ -957,7 +924,7 @@ function Section({
         data={reconciliation}
         posterTransactions={posterTransactions}
         accounts={accounts}
-        sectionTotal={sectionTotal}
+        accountTotals={accountTotals}
         onSave={onReconciliationSave}
       />
 
@@ -1106,6 +1073,7 @@ export function Expenses() {
   const accounts = data?.accounts || []
   const posterAccounts = data?.poster_accounts || []
   const posterTransactions = posterData?.transactions || data?.poster_transactions || []
+  const accountTotals = data?.account_totals
 
   // Group drafts by account type
   const groupedDrafts = useMemo(() => {
@@ -1346,6 +1314,7 @@ export function Expenses() {
           selectedIds={selectedIds}
           sortState={sortStates[section.type]}
           reconciliation={reconciliationData?.reconciliation?.[section.type]}
+          accountTotals={accountTotals}
           onSelectAll={handleSelectAll}
           onSelect={handleSelect}
           onSort={handleSort}

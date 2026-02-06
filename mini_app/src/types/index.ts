@@ -419,12 +419,19 @@ export interface ExpensePosterAccount {
   is_primary: boolean
 }
 
+export interface AccountTotals {
+  kaspi: number  // Balance of Kaspi accounts
+  halyk: number  // Balance of Halyk accounts
+  cash: number   // Balance of "Оставил в кассе" accounts (for cash reconciliation)
+}
+
 export interface ExpensesResponse {
   drafts: ExpenseDraft[]
   categories: ExpenseCategory[]
   accounts: ExpenseAccount[]
   poster_accounts: ExpensePosterAccount[]
   poster_transactions: PosterTransaction[]
+  account_totals?: AccountTotals
 }
 
 export interface UpdateExpenseRequest {
