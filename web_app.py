@@ -980,17 +980,37 @@ def delete_template(template_name):
 
 @app.route('/expenses')
 def list_expenses():
-    """Show expense drafts for user - only today's drafts"""
+    """Show expense drafts for user - filter by date (default: today)"""
     from datetime import datetime, timedelta, timezone
 
     db = get_database()
     # Load ALL drafts (not just pending) to show completion status
     drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
-    # Filter to show only today's drafts (Kazakhstan time UTC+5)
+    # Get date from query param or use today (Kazakhstan time UTC+5)
     kz_tz = timezone(timedelta(hours=5))
     today = datetime.now(kz_tz).strftime("%Y-%m-%d")
-    drafts = [d for d in drafts if d.get('created_at') and str(d['created_at'])[:10] == today]
+    selected_date = request.args.get('date', today)
+
+    # Validate date format
+    try:
+        datetime.strptime(selected_date, "%Y-%m-%d")
+    except ValueError:
+        selected_date = today
+
+    # Filter drafts by selected date (using created_at date part)
+    drafts = [d for d in drafts if d.get('created_at') and str(d['created_at'])[:10] == selected_date]
+
+    # Load shift reconciliation data for selected date
+    reconciliation_rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, selected_date)
+    reconciliation = {}
+    for row in reconciliation_rows:
+        reconciliation[row['source']] = {
+            'opening_balance': row.get('opening_balance'),
+            'closing_balance': row.get('closing_balance'),
+            'total_difference': row.get('total_difference'),
+            'notes': row.get('notes'),
+        }
 
     # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
@@ -1081,7 +1101,10 @@ def list_expenses():
                           categories=categories,
                           accounts=accounts,
                           poster_accounts=poster_accounts_list,
-                          poster_transactions=poster_transactions)
+                          poster_transactions=poster_transactions,
+                          selected_date=selected_date,
+                          today=today,
+                          reconciliation=reconciliation)
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
