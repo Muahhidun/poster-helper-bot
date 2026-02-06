@@ -154,12 +154,15 @@
             <div class="section-header-wrapper">
                 <h2 class="section-header">📱 Kaspi Pay</h2>
                 <div class="reconciliation-row" data-source="kaspi">
-                    <label>Разница (факт − Poster):</label>
-                    <input type="number" class="reconciliation-input" id="kaspi-difference-input"
-                           value="{{ reconciliation.kaspi.total_difference|default('', true) }}"
+                    <label>Факт:</label>
+                    <input type="number" class="reconciliation-input" id="kaspi-fact-input"
+                           value="{{ reconciliation.kaspi.fact_balance|default('', true) }}"
                            placeholder="0" step="1">
+                    <span class="poster-balance-display">
+                        Poster: <strong id="kaspi-poster-balance">{{ "{:,.0f}".format(account_totals.kaspi|default(0)) }}</strong>₸
+                    </span>
                     <span class="reconciliation-result">
-                        Итого: <strong id="kaspi-difference" class="difference-value">0</strong>₸
+                        Разница: <strong id="kaspi-difference" class="difference-value">0</strong>₸
                     </span>
                 </div>
             </div>
@@ -266,12 +269,15 @@
             <div class="section-header-wrapper">
                 <h2 class="section-header">🏦 Халык</h2>
                 <div class="reconciliation-row" data-source="halyk">
-                    <label>Разница (факт − Poster):</label>
-                    <input type="number" class="reconciliation-input" id="halyk-difference-input"
-                           value="{{ reconciliation.halyk.total_difference|default('', true) }}"
+                    <label>Факт:</label>
+                    <input type="number" class="reconciliation-input" id="halyk-fact-input"
+                           value="{{ reconciliation.halyk.fact_balance|default('', true) }}"
                            placeholder="0" step="1">
+                    <span class="poster-balance-display">
+                        Poster: <strong id="halyk-poster-balance">{{ "{:,.0f}".format(account_totals.halyk|default(0)) }}</strong>₸
+                    </span>
                     <span class="reconciliation-result">
-                        Итого: <strong id="halyk-difference" class="difference-value">0</strong>₸
+                        Разница: <strong id="halyk-difference" class="difference-value">0</strong>₸
                     </span>
                 </div>
             </div>
@@ -535,6 +541,19 @@ h1 {
     margin-left: auto;
     font-size: 14px;
     color: var(--text-secondary);
+}
+
+.poster-balance-display {
+    font-size: 14px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+}
+
+.poster-balance-display strong {
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
 }
 
 .difference-value {
@@ -2351,18 +2370,28 @@ function updateCashDifference() {
 }
 
 // Update kaspi/halyk difference display
+// Fact (user input) - Poster (sum of account balances) = Difference
 function updateSimpleDifference(source) {
-    const input = document.getElementById(`${source}-difference-input`);
+    const factInput = document.getElementById(`${source}-fact-input`);
+    const posterBalanceEl = document.getElementById(`${source}-poster-balance`);
     const diffEl = document.getElementById(`${source}-difference`);
 
-    const difference = parseFloat(input.value) || 0;
+    const fact = parseFloat(factInput.value) || 0;
+    // Parse Poster balance from display (remove formatting)
+    const posterText = posterBalanceEl.textContent.replace(/[^\d.-]/g, '');
+    const poster = parseFloat(posterText) || 0;
+
+    // Difference = Fact - Poster
+    // Positive = surplus (we have more than Poster shows)
+    // Negative = shortage (we have less than Poster shows)
+    const difference = fact - poster;
 
     diffEl.textContent = (difference >= 0 ? '+' : '') + difference.toLocaleString('ru-RU');
     diffEl.classList.remove('positive', 'negative');
     if (difference > 0) diffEl.classList.add('positive');
     else if (difference < 0) diffEl.classList.add('negative');
 
-    return { total_difference: difference };
+    return { fact_balance: fact, poster_balance: poster, total_difference: difference };
 }
 
 // Initialize reconciliation values on load
@@ -2390,13 +2419,13 @@ document.getElementById('cash-closing')?.addEventListener('input', function() {
     reconciliationTimeout = setTimeout(() => saveReconciliation('cash', data), 500);
 });
 
-document.getElementById('kaspi-difference-input')?.addEventListener('input', function() {
+document.getElementById('kaspi-fact-input')?.addEventListener('input', function() {
     const data = updateSimpleDifference('kaspi');
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('kaspi', data), 500);
 });
 
-document.getElementById('halyk-difference-input')?.addEventListener('input', function() {
+document.getElementById('halyk-fact-input')?.addEventListener('input', function() {
     const data = updateSimpleDifference('halyk');
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('halyk', data), 500);

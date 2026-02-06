@@ -1004,18 +1004,28 @@ def list_expenses():
     # Load shift reconciliation data for selected date
     reconciliation_rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, selected_date)
     # Initialize with default empty structures for all expected sources
+    # For kaspi/halyk: use opening_balance to store fact_balance (user-entered actual balance)
     reconciliation = {
         'cash': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
-        'kaspi': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
-        'halyk': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
+        'kaspi': {'fact_balance': None, 'total_difference': None, 'notes': None},
+        'halyk': {'fact_balance': None, 'total_difference': None, 'notes': None},
     }
     for row in reconciliation_rows:
-        reconciliation[row['source']] = {
-            'opening_balance': row.get('opening_balance'),
-            'closing_balance': row.get('closing_balance'),
-            'total_difference': row.get('total_difference'),
-            'notes': row.get('notes'),
-        }
+        source = row['source']
+        if source == 'cash':
+            reconciliation[source] = {
+                'opening_balance': row.get('opening_balance'),
+                'closing_balance': row.get('closing_balance'),
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
+        else:
+            # For kaspi/halyk: opening_balance stores fact_balance
+            reconciliation[source] = {
+                'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
 
     # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
@@ -1101,6 +1111,29 @@ def list_expenses():
         import traceback
         traceback.print_exc()
 
+    # Sum balances by account type across all business accounts
+    # Kaspi Pay PizzBurg + Kaspi Pay PizzBurg-cafe = Total Kaspi
+    # Халык банк PizzBurg + Халык банк PizzBurg-cafe = Total Halyk
+    # Оставил в кассе PizzBurg + Оставил в кассе PizzBurg-cafe = Total Cash
+    account_totals = {
+        'kaspi': 0,
+        'halyk': 0,
+        'cash': 0
+    }
+    for acc in accounts:
+        name_lower = (acc.get('name') or '').lower()
+        # Balance is in kopecks/tiyn, convert to tenge
+        balance = float(acc.get('balance') or 0) / 100
+
+        if 'kaspi' in name_lower:
+            account_totals['kaspi'] += balance
+        elif 'халык' in name_lower or 'halyk' in name_lower:
+            account_totals['halyk'] += balance
+        elif 'оставил' in name_lower or 'закуп' in name_lower or 'наличк' in name_lower or 'касс' in name_lower:
+            account_totals['cash'] += balance
+
+    print(f"Account totals: {account_totals}")
+
     return render_template('expenses.html',
                           drafts=drafts,
                           categories=categories,
@@ -1109,7 +1142,8 @@ def list_expenses():
                           poster_transactions=poster_transactions,
                           selected_date=selected_date,
                           today=today,
-                          reconciliation=reconciliation)
+                          reconciliation=reconciliation,
+                          account_totals=account_totals)
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
@@ -1823,14 +1857,23 @@ def api_get_shift_reconciliation():
     rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, date)
 
     # Convert to dict keyed by source for easy frontend access
+    # For kaspi/halyk: opening_balance stores fact_balance
     reconciliation = {}
     for row in rows:
-        reconciliation[row['source']] = {
-            'opening_balance': row.get('opening_balance'),
-            'closing_balance': row.get('closing_balance'),
-            'total_difference': row.get('total_difference'),
-            'notes': row.get('notes'),
-        }
+        source = row['source']
+        if source == 'cash':
+            reconciliation[source] = {
+                'opening_balance': row.get('opening_balance'),
+                'closing_balance': row.get('closing_balance'),
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
+        else:
+            reconciliation[source] = {
+                'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
+                'total_difference': row.get('total_difference'),
+                'notes': row.get('notes'),
+            }
 
     return jsonify({
         'date': date,
@@ -1856,11 +1899,16 @@ def api_save_shift_reconciliation():
     if not source:
         return jsonify({'success': False, 'error': 'source is required'}), 400
 
+    # For kaspi/halyk: fact_balance is stored in opening_balance column
+    opening_balance = data.get('opening_balance')
+    if data.get('fact_balance') is not None:
+        opening_balance = data.get('fact_balance')
+
     success = db.save_shift_reconciliation(
         telegram_user_id=TELEGRAM_USER_ID,
         date=date,
         source=source,
-        opening_balance=data.get('opening_balance'),
+        opening_balance=opening_balance,
         closing_balance=data.get('closing_balance'),
         total_difference=data.get('total_difference'),
         notes=data.get('notes'),
