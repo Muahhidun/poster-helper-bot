@@ -3520,7 +3520,7 @@ def shift_closing():
 
 @app.route('/api/shift-closing/poster-data')
 def api_shift_closing_poster_data():
-    """Get Poster data for shift closing from ALL accounts (summed)"""
+    """Get Poster data for shift closing - income by finance account (Kaspi, Halyk, Cash) from ALL business accounts"""
     date = request.args.get('date')  # Format: YYYYMMDD
 
     try:
@@ -3540,23 +3540,18 @@ def api_shift_closing_poster_data():
             else:
                 date_param = date
 
-            # Totals across ALL accounts
-            total_cash = 0      # Наличные
-            total_card = 0      # Картой (безнал в Poster)
-            total_sum = 0       # Общая сумма заказов
-            bonus_total = 0     # Бонусы (онлайн-оплата)
+            # Totals for reconciliation (sum from ALL business accounts)
+            kaspi_expected = 0     # Sum of income to Kaspi accounts (in kopecks/tiyins)
+            halyk_expected = 0     # Sum of income to Halyk accounts (in kopecks/tiyins)
+            cash_expected = 0      # Sum of income to Cash accounts (in kopecks/tiyins)
+
+            # For sales stats
             total_transactions = 0
-            shift_start_total = 0
+            total_sum = 0
+            bonus_total = 0
 
-            # Per-account breakdown for Halyk/Kaspi
-            # Primary account (pizz-burg) -> Halyk terminal
-            # Secondary account (pizz-burg-cafe) -> Kaspi terminal
-            card_by_account = {}   # account_name -> card amount (in tiyins)
-            cash_by_account = {}   # account_name -> cash amount (in tiyins)
-
-            # For reconciliation - separate expected amounts
-            halyk_expected = 0     # Card from primary account (Halyk terminal)
-            kaspi_expected = 0     # Card from secondary account (Kaspi terminal)
+            # Details by business account
+            details_by_account = {}
 
             for account in accounts:
                 client = PosterClient(
@@ -3566,91 +3561,79 @@ def api_shift_closing_poster_data():
                     poster_base_url=account['poster_base_url']
                 )
 
+                account_name = account.get('account_name', account.get('poster_base_url', 'unknown'))
+
                 try:
-                    # Get transactions for the day (sales data)
+                    # 1. Get finance accounts to map account_id -> account name
+                    finance_accounts = await client.get_accounts()
+                    account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+
+                    # 2. Get finance transactions for the day
+                    finance_transactions = await client.get_transactions(date_param, date_param)
+
+                    # 3. Sum income (type=1) by finance account type
+                    acc_kaspi = 0
+                    acc_halyk = 0
+                    acc_cash = 0
+
+                    for txn in finance_transactions:
+                        txn_type = str(txn.get('type', ''))
+                        if txn_type != '1':  # Only income transactions
+                            continue
+
+                        amount = abs(int(txn.get('amount', 0)))
+                        acc_id = str(txn.get('account_id', ''))
+                        fin_account = account_map.get(acc_id, {})
+                        fin_account_name = (fin_account.get('account_name') or fin_account.get('name', '')).lower()
+
+                        # Categorize by account name
+                        if 'kaspi' in fin_account_name:
+                            acc_kaspi += amount
+                        elif 'халык' in fin_account_name or 'halyk' in fin_account_name:
+                            acc_halyk += amount
+                        elif 'налич' in fin_account_name or 'cash' in fin_account_name or 'касса' in fin_account_name:
+                            acc_cash += amount
+
+                    kaspi_expected += acc_kaspi
+                    halyk_expected += acc_halyk
+                    cash_expected += acc_cash
+
+                    # Store details
+                    details_by_account[account_name] = {
+                        'kaspi': acc_kaspi / 100,
+                        'halyk': acc_halyk / 100,
+                        'cash': acc_cash / 100
+                    }
+
+                    # 4. Get sales data for stats
                     result = await client._request('GET', 'dash.getTransactions', params={
                         'dateFrom': date_param,
                         'dateTo': date_param
                     })
-
                     transactions = result.get('response', [])
-
-                    # Filter only closed orders (status='2')
                     closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
-
-                    acc_cash = 0
-                    acc_card = 0
-                    acc_sum = 0
-                    acc_bonus = 0
-
-                    for tx in closed_transactions:
-                        cash = int(tx.get('payed_cash', 0))
-                        card = int(tx.get('payed_card', 0))
-                        total = int(tx.get('payed_sum', 0))
-                        bonus = int(tx.get('payed_bonus', 0))
-
-                        acc_cash += cash
-                        acc_card += card
-                        acc_sum += total
-                        acc_bonus += bonus
-
-                    total_cash += acc_cash
-                    total_card += acc_card
-                    total_sum += acc_sum
-                    bonus_total += acc_bonus
                     total_transactions += len(closed_transactions)
 
-                    # Store per-account data
-                    account_name = account.get('account_name', account.get('poster_base_url', 'unknown'))
-                    is_primary = account.get('is_primary', False)
-
-                    # Store card and cash per account (in tiyins)
-                    card_by_account[account_name] = acc_card
-                    cash_by_account[account_name] = acc_cash
-
-                    # Map to payment terminals:
-                    # Primary account (PizzBurg) -> Halyk terminal
-                    # Secondary account (PizzBurg-cafe) -> Kaspi terminal
-                    if is_primary:
-                        halyk_expected += acc_card
-                    else:
-                        kaspi_expected += acc_card
-
-                    # Try to get shift start balance
-                    try:
-                        finance_result = await client._request('GET', 'finance.getReport', params={
-                            'dateFrom': date_param,
-                            'dateTo': date_param
-                        })
-                        report = finance_result.get('response', {})
-                        if isinstance(report, dict):
-                            shift_start_total += int(report.get('cash_shift_open', 0))
-                    except Exception as e:
-                        print(f"Could not get shift start for {account_name}: {e}")
+                    for tx in closed_transactions:
+                        total_sum += int(tx.get('payed_sum', 0))
+                        bonus_total += int(tx.get('payed_bonus', 0))
 
                 finally:
                     await client.close()
 
-            # Trade total = cash + card (without bonuses)
-            trade_total = total_cash + total_card
-
             return {
                 'success': True,
                 'date': date_param,
-                'total_sum': total_sum,              # Общая сумма (включая бонусы) - в тийинах
-                'trade_total': trade_total,          # Торговля за день (без бонусов) - в тийинах
-                'bonus': bonus_total,                # Бонусы (онлайн-оплата) - в тийинах
-                'poster_cash': total_cash,           # Наличка в Poster (сумма по всем) - в тийинах
-                'poster_card': total_card,           # Безнал в Poster (сумма по всем) - в тийинах
-                'shift_start': shift_start_total,    # Остаток на начало смены (сумма) - в тийинах
                 'transactions_count': total_transactions,
                 'accounts_count': len(accounts),
-                'cash_by_account': {k: v / 100 for k, v in cash_by_account.items()},  # в тенге
-                'card_by_account': {k: v / 100 for k, v in card_by_account.items()},  # в тенге
+                'total_sum': total_sum,
+                'bonus': bonus_total,
                 # For reconciliation (all in tenge):
-                'halyk_expected': halyk_expected / 100,   # Card from primary account (Halyk terminal)
-                'kaspi_expected': kaspi_expected / 100,   # Card from secondary account (Kaspi terminal)
-                'cash_expected': total_cash / 100         # Total cash from all accounts
+                'kaspi_expected': kaspi_expected / 100,   # Kaspi income from all accounts
+                'halyk_expected': halyk_expected / 100,   # Halyk income from all accounts
+                'cash_expected': cash_expected / 100,     # Cash income from all accounts
+                # Details by business account (for debugging)
+                'details_by_account': details_by_account
             }
 
         data = loop.run_until_complete(get_poster_data_all_accounts())
