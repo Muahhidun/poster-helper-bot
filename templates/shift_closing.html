@@ -8,137 +8,101 @@
 
     <div class="date-header">
         <span id="current-date"></span>
-        <button type="button" class="btn btn-sm btn-outline-primary" onclick="loadPosterData()">
-            🔄 Обновить данные Poster
-        </button>
+        <span id="accounts-info" class="accounts-badge"></span>
     </div>
 
-    <div class="form-grid">
-        <!-- Left Column - Manual Input -->
-        <div class="form-section">
-            <h3>Фактические данные</h3>
+    <div class="info-banner" id="loading-banner">
+        Загрузка данных Poster...
+    </div>
 
-            <!-- Безнал терминалы -->
-            <div class="input-group-header">Безналичные терминалы</div>
-
-            <div class="input-row two-col">
-                <div class="input-field">
-                    <label>Wolt</label>
-                    <input type="text" id="wolt" inputmode="numeric" placeholder="0" oninput="calculate()">
+    <!-- Main reconciliation grid -->
+    <div class="reconciliation-grid">
+        <!-- Halyk -->
+        <div class="reconciliation-card">
+            <div class="card-header">
+                <span class="card-title">Halyk</span>
+            </div>
+            <div class="card-body">
+                <div class="input-row">
+                    <label>Факт:</label>
+                    <div class="input-wrapper">
+                        <input type="text" id="halyk_fact" inputmode="numeric" placeholder="0" oninput="calculate()">
+                        <span class="currency">₸</span>
+                    </div>
                 </div>
-                <div class="input-field">
-                    <label>Halyk</label>
-                    <input type="text" id="halyk" inputmode="numeric" placeholder="0" oninput="calculate()">
+                <div class="result-row">
+                    <span class="result-label">Poster:</span>
+                    <span class="result-value" id="halyk_poster">—</span>
                 </div>
-            </div>
-
-            <div class="input-field">
-                <label>Kaspi терминал</label>
-                <input type="text" id="kaspi" inputmode="numeric" placeholder="0" oninput="calculate()">
-            </div>
-
-            <div class="input-field minus">
-                <label>- Kaspi от PizzBurg-Cafe</label>
-                <input type="text" id="kaspi_cafe" inputmode="numeric" placeholder="0" oninput="calculate()">
-            </div>
-
-            <!-- Итого безнал -->
-            <div class="calculated-row">
-                <span>Итого безнал:</span>
-                <span id="fact_cashless" class="value">0</span>
-                <span class="currency">₸</span>
-            </div>
-
-            <!-- Наличка -->
-            <div class="input-group-header">Наличные</div>
-
-            <div class="input-row two-col">
-                <div class="input-field">
-                    <label>Бумажные</label>
-                    <input type="text" id="cash_bills" inputmode="numeric" placeholder="0" oninput="calculate()">
+                <div class="diff-row" id="halyk_diff_row">
+                    <span class="diff-label">Разница:</span>
+                    <span class="diff-value" id="halyk_diff">0 ₸</span>
                 </div>
-                <div class="input-field">
-                    <label>Мелочь</label>
-                    <input type="text" id="cash_coins" inputmode="numeric" placeholder="0" oninput="calculate()">
-                </div>
-            </div>
-
-            <!-- Фактический -->
-            <div class="calculated-row highlight">
-                <span>= Фактический:</span>
-                <span id="fact_total" class="value">0</span>
-                <span class="currency">₸</span>
-            </div>
-
-            <!-- Смена и расходы -->
-            <div class="input-group-header">Корректировки</div>
-
-            <div class="input-field">
-                <label>Смена (остаток на начало)</label>
-                <input type="text" id="shift_start" inputmode="numeric" placeholder="0" oninput="calculate()">
-            </div>
-
-            <div class="input-field">
-                <label>Внесение</label>
-                <input type="text" id="deposits" inputmode="numeric" value="0" oninput="calculate()">
-            </div>
-
-            <div class="input-field">
-                <label>Расход с кассы</label>
-                <input type="text" id="expenses" inputmode="numeric" placeholder="0" oninput="calculate()">
-            </div>
-
-            <!-- Итого фактический -->
-            <div class="calculated-row highlight">
-                <span>Итого фактич.:</span>
-                <span id="fact_adjusted" class="value">0</span>
-                <span class="currency">₸</span>
             </div>
         </div>
 
-        <!-- Right Column - Poster Data & Results -->
-        <div class="form-section">
-            <h3>Данные Poster</h3>
-
-            <div class="poster-data">
-                <div class="poster-row">
-                    <span>Картой (Poster):</span>
-                    <span id="poster_card" class="value">—</span>
-                    <span class="currency">₸</span>
+        <!-- Kaspi -->
+        <div class="reconciliation-card">
+            <div class="card-header">
+                <span class="card-title">Kaspi</span>
+            </div>
+            <div class="card-body">
+                <div class="input-row">
+                    <label>Факт:</label>
+                    <div class="input-wrapper">
+                        <input type="text" id="kaspi_fact" inputmode="numeric" placeholder="0" oninput="calculate()">
+                        <span class="currency">₸</span>
+                    </div>
                 </div>
-
-                <div class="poster-row diff" id="cashless_diff_row" style="display: none;">
-                    <span>Разница безнал:</span>
-                    <span id="cashless_diff" class="value">0</span>
-                    <span class="currency">₸</span>
+                <div class="result-row">
+                    <span class="result-label">Poster:</span>
+                    <span class="result-value" id="kaspi_poster">—</span>
+                </div>
+                <div class="diff-row" id="kaspi_diff_row">
+                    <span class="diff-label">Разница:</span>
+                    <span class="diff-value" id="kaspi_diff">0 ₸</span>
                 </div>
             </div>
+        </div>
 
-            <div class="input-group-header">Торговля по Poster</div>
-
-            <div class="poster-data">
-                <div class="poster-row">
-                    <span>Poster (торговля):</span>
-                    <span id="poster_trade" class="value">—</span>
-                    <span class="currency">₸</span>
+        <!-- Cash -->
+        <div class="reconciliation-card">
+            <div class="card-header">
+                <span class="card-title">Наличные</span>
+            </div>
+            <div class="card-body">
+                <div class="input-row">
+                    <label>Факт:</label>
+                    <div class="input-wrapper">
+                        <input type="text" id="cash_fact" inputmode="numeric" placeholder="0" oninput="calculate()">
+                        <span class="currency">₸</span>
+                    </div>
                 </div>
-
-                <div class="poster-row minus">
-                    <span>Бонусы:</span>
-                    <span id="poster_bonus" class="value">—</span>
-                    <span class="currency">₸</span>
+                <div class="result-row">
+                    <span class="result-label">Poster:</span>
+                    <span class="result-value" id="cash_poster">—</span>
                 </div>
-
-                <div class="calculated-row highlight">
-                    <span>Итого Poster:</span>
-                    <span id="poster_total" class="value">0</span>
-                    <span class="currency">₸</span>
+                <div class="diff-row" id="cash_diff_row">
+                    <span class="diff-label">Разница:</span>
+                    <span class="diff-value" id="cash_diff">0 ₸</span>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <div class="poster-info">
-                <span>Закрытых заказов: <strong id="transactions_count">—</strong></span>
-            </div>
+    <!-- Total summary -->
+    <div class="total-section">
+        <div class="total-row">
+            <span class="total-label">ИТОГО Факт:</span>
+            <span class="total-value" id="total_fact">0 ₸</span>
+        </div>
+        <div class="total-row">
+            <span class="total-label">ИТОГО Poster:</span>
+            <span class="total-value" id="total_poster">0 ₸</span>
+        </div>
+        <div class="total-row main" id="total_diff_row">
+            <span class="total-label">РАЗНИЦА:</span>
+            <span class="total-value" id="total_diff">0 ₸</span>
         </div>
     </div>
 
@@ -149,41 +113,25 @@
         <div class="day-result-status" id="day_result_status"></div>
     </div>
 
-    <!-- Bottom Section -->
-    <div class="bottom-section">
-        <div class="input-row">
-            <div class="input-field">
-                <label>Оставить на смену (бумажные)</label>
-                <input type="text" id="cash_to_leave" inputmode="numeric" value="15000" oninput="calculate()">
-            </div>
-        </div>
-
-        <div class="results-row">
-            <div class="result-item">
-                <span class="result-label">Смена оставили:</span>
-                <span class="result-value" id="shift_left">0 ₸</span>
-                <span class="result-detail" id="shift_left_detail"></span>
-            </div>
-
-            <div class="result-item primary">
-                <span class="result-label">Инкассация:</span>
-                <span class="result-value" id="collection">0 ₸</span>
-            </div>
-        </div>
+    <!-- Refresh button -->
+    <div class="actions-section">
+        <button type="button" class="btn btn-primary" onclick="loadPosterData()">
+            Обновить данные Poster
+        </button>
     </div>
 
     <!-- Expense Report Section -->
     <div class="expense-report-section">
         <div class="expense-report-header">
-            <h3>📋 Отчёт по расходам</h3>
-            <button type="button" class="btn btn-primary" onclick="loadExpenseReport()">
+            <h3>Отчёт по расходам</h3>
+            <button type="button" class="btn btn-secondary" onclick="loadExpenseReport()">
                 Сформировать отчёт
             </button>
         </div>
         <div id="expense-report-container" style="display: none;">
             <div class="report-actions">
                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyReport()">
-                    📋 Скопировать
+                    Скопировать
                 </button>
             </div>
             <pre id="expense-report-text" class="expense-report-text"></pre>
@@ -193,7 +141,7 @@
 
 <style>
 .shift-closing-container {
-    max-width: 900px;
+    max-width: 600px;
     margin: 0 auto;
     padding: 20px;
 }
@@ -215,175 +163,230 @@ h1 {
     font-weight: 600;
 }
 
-.form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+.accounts-badge {
+    font-size: 14px;
+    color: #666;
+    font-weight: normal;
+}
+
+.info-banner {
+    background: #e3f2fd;
+    color: #1565c0;
+    padding: 12px 16px;
+    border-radius: 8px;
+    text-align: center;
     margin-bottom: 20px;
 }
 
-@media (max-width: 768px) {
-    .form-grid {
-        grid-template-columns: 1fr;
-    }
+.info-banner.hidden {
+    display: none;
 }
 
-.form-section {
+.info-banner.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* Reconciliation Grid */
+.reconciliation-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.reconciliation-card {
     background: #fff;
     border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 20px;
+    border-radius: 10px;
+    overflow: hidden;
 }
 
-.form-section h3 {
-    margin: 0 0 15px 0;
-    padding-bottom: 10px;
-    border-bottom: 2px solid #007bff;
+.card-header {
+    background: #f8f9fa;
+    padding: 12px 16px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.card-title {
+    font-weight: 600;
+    font-size: 16px;
     color: #333;
 }
 
-.input-group-header {
-    font-size: 12px;
-    font-weight: 600;
-    color: #666;
-    text-transform: uppercase;
-    margin: 20px 0 10px 0;
-    padding-top: 10px;
-    border-top: 1px solid #eee;
-}
-
-.input-group-header:first-of-type {
-    margin-top: 0;
-    padding-top: 0;
-    border-top: none;
+.card-body {
+    padding: 16px;
 }
 
 .input-row {
     display: flex;
-    gap: 10px;
-    margin-bottom: 10px;
+    align-items: center;
+    margin-bottom: 12px;
 }
 
-.input-row.two-col .input-field {
-    flex: 1;
-}
-
-.input-field {
-    margin-bottom: 10px;
-}
-
-.input-field label {
-    display: block;
-    font-size: 13px;
+.input-row label {
+    width: 60px;
+    font-size: 14px;
     color: #666;
-    margin-bottom: 4px;
 }
 
-.input-field.minus label {
-    color: #dc3545;
+.input-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
-.input-field input {
-    width: 100%;
-    padding: 10px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 16px;
+.input-wrapper input {
+    flex: 1;
+    padding: 12px 14px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 18px;
     text-align: right;
     font-family: 'Courier New', monospace;
     font-weight: 600;
 }
 
-.input-field input:focus {
+.input-wrapper input:focus {
     outline: none;
     border-color: #007bff;
     box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
 }
 
-.input-field.minus input {
-    border-color: #f8d7da;
-    background: #fff5f5;
-}
-
-.calculated-row {
-    display: flex;
-    align-items: center;
-    padding: 12px;
-    background: #f8f9fa;
-    border-radius: 6px;
-    margin: 15px 0;
+.input-wrapper .currency {
+    font-size: 16px;
+    color: #666;
     font-weight: 600;
 }
 
-.calculated-row.highlight {
-    background: #e3f2fd;
-    color: #1565c0;
-}
-
-.calculated-row span:first-child {
-    flex: 1;
-}
-
-.calculated-row .value {
-    font-family: 'Courier New', monospace;
-    font-size: 18px;
-    margin-right: 5px;
-}
-
-.calculated-row .currency {
-    color: #666;
-}
-
-.poster-data {
-    margin-bottom: 15px;
-}
-
-.poster-row {
+.result-row {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    padding: 10px 12px;
-    background: #f8f9fa;
-    border-radius: 6px;
-    margin-bottom: 8px;
+    padding: 8px 0;
+    border-bottom: 1px dashed #eee;
 }
 
-.poster-row span:first-child {
-    flex: 1;
-    color: #666;
+.result-label {
+    font-size: 14px;
+    color: #888;
 }
 
-.poster-row .value {
+.result-value {
     font-family: 'Courier New', monospace;
     font-size: 16px;
-    font-weight: 600;
-    margin-right: 5px;
+    color: #666;
 }
 
-.poster-row.minus .value {
-    color: #dc3545;
+.diff-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    margin-top: 10px;
+    border-radius: 6px;
+    background: #f8f9fa;
+    transition: background-color 0.2s;
 }
 
-.poster-row.minus .value::before {
-    content: '-';
-}
-
-.poster-row.diff {
-    background: #fff3cd;
-}
-
-.poster-row.diff.positive {
+.diff-row.positive {
     background: #d4edda;
 }
 
-.poster-row.diff.negative {
+.diff-row.negative {
     background: #f8d7da;
 }
 
-.poster-info {
-    text-align: center;
-    color: #666;
+.diff-row.zero {
+    background: #e3f2fd;
+}
+
+.diff-label {
     font-size: 14px;
-    margin-top: 15px;
+    font-weight: 600;
+    color: #333;
+}
+
+.diff-value {
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    font-weight: 700;
+    color: #333;
+}
+
+.diff-row.positive .diff-value {
+    color: #28a745;
+}
+
+.diff-row.negative .diff-value {
+    color: #dc3545;
+}
+
+.diff-row.zero .diff-value {
+    color: #007bff;
+}
+
+/* Total Section */
+.total-section {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 20px;
+}
+
+.total-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.total-row:last-child {
+    border-bottom: none;
+}
+
+.total-row.main {
+    padding-top: 15px;
+    margin-top: 5px;
+    border-top: 2px solid #333;
+    border-bottom: none;
+}
+
+.total-label {
+    font-size: 15px;
+    color: #666;
+}
+
+.total-row.main .total-label {
+    font-weight: 700;
+    color: #333;
+    font-size: 16px;
+}
+
+.total-value {
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.total-row.main .total-value {
+    font-size: 22px;
+    font-weight: 700;
+}
+
+.total-row.main.positive .total-value {
+    color: #28a745;
+}
+
+.total-row.main.negative .total-value {
+    color: #dc3545;
+}
+
+.total-row.main.zero .total-value {
+    color: #007bff;
 }
 
 /* Day Result Block */
@@ -441,75 +444,61 @@ h1 {
     margin-top: 10px;
 }
 
-/* Bottom Section */
-.bottom-section {
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 20px;
-}
-
-.results-row {
-    display: flex;
-    gap: 20px;
-    margin-top: 20px;
-}
-
-@media (max-width: 768px) {
-    .results-row {
-        flex-direction: column;
-    }
-}
-
-.result-item {
-    flex: 1;
-    background: #f8f9fa;
-    padding: 15px;
-    border-radius: 8px;
+/* Actions */
+.actions-section {
     text-align: center;
+    margin-bottom: 30px;
 }
 
-.result-item.primary {
+.btn {
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: background-color 0.2s;
+}
+
+.btn-primary {
     background: #007bff;
     color: white;
 }
 
-.result-label {
-    display: block;
+.btn-primary:hover {
+    background: #0056b3;
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background: #545b62;
+}
+
+.btn-sm {
+    padding: 8px 16px;
     font-size: 14px;
-    margin-bottom: 8px;
 }
 
-.result-item.primary .result-label {
-    color: rgba(255,255,255,0.8);
+.btn-outline-secondary {
+    background: transparent;
+    border: 1px solid #6c757d;
+    color: #6c757d;
 }
 
-.result-value {
-    display: block;
-    font-size: 28px;
-    font-weight: 700;
-    font-family: 'Courier New', monospace;
-}
-
-.result-detail {
-    display: block;
-    font-size: 12px;
-    color: #666;
-    margin-top: 5px;
-}
-
-/* Loading state */
-.loading {
-    opacity: 0.6;
-    pointer-events: none;
+.btn-outline-secondary:hover {
+    background: #6c757d;
+    color: white;
 }
 
 /* Expense Report Section */
 .expense-report-section {
-    margin-top: 30px;
     background: #fff;
     border: 1px solid #e0e0e0;
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 20px;
 }
 
@@ -544,28 +533,19 @@ h1 {
     overflow-y: auto;
 }
 
-.expense-report-text .section-header {
-    color: #fff;
-    font-weight: 600;
-}
-
-.expense-report-text .total-line {
-    color: #4ade80;
-}
-
-.expense-report-text .income-line {
-    color: #fbbf24;
+/* Loading state */
+.loading {
+    opacity: 0.6;
+    pointer-events: none;
 }
 </style>
 
 <script>
 // Poster data storage
 let posterData = {
-    trade_total: 0,
-    bonus: 0,
+    poster_cash: 0,
     poster_card: 0,
-    shift_start: 0,
-    transactions_count: 0
+    loaded: false
 };
 
 // Format number with spaces
@@ -575,12 +555,31 @@ function formatMoney(num) {
 
 // Parse input value
 function parseInput(id) {
-    const value = document.getElementById(id).value.replace(/\s/g, '').replace(/,/g, '.');
+    const el = document.getElementById(id);
+    if (!el) return 0;
+    const value = el.value.replace(/\s/g, '').replace(/,/g, '.');
     return parseFloat(value) || 0;
+}
+
+// Set diff row state
+function setDiffState(rowId, value) {
+    const row = document.getElementById(rowId);
+    row.classList.remove('positive', 'negative', 'zero');
+    if (value > 0) {
+        row.classList.add('positive');
+    } else if (value < 0) {
+        row.classList.add('negative');
+    } else {
+        row.classList.add('zero');
+    }
 }
 
 // Load Poster data
 async function loadPosterData() {
+    const banner = document.getElementById('loading-banner');
+    banner.textContent = 'Загрузка данных Poster...';
+    banner.classList.remove('hidden', 'error');
+
     try {
         document.querySelector('.shift-closing-container').classList.add('loading');
 
@@ -588,26 +587,38 @@ async function loadPosterData() {
         const data = await response.json();
 
         if (data.success) {
-            posterData = data;
+            posterData = {
+                // Poster stores in tiyins, convert to tenge
+                poster_cash: data.poster_cash / 100,
+                poster_card: data.poster_card / 100,
+                loaded: true
+            };
 
-            // Update display (convert from tiyins to tenge)
-            document.getElementById('poster_trade').textContent = formatMoney(data.trade_total / 100);
-            document.getElementById('poster_bonus').textContent = formatMoney(data.bonus / 100);
-            document.getElementById('poster_card').textContent = formatMoney(data.poster_card / 100);
-            document.getElementById('transactions_count').textContent = data.transactions_count;
+            // Update Poster values display
+            document.getElementById('cash_poster').textContent = formatMoney(posterData.poster_cash) + ' ₸';
 
-            // Set shift start if available
-            if (data.shift_start > 0) {
-                document.getElementById('shift_start').value = Math.round(data.shift_start / 100);
-            }
+            // For Halyk/Kaspi - Poster doesn't distinguish, so we show total card
+            // Note: user needs to enter their own Halyk and Kaspi facts
+            // Poster card = total of all card payments (Halyk + Kaspi combined)
+            document.getElementById('halyk_poster').textContent = '(см. итого)';
+            document.getElementById('kaspi_poster').textContent = '(см. итого)';
+
+            // Show accounts info
+            const accountsInfo = document.getElementById('accounts-info');
+            accountsInfo.textContent = `${data.accounts_count} заведений, ${data.transactions_count} заказов`;
+
+            banner.textContent = `Данные загружены: ${data.accounts_count} заведений`;
+            setTimeout(() => banner.classList.add('hidden'), 2000);
 
             calculate();
         } else {
-            alert('Ошибка загрузки данных: ' + (data.error || 'Unknown error'));
+            banner.textContent = 'Ошибка: ' + (data.error || 'Unknown error');
+            banner.classList.add('error');
         }
     } catch (e) {
         console.error('Error loading Poster data:', e);
-        alert('Не удалось загрузить данные из Poster');
+        banner.textContent = 'Не удалось загрузить данные';
+        banner.classList.add('error');
     } finally {
         document.querySelector('.shift-closing-container').classList.remove('loading');
     }
@@ -616,87 +627,90 @@ async function loadPosterData() {
 // Calculate all values
 function calculate() {
     // Get input values
-    const wolt = parseInput('wolt');
-    const halyk = parseInput('halyk');
-    const kaspi = parseInput('kaspi');
-    const kaspi_cafe = parseInput('kaspi_cafe');
-    const cash_bills = parseInput('cash_bills');
-    const cash_coins = parseInput('cash_coins');
-    const shift_start = parseInput('shift_start');
-    const deposits = parseInput('deposits');
-    const expenses = parseInput('expenses');
-    const cash_to_leave = parseInput('cash_to_leave');
+    const halyk_fact = parseInput('halyk_fact');
+    const kaspi_fact = parseInput('kaspi_fact');
+    const cash_fact = parseInput('cash_fact');
 
-    // Poster data (in tiyins, convert to tenge)
-    const poster_trade = posterData.trade_total / 100;
-    const poster_bonus = posterData.bonus / 100;
-    const poster_card = posterData.poster_card / 100;
+    // Total factual
+    const total_fact = halyk_fact + kaspi_fact + cash_fact;
 
-    // Calculations
-    // 1. Итого безнал факт
-    const fact_cashless = wolt + halyk + (kaspi - kaspi_cafe);
-    document.getElementById('fact_cashless').textContent = formatMoney(fact_cashless);
+    // Total from Poster
+    const total_poster = posterData.poster_card + posterData.poster_cash;
 
-    // 2. Фактический
-    const fact_total = fact_cashless + cash_bills + cash_coins;
-    document.getElementById('fact_total').textContent = formatMoney(fact_total);
+    // Card total from Poster (Halyk + Kaspi combined in Poster)
+    const poster_card_total = posterData.poster_card;
 
-    // 3. Итого фактический
-    const fact_adjusted = fact_total - shift_start - deposits + expenses;
-    document.getElementById('fact_adjusted').textContent = formatMoney(fact_adjusted);
+    // For individual diffs, we compare:
+    // - Halyk: fact vs portion of poster_card (but Poster doesn't split)
+    // - Kaspi: fact vs portion of poster_card (but Poster doesn't split)
+    // - Cash: fact vs poster_cash
 
-    // 4. Итого Poster
-    const poster_total = poster_trade - poster_bonus;
-    document.getElementById('poster_total').textContent = formatMoney(poster_total);
+    // Since Poster doesn't distinguish Halyk/Kaspi, we compare totals
+    const fact_card_total = halyk_fact + kaspi_fact;
+    const card_diff = fact_card_total - poster_card_total;
 
-    // 5. ИТОГО ДЕНЬ
-    const day_result = fact_adjusted - poster_total;
+    // Cash diff
+    const cash_diff = cash_fact - posterData.poster_cash;
+
+    // Total diff
+    const total_diff = total_fact - total_poster;
+
+    // Update displays
+
+    // Halyk - show combined card diff
+    document.getElementById('halyk_diff').textContent =
+        (card_diff >= 0 ? '+' : '') + formatMoney(card_diff) + ' ₸ (карты)';
+    setDiffState('halyk_diff_row', card_diff);
+
+    // Kaspi - hide individual diff since it's combined
+    document.getElementById('kaspi_diff').textContent = '—';
+    document.getElementById('kaspi_diff_row').classList.remove('positive', 'negative');
+    document.getElementById('kaspi_diff_row').classList.add('zero');
+
+    // Cash
+    document.getElementById('cash_diff').textContent =
+        (cash_diff >= 0 ? '+' : '') + formatMoney(cash_diff) + ' ₸';
+    setDiffState('cash_diff_row', cash_diff);
+
+    // Totals
+    document.getElementById('total_fact').textContent = formatMoney(total_fact) + ' ₸';
+    document.getElementById('total_poster').textContent = formatMoney(total_poster) + ' ₸';
+    document.getElementById('total_diff').textContent =
+        (total_diff >= 0 ? '+' : '') + formatMoney(total_diff) + ' ₸';
+
+    // Total diff row state
+    const totalDiffRow = document.getElementById('total_diff_row');
+    totalDiffRow.classList.remove('positive', 'negative', 'zero');
+    if (total_diff > 0) {
+        totalDiffRow.classList.add('positive');
+    } else if (total_diff < 0) {
+        totalDiffRow.classList.add('negative');
+    } else {
+        totalDiffRow.classList.add('zero');
+    }
+
+    // Day result block
     const dayResultBlock = document.getElementById('day_result_block');
     const dayResultValue = document.getElementById('day_result');
     const dayResultStatus = document.getElementById('day_result_status');
 
     dayResultBlock.classList.remove('positive', 'negative', 'zero');
 
-    if (day_result > 0) {
+    if (total_diff > 0) {
         dayResultBlock.classList.add('positive');
-        dayResultValue.textContent = '+' + formatMoney(day_result) + ' ₸';
+        dayResultValue.textContent = '+' + formatMoney(total_diff) + ' ₸';
         dayResultStatus.textContent = '(излишек)';
-    } else if (day_result < 0) {
+    } else if (total_diff < 0) {
         dayResultBlock.classList.add('negative');
-        dayResultValue.textContent = formatMoney(day_result) + ' ₸';
+        dayResultValue.textContent = formatMoney(total_diff) + ' ₸';
         dayResultStatus.textContent = '(недостача)';
     } else {
         dayResultBlock.classList.add('zero');
         dayResultValue.textContent = '0 ₸';
-        dayResultStatus.textContent = '(идеально!)';
+        dayResultStatus.textContent = posterData.loaded ? '(идеально!)' : '';
     }
-
-    // 6. Разница безнала
-    const cashless_diff = fact_cashless - poster_card;
-    const diffRow = document.getElementById('cashless_diff_row');
-    const diffValue = document.getElementById('cashless_diff');
-
-    if (Math.abs(cashless_diff) >= 1 && poster_card > 0) {
-        diffRow.style.display = 'flex';
-        diffRow.classList.remove('positive', 'negative');
-        diffRow.classList.add(cashless_diff > 0 ? 'positive' : 'negative');
-        diffValue.textContent = (cashless_diff > 0 ? '+' : '') + formatMoney(cashless_diff);
-    } else {
-        diffRow.style.display = 'none';
-    }
-
-    // 7. Смена оставили
-    const shift_left = cash_to_leave + cash_coins;
-    document.getElementById('shift_left').textContent = formatMoney(shift_left) + ' ₸';
-    document.getElementById('shift_left_detail').textContent =
-        `(${formatMoney(cash_to_leave)} бумажные + ${formatMoney(cash_coins)} мелочь)`;
-
-    // 8. Инкассация
-    const collection = cash_bills - cash_to_leave + expenses;
-    document.getElementById('collection').textContent = formatMoney(collection) + ' ₸';
 }
 
-// Initialize
 // Load expense report
 async function loadExpenseReport() {
     const container = document.getElementById('expense-report-container');
@@ -725,7 +739,6 @@ function copyReport() {
         alert('Скопировано!');
     }).catch(err => {
         console.error('Copy failed:', err);
-        // Fallback for older browsers
         const textarea = document.createElement('textarea');
         textarea.value = text;
         document.body.appendChild(textarea);
@@ -736,6 +749,7 @@ function copyReport() {
     });
 }
 
+// Initialize
 document.addEventListener('DOMContentLoaded', function() {
     // Set current date
     const today = new Date();

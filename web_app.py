@@ -3520,7 +3520,7 @@ def shift_closing():
 
 @app.route('/api/shift-closing/poster-data')
 def api_shift_closing_poster_data():
-    """Get Poster data for shift closing (sales, bonuses, cash, card payments)"""
+    """Get Poster data for shift closing from ALL accounts (summed)"""
     date = request.args.get('date')  # Format: YYYYMMDD
 
     try:
@@ -3531,89 +3531,112 @@ def api_shift_closing_poster_data():
         if not accounts:
             return jsonify({'error': 'No Poster accounts configured'}), 400
 
-        # Use primary account
-        account = next((acc for acc in accounts if acc.get('is_primary')), accounts[0])
-
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        async def get_poster_data():
-            client = PosterClient(
-                telegram_user_id=g.user_id,
-                poster_token=account['poster_token'],
-                poster_user_id=account['poster_user_id'],
-                poster_base_url=account['poster_base_url']
-            )
+        async def get_poster_data_all_accounts():
+            if date is None:
+                date_param = datetime.now().strftime("%Y%m%d")
+            else:
+                date_param = date
 
-            try:
-                if date is None:
-                    date_param = datetime.now().strftime("%Y%m%d")
-                else:
-                    date_param = date
+            # Totals across ALL accounts
+            total_cash = 0      # Наличные
+            total_card = 0      # Картой (безнал в Poster)
+            total_sum = 0       # Общая сумма заказов
+            bonus_total = 0     # Бонусы (онлайн-оплата)
+            total_transactions = 0
+            shift_start_total = 0
 
-                # Get transactions for the day (sales data)
-                result = await client._request('GET', 'dash.getTransactions', params={
-                    'dateFrom': date_param,
-                    'dateTo': date_param
-                })
+            # Per-account breakdown for Halyk/Kaspi
+            halyk_by_account = {}  # account_name -> halyk amount
+            kaspi_by_account = {}  # account_name -> kaspi amount
+            cash_by_account = {}   # account_name -> cash amount
 
-                transactions = result.get('response', [])
+            for account in accounts:
+                client = PosterClient(
+                    telegram_user_id=g.user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
 
-                # Filter only closed orders (status='2')
-                closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
-
-                # Calculate totals
-                total_cash = 0      # Наличные
-                total_card = 0      # Картой (безнал в Poster)
-                total_sum = 0       # Общая сумма заказов
-                bonus_total = 0     # Бонусы (онлайн-оплата)
-
-                for tx in closed_transactions:
-                    cash = int(tx.get('payed_cash', 0))
-                    card = int(tx.get('payed_card', 0))
-                    total = int(tx.get('payed_sum', 0))
-                    bonus = int(tx.get('payed_bonus', 0))
-
-                    total_cash += cash
-                    total_card += card
-                    total_sum += total
-                    bonus_total += bonus
-
-                # Trade total = cash + card (without bonuses)
-                trade_total = total_cash + total_card
-
-                # Try to get shift start balance from finance API
-                shift_start = 0
                 try:
-                    # Get today's finance report for cash drawer opening balance
-                    finance_result = await client._request('GET', 'finance.getReport', params={
+                    # Get transactions for the day (sales data)
+                    result = await client._request('GET', 'dash.getTransactions', params={
                         'dateFrom': date_param,
                         'dateTo': date_param
                     })
-                    # Parse shift start if available
-                    report = finance_result.get('response', {})
-                    if isinstance(report, dict):
-                        shift_start = int(report.get('cash_shift_open', 0))
-                except Exception as e:
-                    print(f"Could not get shift start: {e}")
-                    shift_start = 0
 
-                return {
-                    'success': True,
-                    'date': date_param,
-                    'total_sum': total_sum,              # Общая сумма (включая бонусы) - в тийинах
-                    'trade_total': trade_total,          # Торговля за день (без бонусов) - в тийинах
-                    'bonus': bonus_total,                # Бонусы (онлайн-оплата) - в тийинах
-                    'poster_cash': total_cash,           # Наличка в Poster - в тийинах
-                    'poster_card': total_card,           # Безнал в Poster (картой) - в тийинах
-                    'shift_start': shift_start,          # Остаток на начало смены - в тийинах
-                    'transactions_count': len(closed_transactions)
-                }
+                    transactions = result.get('response', [])
 
-            finally:
-                await client.close()
+                    # Filter only closed orders (status='2')
+                    closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
 
-        data = loop.run_until_complete(get_poster_data())
+                    acc_cash = 0
+                    acc_card = 0
+                    acc_sum = 0
+                    acc_bonus = 0
+
+                    for tx in closed_transactions:
+                        cash = int(tx.get('payed_cash', 0))
+                        card = int(tx.get('payed_card', 0))
+                        total = int(tx.get('payed_sum', 0))
+                        bonus = int(tx.get('payed_bonus', 0))
+
+                        acc_cash += cash
+                        acc_card += card
+                        acc_sum += total
+                        acc_bonus += bonus
+
+                    total_cash += acc_cash
+                    total_card += acc_card
+                    total_sum += acc_sum
+                    bonus_total += acc_bonus
+                    total_transactions += len(closed_transactions)
+
+                    # Store per-account data
+                    account_name = account.get('account_name', account.get('poster_base_url', 'unknown'))
+                    # Note: Poster doesn't distinguish Halyk/Kaspi in API, so card = total card payments
+                    # We store it for reference, but UI will need manual split
+                    cash_by_account[account_name] = acc_cash
+                    # For now, we just track total card per account (Poster doesn't split Halyk/Kaspi)
+                    halyk_by_account[account_name] = acc_card  # This is ALL card payments
+
+                    # Try to get shift start balance
+                    try:
+                        finance_result = await client._request('GET', 'finance.getReport', params={
+                            'dateFrom': date_param,
+                            'dateTo': date_param
+                        })
+                        report = finance_result.get('response', {})
+                        if isinstance(report, dict):
+                            shift_start_total += int(report.get('cash_shift_open', 0))
+                    except Exception as e:
+                        print(f"Could not get shift start for {account_name}: {e}")
+
+                finally:
+                    await client.close()
+
+            # Trade total = cash + card (without bonuses)
+            trade_total = total_cash + total_card
+
+            return {
+                'success': True,
+                'date': date_param,
+                'total_sum': total_sum,              # Общая сумма (включая бонусы) - в тийинах
+                'trade_total': trade_total,          # Торговля за день (без бонусов) - в тийинах
+                'bonus': bonus_total,                # Бонусы (онлайн-оплата) - в тийинах
+                'poster_cash': total_cash,           # Наличка в Poster (сумма по всем) - в тийинах
+                'poster_card': total_card,           # Безнал в Poster (сумма по всем) - в тийинах
+                'shift_start': shift_start_total,    # Остаток на начало смены (сумма) - в тийинах
+                'transactions_count': total_transactions,
+                'accounts_count': len(accounts),
+                'cash_by_account': {k: v / 100 for k, v in cash_by_account.items()},  # в тенге
+                'card_by_account': {k: v / 100 for k, v in halyk_by_account.items()}  # в тенге
+            }
+
+        data = loop.run_until_complete(get_poster_data_all_accounts())
         loop.close()
 
         return jsonify(data)
