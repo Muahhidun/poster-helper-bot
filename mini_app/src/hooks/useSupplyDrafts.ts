@@ -191,7 +191,21 @@ export function useCreateSupplyDraft() {
   })
 }
 
-// Search ingredients for autocomplete
+// Pre-load all ingredients for instant client-side filtering (like Flask version)
+export function useAllIngredients() {
+  return useQuery<PosterItem[]>({
+    queryKey: ['all-ingredients'],
+    queryFn: async () => {
+      // Fetch all items without query filter
+      const response = await fetch('/api/items/search?q=&source=ingredient')
+      if (!response.ok) throw new Error('Failed to fetch ingredients')
+      return response.json()
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes cache - ingredients don't change often
+  })
+}
+
+// Search ingredients for autocomplete (legacy - now using client-side filtering)
 export function useSearchIngredients(query: string, enabled: boolean = true) {
   return useQuery<PosterItem[]>({
     queryKey: ['ingredients-search', query],
