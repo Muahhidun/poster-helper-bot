@@ -262,11 +262,10 @@ export interface SupplyItemInput {
 export interface CreateSupplyRequest {
   supplier_id: number
   supplier_name: string
-  account_id: number
+  source: ExpenseSource  // 'cash' or 'kaspi' - backend auto-detects finance account
   items: SupplyItemInput[]
   date?: string
   storage_id?: number
-  poster_account_id?: number  // Which Poster business account (PizzBurg, PizzBurg Cafe, etc.)
 }
 
 export interface CreateSupplyResponse {
@@ -515,6 +514,8 @@ export interface SupplyDraft {
   poster_account_id: number | null
   linked_expense_draft_id: number | null
   linked_expense_amount?: number
+  linked_expense_source?: ExpenseSource  // Source from linked expense
+  source: ExpenseSource  // Payment method: 'cash' or 'kaspi'
   status: 'pending' | 'processed'
   created_at: string
   invoice_date?: string

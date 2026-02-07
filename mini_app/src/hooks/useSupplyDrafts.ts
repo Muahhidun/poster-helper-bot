@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { SupplyDraftsResponse, PosterItem } from '@/types'
+import type { SupplyDraftsResponse, PosterItem, ExpenseSource } from '@/types'
 
 // Fetch all supply drafts
 export function useSupplyDrafts() {
@@ -28,6 +28,7 @@ export function useUpdateSupplyDraft() {
         poster_account_id?: number
         linked_expense_draft_id?: number | null
         invoice_date?: string
+        source?: ExpenseSource
       }
     }) => {
       const response = await fetch(`/api/supply-drafts/${id}`, {

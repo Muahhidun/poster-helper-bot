@@ -727,14 +727,18 @@ def api_create_supply():
 
     Items are grouped by poster_account_id and separate supplies are created
     for each Poster business account (e.g., PizzBurg and PizzBurg Cafe).
+    Finance account is auto-detected based on source (kaspi/cash) for each account.
     """
     data = request.json
 
     # Validate required fields
-    required_fields = ['supplier_id', 'supplier_name', 'account_id', 'items']
+    required_fields = ['supplier_id', 'supplier_name', 'items']
     for field in required_fields:
         if field not in data:
             return jsonify({'error': f'Missing required field: {field}'}), 400
+
+    # Source defaults to 'cash' if not provided
+    source = data.get('source', 'cash')
 
     if not isinstance(data['items'], list) or len(data['items']) == 0:
         return jsonify({'error': 'items must be a non-empty list'}), 400
@@ -833,12 +837,36 @@ def api_create_supply():
                     else:
                         print(f"✅ Found supplier '{supplier_name}' -> ID={supplier_id} in {account['account_name']}")
 
+                    # Auto-detect finance account based on source (like process_supply does)
+                    finance_accounts = await poster_client.get_accounts()
+                    finance_account_id = None
+
+                    if source == 'kaspi':
+                        # Look for Kaspi account
+                        for acc in finance_accounts:
+                            if 'kaspi' in acc.get('name', '').lower():
+                                finance_account_id = int(acc['account_id'])
+                                break
+                    else:
+                        # Look for cash/purchase accounts
+                        for acc in finance_accounts:
+                            acc_name = acc.get('name', '').lower()
+                            if 'закуп' in acc_name or 'оставил' in acc_name:
+                                finance_account_id = int(acc['account_id'])
+                                break
+
+                    # Fallback to first account
+                    if not finance_account_id and finance_accounts:
+                        finance_account_id = int(finance_accounts[0]['account_id'])
+
+                    print(f"💳 Using finance account ID={finance_account_id} for source='{source}' in {account['account_name']}")
+
                     supply_id = await poster_client.create_supply(
                         supplier_id=supplier_id,
                         storage_id=data.get('storage_id', 1),
                         date=supply_date,
                         ingredients=ingredients,
-                        account_id=data['account_id'],
+                        account_id=finance_account_id,
                         comment=data.get('comment', '')
                     )
 
@@ -2248,11 +2276,15 @@ def api_get_supply_drafts():
                     # Map price_per_unit -> price
                     if 'price_per_unit' in item and 'price' not in item:
                         item['price'] = item['price_per_unit']
-            # Get linked expense amount if available
+            # Get linked expense info if available
             if draft.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(draft['linked_expense_draft_id'])
                 if expense:
                     draft['linked_expense_amount'] = expense.get('amount', 0)
+                    draft['linked_expense_source'] = expense.get('source', 'cash')
+            # Ensure source has a default value
+            if not draft.get('source'):
+                draft['source'] = 'cash'
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking
@@ -2316,6 +2348,8 @@ def api_update_supply_draft(draft_id):
         updates['linked_expense_draft_id'] = data['linked_expense_draft_id']
     if 'invoice_date' in data:
         updates['invoice_date'] = data['invoice_date']
+    if 'source' in data:
+        updates['source'] = data['source']
 
     if updates:
         db.update_supply_draft(draft_id, **updates)
@@ -2717,11 +2751,15 @@ def list_supplies():
                         item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
                     if 'price_per_unit' in item and 'price' not in item:
                         item['price'] = item['price_per_unit']
-            # Get linked expense amount if available
+            # Get linked expense info if available
             if draft.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(draft['linked_expense_draft_id'])
                 if expense:
                     draft['linked_expense_amount'] = expense.get('amount', 0)
+                    draft['linked_expense_source'] = expense.get('source', 'cash')
+            # Ensure source has a default value
+            if not draft.get('source'):
+                draft['source'] = 'cash'
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking

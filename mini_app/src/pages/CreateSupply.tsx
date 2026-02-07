@@ -7,10 +7,10 @@ import { Header } from '../components/Header'
 import { Loading } from '../components/Loading'
 import type {
   Supplier,
-  Account,
   SupplyItemInput,
   PosterItem,
-  LastSupplyItem
+  LastSupplyItem,
+  ExpenseSource
 } from '../types'
 
 // Helper function to evaluate math expressions safely
@@ -41,13 +41,10 @@ export const CreateSupply: React.FC = () => {
   const { data: suppliersData, loading: loadingSuppliers } = useApi(() =>
     getApiClient().getSuppliers()
   )
-  const { data: accountsData, loading: loadingAccounts } = useApi(() =>
-    getApiClient().getAccounts()
-  )
 
   // Form state
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null)
-  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
+  const [selectedSource, setSelectedSource] = useState<ExpenseSource>('cash')
   const [items, setItems] = useState<SupplyItemInput[]>([])
   const [supplierSearch, setSupplierSearch] = useState('')
   const [itemSearch, setItemSearch] = useState('')
@@ -73,16 +70,6 @@ export const CreateSupply: React.FC = () => {
 
   // Ref to track if sum field should be skipped after price
   const skipSumFieldRef = useRef<boolean>(false)
-
-  // Filter to show only Kaspi Pay and "Оставил в кассе (на закупы)"
-  const sortedAccounts = useMemo(() => {
-    if (!accountsData?.accounts) return []
-
-    const allowedAccounts = ['Kaspi Pay', 'Оставил в кассе']
-    return accountsData.accounts.filter(account =>
-      allowedAccounts.some(allowed => account.name.includes(allowed))
-    )
-  }, [accountsData])
 
   // Filter suppliers by search
   const filteredSuppliers = useMemo(() => {
@@ -495,7 +482,7 @@ export const CreateSupply: React.FC = () => {
 
   // Submit form
   const handleSubmit = async () => {
-    if (!selectedSupplier || !selectedAccount || items.length === 0) {
+    if (!selectedSupplier || items.length === 0) {
       webApp?.HapticFeedback?.notificationOccurred('error')
       setError('Заполните все обязательные поля')
       return
@@ -514,10 +501,11 @@ export const CreateSupply: React.FC = () => {
 
     try {
       // Items contain poster_account_id - backend will group and create multiple supplies if needed
+      // Backend will auto-detect finance account based on source for each Poster account
       await getApiClient().createSupply({
         supplier_id: selectedSupplier.id,
         supplier_name: selectedSupplier.name,
-        account_id: selectedAccount.id,
+        source: selectedSource,
         items: items,
       })
 
@@ -540,7 +528,7 @@ export const CreateSupply: React.FC = () => {
   useEffect(() => {
     if (!webApp?.MainButton) return
 
-    const canSubmit = selectedSupplier && selectedAccount && items.length > 0
+    const canSubmit = selectedSupplier && items.length > 0
 
     if (canSubmit) {
       webApp?.MainButton.setText('Создать поставку')
@@ -555,7 +543,7 @@ export const CreateSupply: React.FC = () => {
       webApp?.MainButton.offClick(handleSubmit)
       webApp?.MainButton.hide()
     }
-  }, [webApp?.MainButton, selectedSupplier, selectedAccount, items])
+  }, [webApp?.MainButton, selectedSupplier, items, selectedSource])
 
   // Setup back button
   useEffect(() => {
@@ -570,7 +558,7 @@ export const CreateSupply: React.FC = () => {
     }
   }, [webApp?.BackButton, navigate])
 
-  if (loadingSuppliers || loadingAccounts) return <Loading />
+  if (loadingSuppliers) return <Loading />
 
   return (
     <div style={{ backgroundColor: themeParams.bg_color || '#ffffff' }} className="min-h-screen pb-24">
@@ -652,38 +640,54 @@ export const CreateSupply: React.FC = () => {
           )}
         </div>
 
-        {/* Account Selection */}
+        {/* Source Selection */}
         <div className="mb-6">
           <label
             className="block text-sm font-medium mb-2"
             style={{ color: themeParams.text_color || '#000000' }}
           >
-            Счет *
+            Способ оплаты
           </label>
 
           <div className="grid grid-cols-2 gap-2">
-            {sortedAccounts.map(account => (
-              <button
-                key={account.id}
-                onClick={() => {
-                  setSelectedAccount(account)
-                  webApp?.HapticFeedback?.selectionChanged()
-                }}
-                className="p-4 rounded-lg font-medium text-center"
-                style={{
-                  backgroundColor:
-                    selectedAccount?.id === account.id
-                      ? themeParams.button_color || '#3b82f6'
-                      : themeParams.secondary_bg_color || '#f3f4f6',
-                  color:
-                    selectedAccount?.id === account.id
-                      ? themeParams.button_text_color || '#ffffff'
-                      : themeParams.text_color || '#000000',
-                }}
-              >
-                {account.name}
-              </button>
-            ))}
+            <button
+              onClick={() => {
+                setSelectedSource('cash')
+                webApp?.HapticFeedback?.selectionChanged()
+              }}
+              className="p-4 rounded-lg font-medium text-center"
+              style={{
+                backgroundColor:
+                  selectedSource === 'cash'
+                    ? themeParams.button_color || '#3b82f6'
+                    : themeParams.secondary_bg_color || '#f3f4f6',
+                color:
+                  selectedSource === 'cash'
+                    ? themeParams.button_text_color || '#ffffff'
+                    : themeParams.text_color || '#000000',
+              }}
+            >
+              Наличные
+            </button>
+            <button
+              onClick={() => {
+                setSelectedSource('kaspi')
+                webApp?.HapticFeedback?.selectionChanged()
+              }}
+              className="p-4 rounded-lg font-medium text-center"
+              style={{
+                backgroundColor:
+                  selectedSource === 'kaspi'
+                    ? themeParams.button_color || '#3b82f6'
+                    : themeParams.secondary_bg_color || '#f3f4f6',
+                color:
+                  selectedSource === 'kaspi'
+                    ? themeParams.button_text_color || '#ffffff'
+                    : themeParams.text_color || '#000000',
+              }}
+            >
+              Kaspi
+            </button>
           </div>
         </div>
 
@@ -998,15 +1002,15 @@ export const CreateSupply: React.FC = () => {
         {!isInTelegram && (
           <button
             onClick={handleSubmit}
-            disabled={!selectedSupplier || !selectedAccount || items.length === 0 || isSubmitting}
+            disabled={!selectedSupplier || items.length === 0 || isSubmitting}
             className="w-full mt-6 p-4 rounded-lg font-semibold text-lg transition-opacity"
             style={{
-              backgroundColor: (selectedSupplier && selectedAccount && items.length > 0)
+              backgroundColor: (selectedSupplier && items.length > 0)
                 ? (themeParams.button_color || '#3b82f6')
                 : '#9ca3af',
               color: themeParams.button_text_color || '#ffffff',
               opacity: isSubmitting ? 0.7 : 1,
-              cursor: (selectedSupplier && selectedAccount && items.length > 0 && !isSubmitting)
+              cursor: (selectedSupplier && items.length > 0 && !isSubmitting)
                 ? 'pointer'
                 : 'not-allowed',
             }}
