@@ -491,10 +491,12 @@ def search_items():
         db = get_database()
         accounts = db.get_accounts(g.user_id)
 
+        print(f"[DEBUG] Found {len(accounts)} accounts for user {g.user_id}", flush=True)
         if accounts:
             from poster_client import PosterClient
 
             for acc in accounts:
+                print(f"[DEBUG] Processing account: {acc['account_name']} (id={acc['id']})", flush=True)
                 try:
                     poster_client = PosterClient(
                         telegram_user_id=g.user_id,
@@ -509,6 +511,7 @@ def search_items():
 
                     if source in ['all', 'ingredient']:
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                        print(f"[DEBUG] Account {acc['account_name']}: got {len(ingredients)} ingredients", flush=True)
                         for ing in ingredients:
                             # Include all ingredients (including deleted ones)
                             # User may need to see deleted ingredients to understand what was available
@@ -551,6 +554,8 @@ def search_items():
                                 'poster_account_name': acc['account_name']
                             })
 
+                    # Close the poster client to avoid unclosed session warning
+                    loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
                     print(f"Error loading from account {acc['account_name']}: {e}")
@@ -570,6 +575,14 @@ def search_items():
     print(f"[DEBUG] Total items before query filter: {len(items)} (ingredients + products)", flush=True)
     products_count = len([i for i in items if i['type'] == 'product'])
     print(f"[DEBUG] Products in list: {products_count}", flush=True)
+
+    # Debug: show first 5 items with names
+    for i, item in enumerate(items[:5]):
+        print(f"[DEBUG] Sample item {i}: id={item.get('id')}, name='{item.get('name')}', account={item.get('poster_account_name')}", flush=True)
+
+    # Debug: check for empty names
+    empty_names = len([i for i in items if not i.get('name')])
+    print(f"[DEBUG] Items with empty names: {empty_names}", flush=True)
 
     if query:
         items = [item for item in items if query in item['name'].lower()]
