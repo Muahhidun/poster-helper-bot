@@ -3790,6 +3790,9 @@ def api_shift_closing_poster_data():
                 finally:
                     await client.close()
 
+            # poster_card = total card income (Kaspi + Halyk) in tiyins
+            poster_card_total = kaspi_expected + halyk_expected
+
             return {
                 'success': True,
                 'date': date_param,
@@ -3797,6 +3800,11 @@ def api_shift_closing_poster_data():
                 'accounts_count': len(accounts),
                 'total_sum': total_sum,
                 'bonus': bonus_total,
+                # For shift closing calculator (all in tiyins):
+                'trade_total': total_sum,              # Торговля за день (payed_sum)
+                'poster_card': poster_card_total,      # Безнал картой (Kaspi + Halyk income)
+                'poster_cash': cash_expected,          # Наличка
+                'shift_start': 0,                      # Остаток на начало (user fills manually)
                 # For reconciliation (all in tenge):
                 'kaspi_expected': kaspi_expected / 100,   # Kaspi income from all accounts
                 'halyk_expected': halyk_expected / 100,   # Halyk income from all accounts
