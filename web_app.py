@@ -510,9 +510,8 @@ def search_items():
                     if source in ['all', 'ingredient']:
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
                         for ing in ingredients:
-                            # Skip deleted ingredients
-                            if str(ing.get('delete', '0')) == '1':
-                                continue
+                            # Include all ingredients (including deleted ones)
+                            # User may need to see deleted ingredients to understand what was available
                             name = ing.get('ingredient_name', '')
 
                             # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
@@ -533,9 +532,7 @@ def search_items():
                     if source in ['all', 'product', 'ingredient']:
                         products = loop.run_until_complete(poster_client.get_products())
                         for prod in products:
-                            # Skip deleted products
-                            if str(prod.get('delete', '0')) == '1':
-                                continue
+                            # Include all products (including deleted ones)
                             # Only include products from "Напитки" category for supplies
                             # Tech cards (Pizzas, Burgers, Doner etc.) should not appear in supplies
                             # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
