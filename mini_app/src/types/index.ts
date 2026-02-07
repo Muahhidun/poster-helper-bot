@@ -262,11 +262,10 @@ export interface SupplyItemInput {
 export interface CreateSupplyRequest {
   supplier_id: number
   supplier_name: string
-  account_id: number
+  source: ExpenseSource  // 'cash' or 'kaspi' - backend auto-detects finance account
   items: SupplyItemInput[]
   date?: string
   storage_id?: number
-  poster_account_id?: number  // Which Poster business account (PizzBurg, PizzBurg Cafe, etc.)
 }
 
 export interface CreateSupplyResponse {
