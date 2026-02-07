@@ -9,7 +9,7 @@ import {
   useDeleteSupplyDraftItem,
   useCreateSupplyInPoster,
   useCreateSupplyDraft,
-  useSearchIngredients,
+  useAllIngredients,
 } from '@/hooks/useSupplyDrafts'
 import type { SupplyDraft, SupplyDraftItem, PendingSupplyExpense, ExpensePosterAccount, PosterItem } from '@/types'
 
@@ -25,29 +25,24 @@ function evaluateExpression(expr: string): number | null {
   }
 }
 
-// Ingredient Search Autocomplete Component
+// Ingredient Search Autocomplete Component (with pre-loaded ingredients for instant filtering)
 function IngredientSearchAutocomplete({
   posterAccountId,
   onSelect,
   disabled,
+  allIngredients,
 }: {
   posterAccountId: number | null
   onSelect: (ingredient: PosterItem) => void
   disabled?: boolean
+  allIngredients: PosterItem[]
 }) {
   const [query, setQuery] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [isOpen, setIsOpen] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0 })
-
-  // Debounce search query (100ms)
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 100)
-    return () => clearTimeout(timer)
-  }, [query])
 
   // Update dropdown position when open
   useEffect(() => {
@@ -61,19 +56,24 @@ function IngredientSearchAutocomplete({
     }
   }, [isOpen, query])
 
-  const { data: results = [] } = useSearchIngredients(
-    debouncedQuery,
-    debouncedQuery.length >= 1
-  )
-
-  // Sort results: same poster account first
+  // Client-side filtering - instant, no debounce needed
   const sortedResults = useMemo(() => {
-    return [...results].sort((a, b) => {
+    if (!query || query.length < 1) return []
+    const lowerQuery = query.toLowerCase()
+
+    // Filter ingredients by name (same logic as Flask version)
+    const matches = allIngredients.filter(ing =>
+      ing.name.toLowerCase().includes(lowerQuery)
+    )
+
+    // Sort: same poster account first, then alphabetically
+    return matches.sort((a, b) => {
       const aMatch = a.poster_account_id === posterAccountId ? 0 : 1
       const bMatch = b.poster_account_id === posterAccountId ? 0 : 1
-      return aMatch - bMatch
+      if (aMatch !== bMatch) return aMatch - bMatch
+      return a.name.localeCompare(b.name)
     }).slice(0, 15)
-  }, [results, posterAccountId])
+  }, [query, allIngredients, posterAccountId])
 
   const handleSelect = (ingredient: PosterItem) => {
     onSelect(ingredient)
@@ -400,11 +400,13 @@ function EmptyItemRow({
   posterAccountId,
   onAddItem,
   isAdding,
+  allIngredients,
 }: {
   draftId: number
   posterAccountId: number | null
   onAddItem: (draftId: number, ingredient: PosterItem) => void
   isAdding: boolean
+  allIngredients: PosterItem[]
 }) {
   return (
     <tr className="bg-gray-50/50 hover:bg-gray-100/50 transition-colors">
@@ -413,6 +415,7 @@ function EmptyItemRow({
           posterAccountId={posterAccountId}
           onSelect={(ing) => onAddItem(draftId, ing)}
           disabled={isAdding}
+          allIngredients={allIngredients}
         />
       </td>
       <td className="px-3 py-2 border-b border-gray-100">
@@ -439,6 +442,7 @@ function DraftCard({
   draft,
   pendingSupplies,
   posterAccounts,
+  allIngredients,
   newlyAddedItemId,
   onUpdateDraft,
   onDeleteDraft,
@@ -452,6 +456,7 @@ function DraftCard({
   draft: SupplyDraft
   pendingSupplies: PendingSupplyExpense[]
   posterAccounts: ExpensePosterAccount[]
+  allIngredients: PosterItem[]
   newlyAddedItemId: number | null
   onUpdateDraft: (id: number, field: string, value: string | number | null) => void
   onDeleteDraft: (id: number) => void
@@ -559,6 +564,7 @@ function DraftCard({
               posterAccountId={currentPosterAccountId}
               onAddItem={onAddItem}
               isAdding={isAdding}
+              allIngredients={allIngredients}
             />
           </tbody>
         </table>
@@ -585,6 +591,7 @@ function DraftCard({
 // Main Supply Drafts Page
 export function SupplyDrafts() {
   const { data, isLoading, error } = useSupplyDrafts()
+  const { data: allIngredients = [] } = useAllIngredients() // Pre-load all ingredients for instant filtering
   const updateDraftMutation = useUpdateSupplyDraft()
   const deleteDraftMutation = useDeleteSupplyDraft()
   const addItemMutation = useAddSupplyDraftItem()
@@ -705,6 +712,7 @@ export function SupplyDrafts() {
           draft={draft}
           pendingSupplies={pendingSupplies}
           posterAccounts={posterAccounts}
+          allIngredients={allIngredients}
           newlyAddedItemId={newlyAddedItemId}
           onUpdateDraft={handleUpdateDraft}
           onDeleteDraft={handleDeleteDraft}
