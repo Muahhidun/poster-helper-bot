@@ -40,12 +40,26 @@ function IngredientSearchAutocomplete({
   const [isOpen, setIsOpen] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0 })
 
   // Debounce search query (100ms)
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query), 100)
     return () => clearTimeout(timer)
   }, [query])
+
+  // Update dropdown position when open
+  useEffect(() => {
+    if (isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      setDropdownPosition({
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+      })
+    }
+  }, [isOpen, query])
 
   const { data: results = [] } = useSearchIngredients(
     debouncedQuery,
@@ -90,7 +104,7 @@ function IngredientSearchAutocomplete({
   }
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <input
         ref={inputRef}
         type="text"
@@ -109,7 +123,15 @@ function IngredientSearchAutocomplete({
         )}
       />
       {isOpen && sortedResults.length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-50">
+        <div
+          className="fixed bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto z-[9999]"
+          style={{
+            top: dropdownPosition.top - 4,
+            left: dropdownPosition.left,
+            width: dropdownPosition.width,
+            transform: 'translateY(-100%)',
+          }}
+        >
           {sortedResults.map((ing, i) => (
             <div
               key={`${ing.id}-${ing.poster_account_id}`}
@@ -603,6 +625,7 @@ export function SupplyDrafts() {
           poster_account_id: ingredient.poster_account_id,
           storage_id: ingredient.storage_id,
           storage_name: ingredient.storage_name,
+          item_type: ingredient.type || 'ingredient',
         },
       })
       if (result.id) {

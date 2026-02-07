@@ -2313,12 +2313,16 @@ def api_add_supply_draft_item(draft_id):
 
     item_id = db.add_supply_draft_item(
         supply_draft_id=draft_id,
-        ingredient_id=data.get('ingredient_id'),
-        ingredient_name=data.get('ingredient_name', ''),
+        poster_ingredient_id=data.get('ingredient_id'),
+        poster_ingredient_name=data.get('ingredient_name', ''),
+        item_name=data.get('ingredient_name', ''),
         quantity=data.get('quantity', 1),
-        price=data.get('price', 0),
+        price_per_unit=data.get('price', 0),
         unit=data.get('unit', 'шт'),
-        poster_account_id=data.get('poster_account_id')
+        poster_account_id=data.get('poster_account_id'),
+        item_type=data.get('item_type', 'ingredient'),
+        storage_id=data.get('storage_id'),
+        storage_name=data.get('storage_name')
     )
 
     return jsonify({'success': True, 'id': item_id})
