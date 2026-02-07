@@ -2222,6 +2222,18 @@ def api_get_supply_drafts():
 
         draft = db.get_supply_draft_with_items(draft_raw['id'])
         if draft:
+            # Map database column names to frontend expected names
+            if 'items' in draft:
+                for item in draft['items']:
+                    # Map poster_ingredient_id -> ingredient_id
+                    if 'poster_ingredient_id' in item and 'ingredient_id' not in item:
+                        item['ingredient_id'] = item['poster_ingredient_id']
+                    # Map poster_ingredient_name or item_name -> ingredient_name
+                    if 'ingredient_name' not in item:
+                        item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
+                    # Map price_per_unit -> price
+                    if 'price_per_unit' in item and 'price' not in item:
+                        item['price'] = item['price_per_unit']
             # Get linked expense amount if available
             if draft.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(draft['linked_expense_draft_id'])
@@ -2334,10 +2346,25 @@ def api_update_supply_draft_item(item_id):
     db = get_database()
     data = request.get_json() or {}
 
+    # Map frontend field names to database column names
+    field_mapping = {
+        'ingredient_id': 'poster_ingredient_id',
+        'ingredient_name': 'poster_ingredient_name',
+        'price': 'price_per_unit',
+        'quantity': 'quantity',
+        'unit': 'unit',
+        'poster_account_id': 'poster_account_id',
+        'poster_account_name': 'poster_account_name',
+    }
+
     updates = {}
-    for field in ['ingredient_id', 'ingredient_name', 'quantity', 'price', 'unit', 'poster_account_id', 'poster_account_name']:
-        if field in data:
-            updates[field] = data[field]
+    for frontend_field, db_field in field_mapping.items():
+        if frontend_field in data:
+            updates[db_field] = data[frontend_field]
+
+    # Also update item_name when ingredient_name changes
+    if 'ingredient_name' in data:
+        updates['item_name'] = data['ingredient_name']
 
     if updates:
         db.update_supply_draft_item(item_id, **updates)
@@ -2395,9 +2422,9 @@ def api_create_supply_in_poster(draft_id):
                 items = []
                 for item in draft['items']:
                     items.append({
-                        'ingredient_id': item['ingredient_id'],
+                        'ingredient_id': item.get('poster_ingredient_id') or item.get('ingredient_id'),
                         'count': item['quantity'],
-                        'price': item['price']
+                        'price': item.get('price_per_unit') or item.get('price', 0)
                     })
 
                 supply_data = {
@@ -2667,6 +2694,15 @@ def list_supplies():
 
         draft = db.get_supply_draft_with_items(draft_raw['id'])
         if draft:
+            # Map database column names to frontend expected names
+            if 'items' in draft:
+                for item in draft['items']:
+                    if 'poster_ingredient_id' in item and 'ingredient_id' not in item:
+                        item['ingredient_id'] = item['poster_ingredient_id']
+                    if 'ingredient_name' not in item:
+                        item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
+                    if 'price_per_unit' in item and 'price' not in item:
+                        item['price'] = item['price_per_unit']
             # Get linked expense amount if available
             if draft.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(draft['linked_expense_draft_id'])
@@ -2794,6 +2830,15 @@ def view_all_supplies():
     for draft_raw in drafts_raw:
         draft = db.get_supply_draft_with_items(draft_raw['id'])
         if draft:
+            # Map database column names to frontend expected names
+            if 'items' in draft:
+                for item in draft['items']:
+                    if 'poster_ingredient_id' in item and 'ingredient_id' not in item:
+                        item['ingredient_id'] = item['poster_ingredient_id']
+                    if 'ingredient_name' not in item:
+                        item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
+                    if 'price_per_unit' in item and 'price' not in item:
+                        item['price'] = item['price_per_unit']
             drafts.append(draft)
 
     # Load ingredients from ALL Poster accounts
