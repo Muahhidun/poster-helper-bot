@@ -587,9 +587,13 @@ def search_items():
     if query:
         items = [item for item in items if query in item['name'].lower()]
         print(f"[DEBUG] Items after query filter '{query}': {len(items)}", flush=True)
-
-    # Limit results
-    items = items[:50]
+        # Limit results only when there's a query (server-side filtering)
+        items = items[:50]
+    else:
+        # No limit when preloading all items (client-side filtering)
+        # Sort by account name, then by ingredient name for consistent ordering
+        items = sorted(items, key=lambda x: (x.get('poster_account_name', ''), x.get('name', '')))
+        print(f"[DEBUG] Returning all {len(items)} items for preload", flush=True)
 
     return jsonify(items)
 
