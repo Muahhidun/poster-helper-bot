@@ -11,7 +11,7 @@ import {
   useCreateSupplyDraft,
   useAllIngredients,
 } from '@/hooks/useSupplyDrafts'
-import type { SupplyDraft, SupplyDraftItem, PendingSupplyExpense, ExpensePosterAccount, PosterItem } from '@/types'
+import type { SupplyDraft, SupplyDraftItem, PendingSupplyExpense, ExpensePosterAccount, PosterItem, ExpenseSource } from '@/types'
 
 // Helper function to evaluate math expressions safely (e.g., "2.5*12")
 function evaluateExpression(expr: string): number | null {
@@ -445,6 +445,7 @@ function DraftCard({
   allIngredients,
   newlyAddedItemId,
   onUpdateDraft,
+  onLinkExpense,
   onDeleteDraft,
   onUpdateItem,
   onDeleteItem,
@@ -459,6 +460,7 @@ function DraftCard({
   allIngredients: PosterItem[]
   newlyAddedItemId: number | null
   onUpdateDraft: (id: number, field: string, value: string | number | null) => void
+  onLinkExpense: (draftId: number, expenseId: number | null, expenseSource: ExpenseSource | null) => void
   onDeleteDraft: (id: number) => void
   onUpdateItem: (itemId: number, updates: Record<string, number>) => void
   onDeleteItem: (itemId: number) => void
@@ -469,6 +471,19 @@ function DraftCard({
 }) {
   const totalAmount = draft.items.reduce((sum, item) => sum + (item.quantity || 0) * (item.price || 0), 0)
   const currentPosterAccountId = draft.poster_account_id || posterAccounts.find(pa => pa.is_primary)?.id || null
+  const currentSource = draft.source || 'cash'
+  // Check if source is inherited from linked expense
+  const isSourceFromExpense = draft.linked_expense_draft_id !== null
+
+  // Handle expense link change - auto-set source from expense
+  const handleExpenseChange = (expenseId: number | null) => {
+    if (expenseId) {
+      const expense = pendingSupplies.find(ps => ps.id === expenseId)
+      onLinkExpense(draft.id, expenseId, expense?.source || null)
+    } else {
+      onLinkExpense(draft.id, null, null)
+    }
+  }
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-6">
@@ -504,16 +519,50 @@ function DraftCard({
               ))}
             </select>
 
+            {/* Payment Source Selector */}
+            <div className="flex rounded-md border border-gray-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => onUpdateDraft(draft.id, 'source', 'cash')}
+                disabled={isSourceFromExpense}
+                className={cn(
+                  'px-3 py-1.5 text-sm font-medium transition-colors',
+                  currentSource === 'cash'
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50',
+                  isSourceFromExpense && 'cursor-not-allowed opacity-75'
+                )}
+                title={isSourceFromExpense ? 'Способ оплаты наследуется из связанного расхода' : 'Оплата наличными'}
+              >
+                Наличные
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateDraft(draft.id, 'source', 'kaspi')}
+                disabled={isSourceFromExpense}
+                className={cn(
+                  'px-3 py-1.5 text-sm font-medium transition-colors border-l border-gray-200',
+                  currentSource === 'kaspi'
+                    ? 'bg-red-500 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50',
+                  isSourceFromExpense && 'cursor-not-allowed opacity-75'
+                )}
+                title={isSourceFromExpense ? 'Способ оплаты наследуется из связанного расхода' : 'Оплата через Kaspi'}
+              >
+                Kaspi
+              </button>
+            </div>
+
             {/* Link to expense */}
             <select
               value={draft.linked_expense_draft_id || ''}
-              onChange={(e) => onUpdateDraft(draft.id, 'linked_expense_draft_id', e.target.value ? parseInt(e.target.value) : null)}
+              onChange={(e) => handleExpenseChange(e.target.value ? parseInt(e.target.value) : null)}
               className="px-2.5 py-1.5 border border-gray-200 rounded text-sm bg-white cursor-pointer min-w-[150px]"
             >
               <option value="">-- Связать с расходом --</option>
               {pendingSupplies.map(ps => (
                 <option key={ps.id} value={ps.id}>
-                  {ps.description} ({ps.amount.toLocaleString('ru-RU')}₸)
+                  {ps.description} ({ps.amount.toLocaleString('ru-RU')}₸) {ps.source === 'kaspi' ? '💳' : '💵'}
                 </option>
               ))}
             </select>
@@ -531,6 +580,11 @@ function DraftCard({
         {draft.linked_expense_amount ? (
           <div className="mt-2 text-sm text-gray-600">
             💰 Связанный расход: <span className="font-medium">{draft.linked_expense_amount.toLocaleString('ru-RU')}₸</span>
+            {draft.linked_expense_source && (
+              <span className="ml-2 text-xs text-gray-500">
+                ({draft.linked_expense_source === 'kaspi' ? 'Kaspi' : 'Наличные'})
+              </span>
+            )}
           </div>
         ) : null}
       </div>
@@ -618,6 +672,17 @@ export function SupplyDrafts() {
     if (!confirm('Удалить этот черновик поставки?')) return
     deleteDraftMutation.mutate(id)
   }, [deleteDraftMutation])
+
+  // Handle linking expense to draft - auto-set source from expense
+  const handleLinkExpense = useCallback((draftId: number, expenseId: number | null, expenseSource: ExpenseSource | null) => {
+    // Update both linked_expense_draft_id and source in one call if source provided
+    if (expenseId && expenseSource) {
+      updateDraftMutation.mutate({ id: draftId, data: { linked_expense_draft_id: expenseId, source: expenseSource } })
+    } else {
+      // Just update linked_expense_draft_id (unlinking)
+      updateDraftMutation.mutate({ id: draftId, data: { linked_expense_draft_id: expenseId } })
+    }
+  }, [updateDraftMutation])
 
   const handleAddItem = useCallback(async (draftId: number, ingredient: PosterItem) => {
     try {
@@ -715,6 +780,7 @@ export function SupplyDrafts() {
           allIngredients={allIngredients}
           newlyAddedItemId={newlyAddedItemId}
           onUpdateDraft={handleUpdateDraft}
+          onLinkExpense={handleLinkExpense}
           onDeleteDraft={handleDeleteDraft}
           onUpdateItem={handleUpdateItem}
           onDeleteItem={handleDeleteItem}

@@ -2276,11 +2276,15 @@ def api_get_supply_drafts():
                     # Map price_per_unit -> price
                     if 'price_per_unit' in item and 'price' not in item:
                         item['price'] = item['price_per_unit']
-            # Get linked expense amount if available
+            # Get linked expense info if available
             if draft.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(draft['linked_expense_draft_id'])
                 if expense:
                     draft['linked_expense_amount'] = expense.get('amount', 0)
+                    draft['linked_expense_source'] = expense.get('source', 'cash')
+            # Ensure source has a default value
+            if not draft.get('source'):
+                draft['source'] = 'cash'
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking
@@ -2344,6 +2348,8 @@ def api_update_supply_draft(draft_id):
         updates['linked_expense_draft_id'] = data['linked_expense_draft_id']
     if 'invoice_date' in data:
         updates['invoice_date'] = data['invoice_date']
+    if 'source' in data:
+        updates['source'] = data['source']
 
     if updates:
         db.update_supply_draft(draft_id, **updates)
@@ -2745,11 +2751,15 @@ def list_supplies():
                         item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
                     if 'price_per_unit' in item and 'price' not in item:
                         item['price'] = item['price_per_unit']
-            # Get linked expense amount if available
+            # Get linked expense info if available
             if draft.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(draft['linked_expense_draft_id'])
                 if expense:
                     draft['linked_expense_amount'] = expense.get('amount', 0)
+                    draft['linked_expense_source'] = expense.get('source', 'cash')
+            # Ensure source has a default value
+            if not draft.get('source'):
+                draft['source'] = 'cash'
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking

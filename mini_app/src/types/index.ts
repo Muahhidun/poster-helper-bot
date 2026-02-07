@@ -514,6 +514,8 @@ export interface SupplyDraft {
   poster_account_id: number | null
   linked_expense_draft_id: number | null
   linked_expense_amount?: number
+  linked_expense_source?: ExpenseSource  // Source from linked expense
+  source: ExpenseSource  // Payment method: 'cash' or 'kaspi'
   status: 'pending' | 'processed'
   created_at: string
   invoice_date?: string
