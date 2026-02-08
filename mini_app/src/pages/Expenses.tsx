@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { getApiClient } from '@/api/client'
 // v2: Fixed sum calculation with Number() conversion for PostgreSQL DECIMAL
@@ -1022,13 +1023,375 @@ function getKazakhstanToday(): string {
   return kzTime.toISOString().slice(0, 10)
 }
 
+// Checklist item type
+interface ChecklistItem {
+  id: string
+  label: string
+  checked: boolean
+}
+
+// Default checklist items
+const DEFAULT_CHECKLIST_ITEMS: ChecklistItem[] = [
+  { id: 'kaspi_check', label: 'Kaspi сверен', checked: false },
+  { id: 'halyk_check', label: 'Halyk сверен', checked: false },
+  { id: 'cash_check', label: 'Наличка сверена', checked: false },
+  { id: 'poster_check', label: 'Poster проверен', checked: false },
+  { id: 'collection_done', label: 'Инкассация сделана', checked: false },
+]
+
+// Checklist View Component
+function ChecklistView({
+  selectedDate,
+  reconciliationData,
+  posterTransactions,
+  accounts,
+  accountTotals,
+  onBack,
+}: {
+  selectedDate: string
+  reconciliationData: { reconciliation?: Record<AccountType, ReconciliationData> } | undefined
+  posterTransactions: PosterTransaction[]
+  accounts: ExpenseAccount[]
+  accountTotals?: AccountTotals
+  onBack: () => void
+}) {
+  // Load checklist state from localStorage
+  const getStorageKey = () => `checklist_${selectedDate}`
+
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>(() => {
+    const stored = localStorage.getItem(getStorageKey())
+    if (stored) {
+      try {
+        return JSON.parse(stored)
+      } catch {
+        return DEFAULT_CHECKLIST_ITEMS
+      }
+    }
+    return DEFAULT_CHECKLIST_ITEMS
+  })
+
+  // Custom note fields (user can type anything)
+  const [notes, setNotes] = useState<Record<string, string>>(() => {
+    const stored = localStorage.getItem(`${getStorageKey()}_notes`)
+    if (stored) {
+      try {
+        return JSON.parse(stored)
+      } catch {
+        return {}
+      }
+    }
+    return {}
+  })
+
+  // Save to localStorage when state changes
+  useEffect(() => {
+    localStorage.setItem(getStorageKey(), JSON.stringify(checklistItems))
+  }, [checklistItems, selectedDate])
+
+  useEffect(() => {
+    localStorage.setItem(`${getStorageKey()}_notes`, JSON.stringify(notes))
+  }, [notes, selectedDate])
+
+  // Reload state when date changes
+  useEffect(() => {
+    const stored = localStorage.getItem(getStorageKey())
+    if (stored) {
+      try {
+        setChecklistItems(JSON.parse(stored))
+      } catch {
+        setChecklistItems(DEFAULT_CHECKLIST_ITEMS)
+      }
+    } else {
+      setChecklistItems(DEFAULT_CHECKLIST_ITEMS)
+    }
+
+    const notesStored = localStorage.getItem(`${getStorageKey()}_notes`)
+    if (notesStored) {
+      try {
+        setNotes(JSON.parse(notesStored))
+      } catch {
+        setNotes({})
+      }
+    } else {
+      setNotes({})
+    }
+  }, [selectedDate])
+
+  const toggleItem = (id: string) => {
+    setChecklistItems(prev => prev.map(item =>
+      item.id === id ? { ...item, checked: !item.checked } : item
+    ))
+  }
+
+  const updateNote = (key: string, value: string) => {
+    setNotes(prev => ({ ...prev, [key]: value }))
+  }
+
+  // Calculate Poster income total for a source type (same logic as ReconciliationHeader)
+  const getPosterIncomeTotal = useCallback((type: AccountType): number | null => {
+    // Find account names that match this type
+    const matchingAccountNames = accounts
+      .filter(acc => {
+        const name = (acc.name || '').toLowerCase()
+        if (type === 'kaspi') {
+          return name.includes('kaspi')
+        }
+        if (type === 'halyk') {
+          return name.includes('халык') || name.includes('halyk')
+        }
+        if (type === 'cash') {
+          return name.includes('оставил') || name.includes('закуп')
+        }
+        return false
+      })
+      .map(acc => (acc.name || '').toLowerCase())
+
+    if (matchingAccountNames.length === 0) return null
+
+    // Sum income transactions from Poster for these accounts (type=1 is income)
+    const total = posterTransactions
+      .filter(t => {
+        if (t.type !== 1) return false // Only income
+        const accountName = (t.account_name || '').toLowerCase()
+        return matchingAccountNames.some(name =>
+          accountName.includes(name) || name.includes(accountName)
+        )
+      })
+      .reduce((sum, t) => sum + Math.abs(t.amount) / 100, 0)
+
+    return total
+  }, [accounts, posterTransactions])
+
+  // Get differences from reconciliation data (calculated the same way as ReconciliationHeader)
+  const getDifference = (source: AccountType): number | null => {
+    const data = reconciliationData?.reconciliation?.[source]
+    const factValue = data?.opening_balance
+    if (factValue == null) return null
+
+    // Get poster value based on source type
+    const posterValue = source === 'cash'
+      ? (accountTotals?.cash ?? null)
+      : getPosterIncomeTotal(source)
+
+    if (posterValue === null) return null
+    return factValue - posterValue
+  }
+
+  // Format date for display
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+  }
+
+  // Export to clipboard
+  const handleExport = async () => {
+    const lines: string[] = []
+    lines.push(`Чеклист закрытия смены — ${formatDate(selectedDate)}`)
+    lines.push('')
+
+    // Sources with differences
+    const sources: { key: AccountType; label: string }[] = [
+      { key: 'kaspi', label: 'Kaspi' },
+      { key: 'halyk', label: 'Halyk' },
+      { key: 'cash', label: 'Наличка' },
+    ]
+
+    sources.forEach(({ key, label }) => {
+      const diff = getDifference(key)
+      const note = notes[key] || ''
+      const diffStr = diff !== null ? `${diff >= 0 ? '+' : ''}${diff.toLocaleString('ru-RU')}₸` : '—'
+      lines.push(`${label}: ${diffStr}${note ? ` (${note})` : ''}`)
+    })
+
+    lines.push('')
+    lines.push('Проверки:')
+    checklistItems.forEach(item => {
+      lines.push(`${item.checked ? '✅' : '⬜'} ${item.label}`)
+    })
+
+    if (notes.general) {
+      lines.push('')
+      lines.push(`Заметки: ${notes.general}`)
+    }
+
+    const text = lines.join('\n')
+
+    try {
+      await navigator.clipboard.writeText(text)
+      alert('Скопировано в буфер обмена!')
+    } catch {
+      // Fallback for mobile
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      alert('Скопировано!')
+    }
+  }
+
+  const sources: { key: AccountType; label: string; icon: string; gradient: string }[] = [
+    { key: 'kaspi', label: 'Kaspi', icon: '📱', gradient: 'from-orange-50 to-amber-50 border-orange-200' },
+    { key: 'halyk', label: 'Halyk', icon: '🏦', gradient: 'from-blue-50 to-sky-50 border-blue-200' },
+    { key: 'cash', label: 'Наличка', icon: '💵', gradient: 'from-emerald-50 to-green-50 border-emerald-200' },
+  ]
+
+  return (
+    <div className="max-w-lg mx-auto px-4 py-6">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={onBack}
+          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <h1 className="text-xl font-bold text-gray-900">Чеклист закрытия</h1>
+      </div>
+
+      {/* Date */}
+      <div className="text-center mb-6">
+        <span className="inline-block px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium text-gray-700">
+          {formatDate(selectedDate)}
+        </span>
+      </div>
+
+      {/* Source differences */}
+      <div className="space-y-3 mb-6">
+        {sources.map(({ key, label, icon, gradient }) => {
+          const diff = getDifference(key)
+          const diffColor = diff === null ? 'text-gray-500' :
+            diff > 0 ? 'text-emerald-600' : diff < 0 ? 'text-red-600' : 'text-gray-600'
+
+          return (
+            <div
+              key={key}
+              className={cn(
+                'p-4 rounded-xl border bg-gradient-to-r',
+                gradient
+              )}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="flex items-center gap-2 font-medium text-gray-800">
+                  <span>{icon}</span>
+                  {label}
+                </span>
+                <span className={cn('text-lg font-bold tabular-nums', diffColor)}>
+                  {diff !== null ? (
+                    <>{diff > 0 ? '+' : ''}{diff.toLocaleString('ru-RU')}₸</>
+                  ) : '—'}
+                </span>
+              </div>
+              <input
+                type="text"
+                value={notes[key] || ''}
+                onChange={e => updateNote(key, e.target.value)}
+                placeholder="Заметка..."
+                className="w-full px-3 py-2 bg-white/70 border border-gray-200 rounded-lg text-sm placeholder:text-gray-400 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20"
+              />
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Checklist items */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
+        <h3 className="px-4 py-3 bg-gray-50 font-medium text-gray-700 border-b border-gray-200">
+          Проверки
+        </h3>
+        <div className="divide-y divide-gray-100">
+          {checklistItems.map(item => (
+            <label
+              key={item.id}
+              className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+            >
+              <input
+                type="checkbox"
+                checked={item.checked}
+                onChange={() => toggleItem(item.id)}
+                className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span className={cn(
+                'text-gray-700',
+                item.checked && 'line-through text-gray-400'
+              )}>
+                {item.label}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* General notes */}
+      <div className="mb-6">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Общие заметки
+        </label>
+        <textarea
+          value={notes.general || ''}
+          onChange={e => updateNote('general', e.target.value)}
+          placeholder="Дополнительные заметки..."
+          rows={3}
+          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm placeholder:text-gray-400 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 resize-none"
+        />
+      </div>
+
+      {/* Export button */}
+      <button
+        onClick={handleExport}
+        className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium text-sm hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+        Скопировать чеклист
+      </button>
+    </div>
+  )
+}
+
 // Main Expenses Page
 export function Expenses() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const isChecklistView = searchParams.get('view') === 'checklist'
+
   const [selectedDate, setSelectedDate] = useState(getKazakhstanToday)
 
   const { data, isLoading, error } = useExpenses(selectedDate)
   const { data: posterData } = usePosterTransactions()
   const { data: reconciliationData } = useReconciliation(selectedDate)
+
+  // Extract data
+  const accounts = data?.accounts || []
+  const posterTransactions = posterData?.transactions || data?.poster_transactions || []
+  const accountTotals = data?.account_totals
+
+  // Handle back from checklist view
+  const handleBackFromChecklist = useCallback(() => {
+    setSearchParams({})
+  }, [setSearchParams])
+
+  // Handle open checklist view
+  const handleOpenChecklist = useCallback(() => {
+    setSearchParams({ view: 'checklist' })
+  }, [setSearchParams])
+
+  // Render checklist view if param is set
+  if (isChecklistView) {
+    return (
+      <ChecklistView
+        selectedDate={selectedDate}
+        reconciliationData={reconciliationData}
+        posterTransactions={posterTransactions}
+        accounts={accounts}
+        accountTotals={accountTotals}
+        onBack={handleBackFromChecklist}
+      />
+    )
+  }
   const updateMutation = useUpdateExpense()
   const deleteMutation = useDeleteExpense()
   const createMutation = useCreateExpense()
@@ -1070,10 +1433,7 @@ export function Expenses() {
 
   const drafts = data?.drafts || []
   const categories = data?.categories || []
-  const accounts = data?.accounts || []
   const posterAccounts = data?.poster_accounts || []
-  const posterTransactions = posterData?.transactions || data?.poster_transactions || []
-  const accountTotals = data?.account_totals
 
   // Group drafts by account type
   const groupedDrafts = useMemo(() => {
@@ -1292,6 +1652,12 @@ export function Expenses() {
           className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md font-medium text-sm transition-all hover:bg-gray-200 disabled:opacity-50"
         >
           {syncMutation.isPending ? '⏳ Синхронизация...' : '🔄 Синхронизировать'}
+        </button>
+        <button
+          onClick={handleOpenChecklist}
+          className="px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-md font-medium text-sm transition-all hover:bg-indigo-100 hover:border-indigo-300"
+        >
+          📋 Чеклист
         </button>
         <span className="ml-auto text-sm text-gray-500 font-medium">
           Выбрано: <span className="text-gray-900">{selectedIds.size}</span>
