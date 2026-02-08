@@ -1163,7 +1163,7 @@ def list_expenses():
             account_totals['kaspi'] += balance
         elif 'халык' in name_lower or 'halyk' in name_lower:
             account_totals['halyk'] += balance
-        elif 'оставил' in name_lower or 'закуп' in name_lower or 'наличк' in name_lower or 'касс' in name_lower:
+        elif 'оставил' in name_lower:
             account_totals['cash'] += balance
 
     print(f"Account totals: {account_totals}")
@@ -1775,7 +1775,7 @@ def api_get_expenses():
             account_totals['kaspi'] += balance
         elif 'халык' in name_lower or 'halyk' in name_lower:
             account_totals['halyk'] += balance
-        elif 'оставил' in name_lower or 'закуп' in name_lower:
+        elif 'оставил' in name_lower:
             account_totals['cash'] += balance
 
     return jsonify({
