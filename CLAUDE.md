@@ -145,6 +145,26 @@ TIMEZONE                    # Часовой пояс (Asia/Almaty)
 | `expense_drafts` | Черновики расходов (pending → partial → completed) |
 | `supply_drafts` | Черновики поставок |
 | `supply_draft_items` | Позиции черновиков поставок |
+| `shift_reconciliation` | Сверка смены по источникам (cash/kaspi/halyk) |
+
+### Ключевые колонки
+
+**expense_drafts:**
+- `amount` — сумма, которую может редактировать пользователь
+- `poster_amount` — оригинальная сумма из Poster (для сравнения)
+- `poster_transaction_id` — ID транзакции в Poster (для синхронизации)
+- `source` — источник: 'cash', 'kaspi', 'halyk'
+- `completion_status` — 'pending' → 'partial' → 'completed'
+
+**supply_draft_items:**
+- `item_type` — 'ingredient', 'semi_product', 'product'
+- `poster_account_id` — к какому Poster-аккаунту относится ингредиент
+- `poster_account_name` — название заведения
+- `storage_id`, `storage_name` — склад
+
+**supply_drafts:**
+- `source` — метод оплаты: 'cash', 'kaspi', 'halyk'
+- `linked_expense_draft_id` — связь с расходом (для сверки сумм)
 
 ## API Integrations
 
@@ -261,40 +281,209 @@ ingredients[0][id], ingredients[0][type]=1, ingredients[0][num], ingredients[0][
 
 ### Что сделано
 
-#### 1. Закрытие смены (Shift Closing) — готово
-- **`shift_closing.py`** — оркестрация: получение данных продаж, расчёт зарплат, создание транзакций
-- **`cash_shift_closing.py`** — закрытие кассовой смены в 4 шага: получение данных Poster → расчёт итогов → коррекционные транзакции → отчёт. Обрабатывает расхождения по безналу (Kaspi/Halyk)
-- **`cashier_salary.py`** — расчёт зарплат кассиров по таблице норм (зависит от выручки и количества кассиров 2/3)
-- **`doner_salary.py`** — расчёт зарплаты донерщика по количеству проданных (10k-20k₸), бонусная система помощника по времени начала смены (10:00/12:00/14:00)
-- **`salary_flow_handlers.py`** — диалоговый flow для ручного запуска зарплат (APScheduler триггерит в 21:30)
-- **ShiftClosing.tsx** (Mini App) — двухколоночный калькулятор: ввод данных (Wolt, Halyk, Kaspi, купюры, монеты) + данные Poster. Расчёт с debounce, подсветка результатов
-- **API endpoints** — `/api/shift-closing/poster-data` и `/api/shift-closing/calculate`
+#### 1. Закрытие смены (Shift Closing) — ПОЛНОСТЬЮ ГОТОВО
 
-#### 2. Поставки мульти-аккаунт (createSupply) — исправлено (PRs #119–#128)
-- Подробности в секции "Known Issues & Solutions" ниже
-- Fallback-стратегия форматов: docs → legacy → mixed
+**Backend файлы:**
+- **`shift_closing.py`** — оркестрация: получение данных продаж, расчёт зарплат, создание транзакций
+- **`cash_shift_closing.py`** — закрытие кассовой смены в 4 шага: получение данных Poster → расчёт итогов → коррекционные транзакции → отчёт
+- **`cashier_salary.py`** — расчёт зарплат кассиров по таблице норм (зависит от выручки и количества кассиров 2/3)
+- **`doner_salary.py`** — расчёт зарплаты донерщика по количеству проданных (10k-20k₸), бонусная система помощника
+- **`salary_flow_handlers.py`** — диалоговый flow для ручного запуска зарплат (APScheduler триггерит в 21:30)
+
+**Frontend (Mini App):**
+- **`ShiftClosing.tsx`** — калькулятор закрытия смены с debounce-расчётом
+
+**Поля ввода (все в тенге):**
+| Поле | Назначение |
+|------|-----------|
+| `wolt` | Wolt терминал |
+| `halyk` | Halyk терминал |
+| `kaspi` | Kaspi терминал (общий) |
+| `kaspi_cafe` | МИНУС Kaspi от PizzBurg-Cafe (вычитается из kaspi) |
+| `cash_bills` | Наличка бумажными |
+| `cash_coins` | Наличка мелочью |
+| `shift_start` | Смена (остаток на начало) — подтягивается из Poster |
+| `deposits` | Внесения |
+| `expenses` | Расходы с кассы |
+| `cash_to_leave` | Оставить на смену (по умолчанию 15000) |
+
+**Формулы расчёта (`web_app.py:3850-3875`):**
+```python
+# 1. Итого безнал факт = Wolt + Halyk + (Kaspi - Kaspi от Cafe)
+fact_cashless = wolt + halyk + (kaspi - kaspi_cafe)
+
+# 2. Фактический = безнал + наличка (бумажная + мелочь)
+fact_total = fact_cashless + cash_bills + cash_coins
+
+# 3. Итого фактический = Фактический - Смена - Внесения + Расходы
+fact_adjusted = fact_total - shift_start - deposits + expenses
+
+# 4. Итого Poster = Торговля - Бонусы
+poster_total = poster_trade - poster_bonus
+
+# 5. ИТОГО ДЕНЬ = Итого фактический - Итого Poster
+day_result = fact_adjusted - poster_total  # >0 излишек, <0 недостача
+
+# 6. Смена оставили = бумажные оставить + мелочь
+shift_left = cash_to_leave + cash_coins
+
+# 7. Инкассация = Бумажные - оставить бумажными + расходы
+collection = cash_bills - cash_to_leave + expenses
+
+# 8. Разница безнала (для проверки терминалов)
+cashless_diff = fact_cashless - poster_card
+```
+
+**API endpoints:**
+- `GET /api/shift-closing/poster-data` — получает trade_total, bonus, poster_card, shift_start, transactions_count из всех бизнес-аккаунтов
+- `POST /api/shift-closing/calculate` — расчёт по формулам выше, возвращает calculations
+
+**UI особенности:**
+- Два блока: "Фактические данные" (ввод) и "Данные Poster" (readonly)
+- Блок "ИТОГО ДЕНЬ" с цветовой индикацией: зелёный (излишек), красный (недостача)
+- Блок "Инкассация" — итоговая сумма для изъятия
+
+#### 2. Поставки (Supplies) — ПОЛНОСТЬЮ ГОТОВО
+
+**Мульти-аккаунт исправлен (PRs #119–#128):**
+- Fallback-стратегия форматов: docs → legacy → mixed (см. "Known Issues")
 - Раздельная валидация ingredient/product ID
 - Привязка ингредиентов к конкретному аккаунту
 
-#### 3. Синхронизация расходов с Poster — готово
-- Синхронизация теперь **обновляет** существующие черновики если сумма в Poster изменилась (раньше только создавала новые)
-- Новая колонка `poster_amount` в `expense_drafts` — хранит текущую сумму из Poster отдельно от пользовательской
-- Логика: если пользователь вручную менял сумму — его правка сохраняется; если нет — обновляется вместе с Poster
-- Жёлтая подсветка мисматчей в UI: badge "Poster: X₸" с тултипом
-- Авто-синхронизация каждые 5 минут
-- Сортировка по статусу, убрана легенда, улучшены индикаторы типов
+**Новые фичи:**
+- **Селектор источника оплаты** (`selectedSource`: cash/kaspi/halyk) вместо аккаунта
+- **Preload всех ингредиентов** без лимита 50 при загрузке страницы
+- **Instant autocomplete** — данные уже загружены, поиск мгновенный
+- **Dropdown открывается вверх** — fixed positioning для видимости
+- **Автокомплит поставщиков** с fuzzy-поиском по алиасам
+- **Повтор последней поставки** — загружает позиции предыдущей поставки от поставщика
+- **Подсказки по последней цене** — кликабельные, подставляют цену
 
-#### 4. Улучшения UI поставок — готово
-- Автокомплит поставщиков
-- Повтор последней поставки
-- Подсказки по последней цене (кликабельные)
-- Показ названий заведений вместо складов
+#### 3. Синхронизация расходов с Poster — готово
+- Синхронизация **обновляет** существующие черновики если сумма в Poster изменилась
+- Колонка `poster_amount` в `expense_drafts` — хранит сумму из Poster отдельно от пользовательской
+- Логика: если пользователь вручную менял сумму — его правка сохраняется; если нет — обновляется вместе с Poster
+- Жёлтая подсветка мисматчей в UI: badge "Poster: X₸"
+- Авто-синхронизация каждые 5 минут
+
+### Poster API — ID финансовых счетов (ВАЖНО!)
+
+Для расчёта выручки по источникам используются ID из `dash.getTransactions`:
+- **Kaspi** — несколько ID (1, 2, 6, ...) — нужно суммировать все non-cash счета кроме Halyk
+- **Halyk** — отдельный ID
+- **Cash** — наличка
+
+**Код получения выручки (`web_app.py:3712+`):**
+```python
+# Totals for reconciliation (sum from ALL business accounts)
+# Суммируем транзакции по account_id чтобы получить Kaspi, Halyk, Cash
+```
+
+### Бизнес-логика Pizzburg
+
+**Два заведения:**
+- **Pizzburg** (основной) — свои ингредиенты, поставщики, Kaspi терминал
+- **Pizzburg-Cafe** — отдельный аккаунт в Poster, но **использует Kaspi терминал Pizzburg**
+
+**Особенность:** При закрытии смены Pizzburg нужно вычесть `kaspi_cafe` (оплаты которые прошли через общий терминал, но относятся к Cafe).
 
 ### Известные ограничения / TODO
 
-1. **`cash_shift_closing.py:48`** — `shift_start` берётся из `finance.getReport`, но не всегда доступен (fallback = 0). Нужно определить надёжный источник
-2. **Нет автоматического закрытия смены** — всё запускается вручную или через запланированный диалог (21:30)
-3. **Poster API createSupply** — требует fallback-стратегии из-за противоречивой документации. Рабочие маппинги типов задокументированы ниже в "Known Issues"
+1. **`shift_start`** — берётся из Poster API, но не всегда доступен (fallback = 0). В UI есть поле для ручного ввода
+2. **Нет автоматического закрытия смены** — запускается вручную через Mini App или диалог (21:30)
+3. **Poster API createSupply** — требует fallback-стратегии из-за противоречивой документации (см. "Known Issues")
+
+## Mini App Types (TypeScript)
+
+Ключевые типы в `mini_app/src/types/index.ts`:
+
+### Shift Closing (Закрытие смены)
+
+```typescript
+interface ShiftClosingPosterData {
+  trade_total: number      // Торговля за день (без бонусов) - в тийинах
+  bonus: number            // Бонусы (онлайн-оплата) - в тийинах
+  poster_card: number      // Безнал в Poster (картой) - в тийинах
+  shift_start: number      // Остаток на начало смены - в тийинах
+  transactions_count: number
+}
+
+interface ShiftClosingCalculations {
+  fact_cashless: number    // Итого безнал факт
+  fact_total: number       // Фактический
+  fact_adjusted: number    // Итого фактический
+  poster_total: number     // Итого Poster
+  day_result: number       // ИТОГО ДЕНЬ (>0 излишек, <0 недостача)
+  shift_left: number       // Смена оставили
+  collection: number       // Инкассация
+  cashless_diff: number    // Разница безнала
+}
+```
+
+### Поставки (Supplies)
+
+```typescript
+interface PosterItem {
+  id: number
+  name: string
+  type: 'ingredient' | 'semi_product' | 'product'
+  poster_account_id?: number    // К какому аккаунту Poster относится
+  poster_account_name?: string  // Название заведения
+  storage_id?: number           // ID склада
+}
+
+interface SupplyItemInput {
+  id: number
+  name: string
+  type: 'ingredient' | 'semi_product' | 'product'
+  quantity: number
+  price: number
+  unit: string
+  poster_account_id?: number  // ВАЖНО: привязка к конкретному аккаунту
+  lastPrice?: number          // Для подсказки о прошлой цене
+}
+
+interface CreateSupplyRequest {
+  supplier_id: number
+  source: ExpenseSource  // 'cash' | 'kaspi' | 'halyk'
+  items: SupplyItemInput[]
+}
+```
+
+### Расходы (Expenses)
+
+```typescript
+type ExpenseSource = 'cash' | 'kaspi' | 'halyk'
+type ExpenseType = 'transaction' | 'supply'
+type CompletionStatus = 'pending' | 'partial' | 'completed'
+
+interface ExpenseDraft {
+  id: number
+  amount: number
+  poster_amount: number | null  // Сумма из Poster (для сравнения)
+  source: ExpenseSource
+  completion_status: CompletionStatus
+  is_income: boolean
+}
+
+interface AccountTotals {
+  kaspi: number  // Сумма по Kaspi счетам
+  halyk: number  // Сумма по Halyk счетам
+  cash: number   // Остаток в кассе
+}
+```
+
+## Валюта и единицы
+
+**ВАЖНО:** Poster API возвращает суммы в **тийинах** (1/100 тенге). При отображении в UI нужно делить на 100.
+
+```python
+# Backend: конвертация из тийинов в тенге
+poster_trade = float(data.get('poster_trade', 0)) / 100
+
+# Frontend: суммы уже в тенге после API
+formatMoney(posterData.trade_total / 100)  // делим при отображении
+```
 
 ## Code Style & Conventions
 
@@ -305,3 +494,25 @@ ingredients[0][id], ingredients[0][type]=1, ingredients[0][num], ingredients[0][
 - Черновики (drafts) — основной паттерн для расходов и поставок перед созданием в Poster
 - Валюта по умолчанию — KZT, часовой пояс — Asia/Almaty
 - Frontend: компоненты в `mini_app/src/pages/`, хуки в `mini_app/src/hooks/`
+
+## Важные нюансы для разработки
+
+### 1. Мульти-аккаунт Poster
+- У пользователя может быть несколько бизнес-аккаунтов (Pizzburg, Pizzburg-Cafe)
+- Каждый аккаунт имеет свои ингредиенты с уникальными ID
+- При создании поставки нужно отправлять `poster_account_id` ингредиента
+- Ошибка 32 от Poster API часто означает что ID ингредиента не существует в целевом аккаунте
+
+### 2. Dropdown autocomplete в Mobile UI
+- Используй `position: fixed` для dropdown чтобы не обрезался родительским контейнером
+- Для мобильных экранов dropdown лучше открывать вверх (`bottom: 100%`)
+- Preload данных — загружай все ингредиенты при входе на страницу, не на каждый keystroke
+
+### 3. Debounce для расчётов
+- Используй 300ms debounce для пересчёта при вводе в калькуляторах
+- Показывай индикатор "Пересчёт..." во время расчёта
+
+### 4. Синхронизация с Poster
+- Автоматическая синхронизация расходов каждые 5 минут
+- При синхронизации проверяй `poster_transaction_id` чтобы не дублировать
+- Храни `poster_amount` отдельно от `amount` чтобы сохранять ручные правки пользователя

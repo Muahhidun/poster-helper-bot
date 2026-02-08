@@ -1048,26 +1048,18 @@ def list_expenses():
     # Initialize with default empty structures for all expected sources
     # For kaspi/halyk: use opening_balance to store fact_balance (user-entered actual balance)
     reconciliation = {
-        'cash': {'opening_balance': None, 'closing_balance': None, 'total_difference': None, 'notes': None},
+        'cash': {'fact_balance': None, 'total_difference': None, 'notes': None},
         'kaspi': {'fact_balance': None, 'total_difference': None, 'notes': None},
         'halyk': {'fact_balance': None, 'total_difference': None, 'notes': None},
     }
     for row in reconciliation_rows:
         source = row['source']
-        if source == 'cash':
-            reconciliation[source] = {
-                'opening_balance': row.get('opening_balance'),
-                'closing_balance': row.get('closing_balance'),
-                'total_difference': row.get('total_difference'),
-                'notes': row.get('notes'),
-            }
-        else:
-            # For kaspi/halyk: opening_balance stores fact_balance
-            reconciliation[source] = {
-                'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
-                'total_difference': row.get('total_difference'),
-                'notes': row.get('notes'),
-            }
+        # For all sources: opening_balance column stores fact_balance
+        reconciliation[source] = {
+            'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
+            'total_difference': row.get('total_difference'),
+            'notes': row.get('notes'),
+        }
 
     # Load categories, accounts, poster_accounts, and transactions for sync check
     categories = []
@@ -1919,23 +1911,15 @@ def api_get_shift_reconciliation():
     rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, date)
 
     # Convert to dict keyed by source for easy frontend access
-    # For kaspi/halyk: opening_balance stores fact_balance
+    # For all sources: opening_balance column stores fact_balance
     reconciliation = {}
     for row in rows:
         source = row['source']
-        if source == 'cash':
-            reconciliation[source] = {
-                'opening_balance': row.get('opening_balance'),
-                'closing_balance': row.get('closing_balance'),
-                'total_difference': row.get('total_difference'),
-                'notes': row.get('notes'),
-            }
-        else:
-            reconciliation[source] = {
-                'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
-                'total_difference': row.get('total_difference'),
-                'notes': row.get('notes'),
-            }
+        reconciliation[source] = {
+            'fact_balance': row.get('opening_balance'),  # Store fact_balance in opening_balance column
+            'total_difference': row.get('total_difference'),
+            'notes': row.get('notes'),
+        }
 
     return jsonify({
         'date': date,

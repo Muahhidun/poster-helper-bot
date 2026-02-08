@@ -29,6 +29,9 @@
             <button type="button" id="sync-poster-btn" class="btn btn-secondary">
                 🔄 Синхронизировать
             </button>
+            <button type="button" id="export-checklist-btn" class="btn btn-secondary">
+                📋 Чеклист
+            </button>
             <span class="selected-count">Выбрано: <span id="count">0</span></span>
         </div>
 
@@ -37,16 +40,15 @@
             <div class="section-header-wrapper">
                 <h2 class="section-header">💵 Наличка</h2>
                 <div class="reconciliation-row" data-source="cash">
-                    <label>Было:</label>
-                    <input type="number" class="reconciliation-input" id="cash-opening"
-                           value="{{ reconciliation.cash.opening_balance|default('', true) }}"
+                    <label>Факт:</label>
+                    <input type="number" class="reconciliation-input" id="cash-fact-input"
+                           value="{{ reconciliation.cash.fact_balance|default('', true) }}"
                            placeholder="0" step="1">
-                    <label>Оставил:</label>
-                    <input type="number" class="reconciliation-input" id="cash-closing"
-                           value="{{ reconciliation.cash.closing_balance|default('', true) }}"
-                           placeholder="0" step="1">
+                    <span class="poster-balance-display">
+                        Poster: <strong id="cash-poster-balance">{{ "{:,.0f}".format(account_totals.cash|default(0)) }}</strong>₸
+                    </span>
                     <span class="reconciliation-result">
-                        Итого: <strong id="cash-difference" class="difference-value">0</strong>₸
+                        Разница: <strong id="cash-difference" class="difference-value">0</strong>₸
                     </span>
                 </div>
             </div>
@@ -393,6 +395,25 @@
         <p>Добавьте расход в нужную секцию или отправьте фото/Kaspi выписку в бота.</p>
     </div>
     {% endif %}
+</div>
+
+<!-- Checklist Modal -->
+<div id="checklist-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content checklist-modal">
+        <div class="modal-header">
+            <h3>Чеклист расходов</h3>
+            <button type="button" class="modal-close" id="close-checklist-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="checklist-sections"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="copy-checklist-btn">
+                📋 Копировать
+            </button>
+            <span id="copy-status" class="copy-status"></span>
+        </div>
+    </div>
 </div>
 
 <style>
@@ -985,6 +1006,150 @@ input[type="checkbox"] {
 @media (max-width: 900px) {
     .edit-description { width: 100px; }
     .edit-category { width: 100px; }
+}
+
+/* Checklist Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    max-width: 500px;
+    width: 100%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.checklist-modal {
+    background: #1a1a1a;
+    color: #ffffff;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid #333;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #888;
+    line-height: 1;
+    padding: 0;
+}
+
+.modal-close:hover {
+    color: #fff;
+}
+
+.modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.modal-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-top: 1px solid #333;
+}
+
+.checklist-section {
+    margin-bottom: 20px;
+}
+
+.checklist-section-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: #fff;
+}
+
+.checklist-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    cursor: pointer;
+}
+
+.checklist-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    margin: 0 -8px;
+    padding: 8px;
+    border-radius: 4px;
+}
+
+.checklist-checkbox {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #666;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 2px;
+}
+
+.checklist-item.checked .checklist-checkbox {
+    background: #f5a623;
+    border-color: #f5a623;
+}
+
+.checklist-item.checked .checklist-checkbox::after {
+    content: '\\2714';
+    color: #000;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.checklist-item.checked .checklist-text {
+    text-decoration: line-through;
+    color: #888;
+}
+
+.checklist-text {
+    flex: 1;
+    font-size: 15px;
+    line-height: 1.4;
+}
+
+.checklist-amount {
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.copy-status {
+    font-size: 13px;
+    color: var(--accent-green);
 }
 </style>
 
@@ -2332,41 +2497,28 @@ async function saveReconciliation(source, data) {
     }
 }
 
-// Calculate and update cash difference
+// Calculate and update cash difference (Fact vs Poster balance)
 function updateCashDifference() {
-    const openingInput = document.getElementById('cash-opening');
-    const closingInput = document.getElementById('cash-closing');
+    const factInput = document.getElementById('cash-fact-input');
+    const posterBalanceEl = document.getElementById('cash-poster-balance');
     const diffEl = document.getElementById('cash-difference');
 
-    const opening = parseFloat(openingInput.value) || 0;
-    const closing = parseFloat(closingInput.value) || 0;
+    const fact = parseFloat(factInput.value) || 0;
+    // Parse Poster balance from display (remove formatting)
+    const posterText = posterBalanceEl.textContent.replace(/[^\d.-]/g, '');
+    const poster = parseFloat(posterText) || 0;
 
-    // Get total expenses for cash section (excluding placeholder rows)
-    let totalExpenses = 0;
-    let totalIncome = 0;
-    document.querySelectorAll('#drafts-tbody-cash .draft-row:not(.placeholder-row)').forEach(row => {
-        const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
-        const isIncome = row.classList.contains('income') || row.dataset.isIncome === '1';
-        if (isIncome) {
-            totalIncome += amount;
-        } else {
-            totalExpenses += amount;
-        }
-    });
+    // Difference = Fact - Poster
+    // Positive = surplus (we have more than Poster shows)
+    // Negative = shortage (we have less than Poster shows)
+    const difference = fact - poster;
 
-    // Cash difference = closing - (opening + income - expenses)
-    // If positive = we have more cash than expected (good)
-    // If negative = we have less cash than expected (shortage)
-    const expected = opening + totalIncome - totalExpenses;
-    const difference = closing - expected;
-
-    // Update display
     diffEl.textContent = (difference >= 0 ? '+' : '') + difference.toLocaleString('ru-RU');
     diffEl.classList.remove('positive', 'negative');
     if (difference > 0) diffEl.classList.add('positive');
     else if (difference < 0) diffEl.classList.add('negative');
 
-    return { opening_balance: opening, closing_balance: closing, total_difference: difference };
+    return { fact_balance: fact, poster_balance: poster, total_difference: difference };
 }
 
 // Update kaspi/halyk difference display
@@ -2407,13 +2559,7 @@ function initReconciliation() {
 }
 
 // Event listeners for reconciliation inputs
-document.getElementById('cash-opening')?.addEventListener('input', function() {
-    const data = updateCashDifference();
-    clearTimeout(reconciliationTimeout);
-    reconciliationTimeout = setTimeout(() => saveReconciliation('cash', data), 500);
-});
-
-document.getElementById('cash-closing')?.addEventListener('input', function() {
+document.getElementById('cash-fact-input')?.addEventListener('input', function() {
     const data = updateCashDifference();
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('cash', data), 500);
@@ -2449,6 +2595,130 @@ document.addEventListener('change', function(e) {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initReconciliation();
+});
+
+// ========================================
+// Checklist Export Functionality
+// ========================================
+
+function openChecklistModal() {
+    const modal = document.getElementById('checklist-modal');
+    const sectionsContainer = document.getElementById('checklist-sections');
+
+    // Collect expenses by section
+    const sections = [
+        { id: 'kaspi', title: 'Kaspi', emoji: '' },
+        { id: 'cash', title: 'Nalichka', emoji: '' }
+    ];
+
+    let html = '';
+
+    sections.forEach(section => {
+        const tbody = document.getElementById(`drafts-tbody-${section.id}`);
+        if (!tbody) return;
+
+        const rows = tbody.querySelectorAll('.draft-row:not(.placeholder-row)');
+        if (rows.length === 0) return;
+
+        // Build items for this section
+        const items = [];
+        rows.forEach(row => {
+            const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
+            const description = row.querySelector('.edit-description')?.value || '';
+            const isCompleted = row.classList.contains('completed') ||
+                               row.querySelector('.btn-completion')?.dataset.status === 'completed';
+
+            if (amount > 0 || description) {
+                items.push({
+                    amount: Math.round(amount),
+                    description: description.trim(),
+                    checked: isCompleted
+                });
+            }
+        });
+
+        if (items.length === 0) return;
+
+        html += `<div class="checklist-section">`;
+        html += `<div class="checklist-section-title">${section.title}</div>`;
+
+        items.forEach((item, idx) => {
+            const checkedClass = item.checked ? 'checked' : '';
+            html += `
+                <div class="checklist-item ${checkedClass}" data-section="${section.id}" data-index="${idx}">
+                    <div class="checklist-checkbox"></div>
+                    <div class="checklist-text">
+                        <span class="checklist-amount">${item.amount.toLocaleString('ru-RU')}</span>
+                        ${item.description}
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `</div>`;
+    });
+
+    if (!html) {
+        html = '<p style="color: #888; text-align: center;">No raskhoda</p>';
+    }
+
+    sectionsContainer.innerHTML = html;
+    modal.style.display = 'flex';
+
+    // Add click handlers for checklist items
+    sectionsContainer.querySelectorAll('.checklist-item').forEach(item => {
+        item.addEventListener('click', function() {
+            this.classList.toggle('checked');
+        });
+    });
+}
+
+function closeChecklistModal() {
+    document.getElementById('checklist-modal').style.display = 'none';
+}
+
+function copyChecklistToClipboard() {
+    const sectionsContainer = document.getElementById('checklist-sections');
+    const sections = sectionsContainer.querySelectorAll('.checklist-section');
+
+    let text = '';
+
+    sections.forEach(section => {
+        const title = section.querySelector('.checklist-section-title')?.textContent || '';
+        text += title + '\n';
+
+        const items = section.querySelectorAll('.checklist-item');
+        items.forEach(item => {
+            const isChecked = item.classList.contains('checked');
+            const amount = item.querySelector('.checklist-amount')?.textContent || '';
+            const description = item.querySelector('.checklist-text')?.textContent?.replace(amount, '').trim() || '';
+
+            const checkbox = isChecked ? '[x]' : '[ ]';
+            text += `${checkbox} ${amount} ${description}\n`;
+        });
+
+        text += '\n';
+    });
+
+    navigator.clipboard.writeText(text.trim()).then(() => {
+        const status = document.getElementById('copy-status');
+        status.textContent = 'Skopirovano!';
+        setTimeout(() => { status.textContent = ''; }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+    });
+}
+
+// Event listeners for checklist modal
+document.getElementById('export-checklist-btn')?.addEventListener('click', openChecklistModal);
+document.getElementById('close-checklist-modal')?.addEventListener('click', closeChecklistModal);
+document.getElementById('copy-checklist-btn')?.addEventListener('click', copyChecklistToClipboard);
+
+// Close modal on overlay click
+document.getElementById('checklist-modal')?.addEventListener('click', function(e) {
+    if (e.target === this) {
+        closeChecklistModal();
+    }
 });
 </script>
 {% endblock %}
