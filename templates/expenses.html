@@ -405,17 +405,35 @@
             <button type="button" class="modal-close" id="close-checklist-modal">&times;</button>
         </div>
         <div class="modal-body">
-            <!-- Source sections with differences -->
+            <!-- General notes at the very top -->
+            <div class="checklist-general-notes">
+                <label for="checklist-general-notes-input">Общие заметки</label>
+                <textarea id="checklist-general-notes-input"
+                          placeholder="Дополнительные заметки..."></textarea>
+            </div>
+
+            <!-- Source sections with differences (order: Cash, Kaspi, Halyk) -->
             <div class="checklist-sources">
+                <div class="checklist-source-item">
+                    <div class="checklist-source-header">
+                        <span class="checklist-source-icon">💵</span>
+                        <span class="checklist-source-name">Наличка</span>
+                        <span class="checklist-source-diff" id="checklist-cash-diff">0₸</span>
+                    </div>
+                    <textarea class="checklist-source-notes" id="checklist-cash-notes"
+                              placeholder="Было / Оставил..."></textarea>
+                    <div class="checklist-expenses-list" id="checklist-cash-expenses"></div>
+                </div>
+
                 <div class="checklist-source-item">
                     <div class="checklist-source-header">
                         <span class="checklist-source-icon">📱</span>
                         <span class="checklist-source-name">Kaspi</span>
                         <span class="checklist-source-diff" id="checklist-kaspi-diff">0₸</span>
                     </div>
-                    <div class="checklist-expenses-list" id="checklist-kaspi-expenses"></div>
                     <textarea class="checklist-source-notes" id="checklist-kaspi-notes"
                               placeholder="Заметки по Kaspi..."></textarea>
+                    <div class="checklist-expenses-list" id="checklist-kaspi-expenses"></div>
                 </div>
 
                 <div class="checklist-source-item">
@@ -424,25 +442,20 @@
                         <span class="checklist-source-name">Halyk</span>
                         <span class="checklist-source-diff" id="checklist-halyk-diff">0₸</span>
                     </div>
-                    <div class="checklist-expenses-list" id="checklist-halyk-expenses"></div>
                     <textarea class="checklist-source-notes" id="checklist-halyk-notes"
                               placeholder="Заметки по Halyk..."></textarea>
-                </div>
-
-                <div class="checklist-source-item">
-                    <div class="checklist-source-header">
-                        <span class="checklist-source-icon">💵</span>
-                        <span class="checklist-source-name">Наличка</span>
-                        <span class="checklist-source-diff" id="checklist-cash-diff">0₸</span>
-                    </div>
-                    <div class="checklist-expenses-list" id="checklist-cash-expenses"></div>
-                    <textarea class="checklist-source-notes" id="checklist-cash-notes"
-                              placeholder="Было / Оставил..."></textarea>
+                    <div class="checklist-expenses-list" id="checklist-halyk-expenses"></div>
                 </div>
             </div>
 
             <!-- Verification checkboxes -->
             <div class="checklist-verifications">
+                <label class="checklist-verify-item">
+                    <input type="checkbox" id="check-cash-verified">
+                    <span class="checklist-verify-box"></span>
+                    <span class="checklist-verify-text">Наличка сверена</span>
+                </label>
+
                 <label class="checklist-verify-item">
                     <input type="checkbox" id="check-kaspi-verified">
                     <span class="checklist-verify-box"></span>
@@ -456,12 +469,6 @@
                 </label>
 
                 <label class="checklist-verify-item">
-                    <input type="checkbox" id="check-cash-verified">
-                    <span class="checklist-verify-box"></span>
-                    <span class="checklist-verify-text">Наличка сверена</span>
-                </label>
-
-                <label class="checklist-verify-item">
                     <input type="checkbox" id="check-poster-verified">
                     <span class="checklist-verify-box"></span>
                     <span class="checklist-verify-text">Poster проверен</span>
@@ -472,13 +479,6 @@
                     <span class="checklist-verify-box"></span>
                     <span class="checklist-verify-text">Инкассация сделана</span>
                 </label>
-            </div>
-
-            <!-- General notes -->
-            <div class="checklist-general-notes">
-                <label for="checklist-general-notes-input">Общие заметки</label>
-                <textarea id="checklist-general-notes-input"
-                          placeholder="Дополнительные заметки..."></textarea>
             </div>
         </div>
         <div class="modal-footer">
@@ -3128,33 +3128,38 @@ function copyChecklistToClipboard() {
 
     // Build text
     let text = `📋 Чеклист закрытия смены\n`;
-    text += `📅 ${formattedDate}\n\n`;
+    text += `📅 ${formattedDate}\n`;
 
-    text += `📱 Kaspi: ${kaspiDiff}\n`;
-    if (kaspiExpenses) text += kaspiExpenses;
-    if (kaspiNotes) text += `📝 ${kaspiNotes}\n`;
+    // General notes at the top
+    if (generalNotes) {
+        text += `\n📝 ${generalNotes}\n`;
+    }
     text += `\n`;
 
-    text += `🏦 Halyk: ${halykDiff}\n`;
-    if (halykExpenses) text += halykExpenses;
-    if (halykNotes) text += `📝 ${halykNotes}\n`;
-    text += `\n`;
-
+    // Cash first
     text += `💵 Наличка: ${cashDiff}\n`;
-    if (cashExpenses) text += cashExpenses;
     if (cashNotes) text += `📝 ${cashNotes}\n`;
+    if (cashExpenses) text += cashExpenses;
+    text += `\n`;
+
+    // Kaspi second
+    text += `📱 Kaspi: ${kaspiDiff}\n`;
+    if (kaspiNotes) text += `📝 ${kaspiNotes}\n`;
+    if (kaspiExpenses) text += kaspiExpenses;
+    text += `\n`;
+
+    // Halyk third
+    text += `🏦 Halyk: ${halykDiff}\n`;
+    if (halykNotes) text += `📝 ${halykNotes}\n`;
+    if (halykExpenses) text += halykExpenses;
     text += `\n`;
 
     text += `--- Проверки ---\n`;
+    text += `${cashVerified ? '✅' : '⬜'} Наличка сверена\n`;
     text += `${kaspiVerified ? '✅' : '⬜'} Kaspi сверен\n`;
     text += `${halykVerified ? '✅' : '⬜'} Halyk сверен\n`;
-    text += `${cashVerified ? '✅' : '⬜'} Наличка сверена\n`;
     text += `${posterVerified ? '✅' : '⬜'} Poster проверен\n`;
     text += `${collectionDone ? '✅' : '⬜'} Инкассация сделана\n`;
-
-    if (generalNotes) {
-        text += `\n--- Заметки ---\n${generalNotes}\n`;
-    }
 
     navigator.clipboard.writeText(text.trim()).then(() => {
         const status = document.getElementById('copy-status');
