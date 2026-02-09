@@ -458,6 +458,382 @@ h1 { margin: 0; }
     0% { background-color: #d4edda; }
     100% { background-color: transparent; }
 }
+
+/* ==============================================
+   MOBILE RESPONSIVE STYLES (iPhone 17 Pro, etc.)
+   ============================================== */
+@media (max-width: 480px) {
+    /* Container */
+    .container {
+        padding: 12px 8px;
+        max-width: 100%;
+    }
+
+    /* Page header - stack vertically */
+    .page-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+    }
+
+    h1 {
+        font-size: 20px;
+        text-align: center;
+    }
+
+    #add-supply-btn {
+        width: 100%;
+        justify-content: center;
+        min-height: 44px;
+    }
+
+    /* Supply card */
+    .supply-card {
+        margin-bottom: 16px;
+    }
+
+    /* Supply header - stack vertically */
+    .supply-header {
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+    }
+
+    .supply-info {
+        width: 100%;
+    }
+
+    /* Supplier row - stack */
+    .supplier-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .supplier-row label {
+        font-size: 12px;
+    }
+
+    .supplier-search-wrapper {
+        max-width: none;
+        width: 100%;
+    }
+
+    .supplier-input {
+        font-size: 16px;
+        padding: 10px 12px;
+        min-height: 44px;
+    }
+
+    .btn-repeat-supply {
+        width: 100%;
+        text-align: center;
+        margin-left: 0;
+        padding: 10px;
+        min-height: 44px;
+    }
+
+    /* Meta row - wrap and stack */
+    .meta-row {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .amount {
+        font-size: 1em;
+    }
+
+    .source-select {
+        padding: 8px 10px;
+        font-size: 14px;
+        min-height: 36px;
+    }
+
+    .badge {
+        font-size: 10px;
+        padding: 3px 6px;
+    }
+
+    /* Supply actions - horizontal */
+    .supply-actions {
+        width: 100%;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+
+    .btn-process {
+        flex: 1;
+        text-align: center;
+        padding: 10px;
+        min-height: 44px;
+        font-size: 14px;
+    }
+
+    .btn-delete-supply {
+        padding: 10px 14px;
+        min-height: 44px;
+        font-size: 14px;
+    }
+
+    /* Supply items section */
+    .supply-items {
+        padding: 12px;
+    }
+
+    /* Items header - stack */
+    .items-header {
+        flex-direction: column;
+        gap: 10px;
+        align-items: stretch;
+    }
+
+    .items-header span {
+        font-size: 14px;
+    }
+
+    .add-item-search {
+        width: 100%;
+    }
+
+    .item-search-input {
+        font-size: 16px;
+        padding: 10px 12px;
+        min-height: 44px;
+    }
+
+    /* Search results dropdown */
+    .search-results {
+        max-height: 200px;
+    }
+
+    .search-result-item {
+        padding: 12px;
+        min-height: 44px;
+    }
+
+    .search-result-item .account-tag {
+        font-size: 10px;
+    }
+
+    /* Items table - transform to card layout */
+    .items-table {
+        display: block;
+    }
+
+    .items-table thead {
+        display: none;
+    }
+
+    .items-table tbody {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .items-table tbody tr {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 10px;
+        background: #f9f9f9;
+        border: 1px solid #eee;
+        border-radius: 6px;
+        align-items: center;
+    }
+
+    .items-table tbody tr td {
+        border: none;
+        padding: 0;
+    }
+
+    /* Ingredient name - full width */
+    .items-table tbody tr td:nth-child(1) {
+        flex: 1 1 100%;
+        order: 1;
+    }
+
+    .ingredient-name {
+        font-size: 14px;
+    }
+
+    .account-badge {
+        font-size: 9px;
+        padding: 2px 4px;
+    }
+
+    /* Hide account column on mobile - shown in name cell */
+    .items-table tbody tr td:nth-child(2) {
+        display: none;
+    }
+
+    /* Quantity */
+    .items-table tbody tr td:nth-child(3) {
+        flex: 0 0 70px;
+        order: 2;
+    }
+
+    .items-table tbody tr td:nth-child(3)::before {
+        content: "Кол: ";
+        font-size: 10px;
+        color: #888;
+    }
+
+    /* Price */
+    .items-table tbody tr td:nth-child(4) {
+        flex: 0 0 90px;
+        order: 3;
+    }
+
+    .price-cell {
+        flex-direction: column;
+        gap: 2px;
+        align-items: flex-start;
+    }
+
+    .items-table tbody tr td:nth-child(4)::before {
+        content: "Цена: ";
+        font-size: 10px;
+        color: #888;
+    }
+
+    /* Sum */
+    .items-table tbody tr td:nth-child(5) {
+        flex: 0 0 90px;
+        order: 4;
+    }
+
+    .items-table tbody tr td:nth-child(5)::before {
+        content: "= ";
+        font-size: 10px;
+        color: #888;
+    }
+
+    /* Delete button */
+    .items-table tbody tr td:nth-child(6) {
+        flex: 0 0 auto;
+        order: 5;
+        margin-left: auto;
+    }
+
+    /* Item inputs - adjust sizes */
+    .item-input {
+        font-size: 14px;
+        padding: 8px 6px;
+        min-height: 40px;
+    }
+
+    .item-input.qty {
+        width: 50px;
+    }
+
+    .item-input.price {
+        width: 70px;
+    }
+
+    .item-input.sum {
+        width: 70px;
+    }
+
+    .last-price-hint {
+        font-size: 10px;
+    }
+
+    .btn-delete-item {
+        padding: 8px;
+        font-size: 14px;
+        min-width: 40px;
+        min-height: 40px;
+    }
+
+    /* Table footer */
+    .items-table tfoot {
+        display: block;
+        padding: 10px;
+        background: #f5f5f5;
+        border-radius: 0 0 6px 6px;
+    }
+
+    .items-table tfoot tr {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .items-table tfoot td {
+        border: none;
+        padding: 0;
+    }
+
+    .items-table tfoot td[colspan] {
+        flex: none;
+    }
+
+    .items-total {
+        font-size: 16px;
+    }
+
+    /* Summary */
+    .summary {
+        padding: 12px;
+        font-size: 13px;
+    }
+
+    /* Empty state */
+    .empty-state {
+        padding: 30px 16px;
+    }
+
+    /* Supplier results dropdown */
+    .supplier-results {
+        max-height: 180px;
+    }
+
+    .supplier-result-item {
+        padding: 12px;
+        min-height: 44px;
+    }
+}
+
+/* Even smaller screens (iPhone SE, etc.) */
+@media (max-width: 375px) {
+    .container {
+        padding: 8px 4px;
+    }
+
+    h1 {
+        font-size: 18px;
+    }
+
+    .supplier-input {
+        font-size: 14px;
+    }
+
+    .item-input {
+        font-size: 13px;
+        padding: 6px 4px;
+    }
+
+    .item-input.qty {
+        width: 45px;
+    }
+
+    .item-input.price {
+        width: 60px;
+    }
+
+    .item-input.sum {
+        width: 60px;
+    }
+
+    .ingredient-name {
+        font-size: 13px;
+    }
+
+    .btn-process,
+    .btn-delete-supply {
+        font-size: 12px;
+    }
+}
 </style>
 
 <script>

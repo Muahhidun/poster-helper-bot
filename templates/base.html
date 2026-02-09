@@ -60,6 +60,33 @@
             background: #f0fdf4;
             color: #059669;
         }
+
+        /* Mobile responsive navbar */
+        @media (max-width: 480px) {
+            .modern-nav {
+                padding: 0 12px;
+                height: 48px;
+            }
+            .modern-nav .brand {
+                font-size: 16px;
+            }
+            .modern-nav .nav-links {
+                gap: 2px;
+            }
+            .modern-nav .nav-links a {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+        }
+        @media (max-width: 375px) {
+            .modern-nav .brand {
+                font-size: 14px;
+            }
+            .modern-nav .nav-links a {
+                padding: 6px 8px;
+                font-size: 11px;
+            }
+        }
     </style>
 </head>
 <body style="background: #f9fafb;">
