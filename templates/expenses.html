@@ -413,6 +413,7 @@
                         <span class="checklist-source-name">Kaspi</span>
                         <span class="checklist-source-diff" id="checklist-kaspi-diff">0₸</span>
                     </div>
+                    <div class="checklist-expenses-list" id="checklist-kaspi-expenses"></div>
                     <textarea class="checklist-source-notes" id="checklist-kaspi-notes"
                               placeholder="Заметки по Kaspi..."></textarea>
                 </div>
@@ -423,6 +424,7 @@
                         <span class="checklist-source-name">Halyk</span>
                         <span class="checklist-source-diff" id="checklist-halyk-diff">0₸</span>
                     </div>
+                    <div class="checklist-expenses-list" id="checklist-halyk-expenses"></div>
                     <textarea class="checklist-source-notes" id="checklist-halyk-notes"
                               placeholder="Заметки по Halyk..."></textarea>
                 </div>
@@ -433,6 +435,7 @@
                         <span class="checklist-source-name">Наличка</span>
                         <span class="checklist-source-diff" id="checklist-cash-diff">0₸</span>
                     </div>
+                    <div class="checklist-expenses-list" id="checklist-cash-expenses"></div>
                     <textarea class="checklist-source-notes" id="checklist-cash-notes"
                               placeholder="Было / Оставил..."></textarea>
                 </div>
@@ -1219,6 +1222,91 @@ input[type="checkbox"] {
 
 .checklist-source-notes::placeholder {
     color: #666;
+}
+
+/* Expense items in checklist */
+.checklist-expenses-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.checklist-expenses-list:empty {
+    display: none;
+}
+
+.checklist-expense-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    background: #1a1a1a;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.checklist-expense-item:hover {
+    background: #222;
+}
+
+.checklist-expense-item input[type="checkbox"] {
+    display: none;
+}
+
+.checklist-expense-checkbox {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #f5a623;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+}
+
+.checklist-expense-item input:checked + .checklist-expense-checkbox {
+    background: #f5a623;
+}
+
+.checklist-expense-item input:checked + .checklist-expense-checkbox::after {
+    content: '\2714';
+    color: #000;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.checklist-expense-amount {
+    font-weight: 600;
+    font-size: 14px;
+    color: #fff;
+    min-width: 70px;
+    transition: all 0.15s ease;
+}
+
+.checklist-expense-item input:checked ~ .checklist-expense-amount {
+    text-decoration: line-through;
+    color: #666;
+}
+
+.checklist-expense-desc {
+    font-size: 13px;
+    color: #aaa;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.15s ease;
+}
+
+.checklist-expense-item input:checked ~ .checklist-expense-desc {
+    text-decoration: line-through;
+    color: #555;
 }
 
 /* Verification checkboxes */
@@ -2799,12 +2887,19 @@ function loadChecklistData() {
         cashVerified: false,
         posterVerified: false,
         collectionDone: false,
-        generalNotes: ''
+        generalNotes: '',
+        checkedExpenses: []  // Array of expense IDs that are checked
     };
 }
 
 // Save checklist data to localStorage
 function saveChecklistData() {
+    // Collect checked expense IDs
+    const checkedExpenses = [];
+    document.querySelectorAll('.checklist-expense-item input[type="checkbox"]:checked').forEach(cb => {
+        checkedExpenses.push(cb.dataset.expenseId);
+    });
+
     const data = {
         kaspiNotes: document.getElementById('checklist-kaspi-notes')?.value || '',
         halykNotes: document.getElementById('checklist-halyk-notes')?.value || '',
@@ -2814,11 +2909,79 @@ function saveChecklistData() {
         cashVerified: document.getElementById('check-cash-verified')?.checked || false,
         posterVerified: document.getElementById('check-poster-verified')?.checked || false,
         collectionDone: document.getElementById('check-collection-done')?.checked || false,
-        generalNotes: document.getElementById('checklist-general-notes-input')?.value || ''
+        generalNotes: document.getElementById('checklist-general-notes-input')?.value || '',
+        checkedExpenses: checkedExpenses
     };
 
     const key = getChecklistStorageKey();
     localStorage.setItem(key, JSON.stringify(data));
+}
+
+// Collect expenses from DOM grouped by source
+function collectExpensesBySource() {
+    const expenses = {
+        kaspi: [],
+        halyk: [],
+        cash: []
+    };
+
+    // Get all expense rows from all source tables
+    const sources = ['kaspi', 'halyk', 'cash'];
+    sources.forEach(source => {
+        const tbody = document.getElementById(`drafts-tbody-${source}`);
+        if (tbody) {
+            const rows = tbody.querySelectorAll('tr.draft-row');
+            rows.forEach(row => {
+                const id = row.dataset.id;
+                const amount = parseInt(row.dataset.amount) || 0;
+                const description = row.dataset.description || '';
+                const isIncome = row.dataset.isIncome === '1';
+
+                // Skip income items, only show expenses
+                if (!isIncome && amount > 0) {
+                    expenses[source].push({
+                        id: id,
+                        amount: amount,
+                        description: description
+                    });
+                }
+            });
+        }
+    });
+
+    return expenses;
+}
+
+// Populate expense lists in checklist modal
+function populateChecklistExpenses(checkedExpenses) {
+    const expenses = collectExpensesBySource();
+    const sources = ['kaspi', 'halyk', 'cash'];
+
+    sources.forEach(source => {
+        const container = document.getElementById(`checklist-${source}-expenses`);
+        if (!container) return;
+
+        // Clear existing items
+        container.innerHTML = '';
+
+        // Add expense items
+        expenses[source].forEach(expense => {
+            const isChecked = checkedExpenses.includes(expense.id);
+            const item = document.createElement('label');
+            item.className = 'checklist-expense-item';
+            item.innerHTML = `
+                <input type="checkbox" data-expense-id="${expense.id}" ${isChecked ? 'checked' : ''}>
+                <span class="checklist-expense-checkbox"></span>
+                <span class="checklist-expense-amount">${expense.amount.toLocaleString('ru-RU')} ₸</span>
+                <span class="checklist-expense-desc">${expense.description}</span>
+            `;
+            container.appendChild(item);
+
+            // Add change listener for auto-save
+            const checkbox = item.querySelector('input[type="checkbox"]');
+            checkbox.addEventListener('change', saveChecklistData);
+        });
+    });
 }
 
 // Update difference display in checklist modal
@@ -2851,6 +3014,9 @@ function openChecklistModal() {
     // Load saved data
     const data = loadChecklistData();
 
+    // Populate expense lists
+    populateChecklistExpenses(data.checkedExpenses || []);
+
     // Fill in saved values
     document.getElementById('checklist-kaspi-notes').value = data.kaspiNotes || '';
     document.getElementById('checklist-halyk-notes').value = data.halykNotes || '';
@@ -2874,6 +3040,26 @@ function closeChecklistModal() {
     document.getElementById('checklist-modal').style.display = 'none';
 }
 
+// Get expense list text for copy
+function getExpenseListText(source) {
+    const container = document.getElementById(`checklist-${source}-expenses`);
+    if (!container) return '';
+
+    const items = container.querySelectorAll('.checklist-expense-item');
+    if (items.length === 0) return '';
+
+    let text = '';
+    items.forEach(item => {
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        const amount = item.querySelector('.checklist-expense-amount')?.textContent || '';
+        const desc = item.querySelector('.checklist-expense-desc')?.textContent || '';
+        const checked = checkbox?.checked;
+        text += `${checked ? '✅' : '⬜'} ${amount}  ${desc}\n`;
+    });
+
+    return text;
+}
+
 // Copy checklist to clipboard
 function copyChecklistToClipboard() {
     const date = getChecklistDate();
@@ -2887,6 +3073,11 @@ function copyChecklistToClipboard() {
     const kaspiDiff = document.getElementById('checklist-kaspi-diff')?.textContent || '0₸';
     const halykDiff = document.getElementById('checklist-halyk-diff')?.textContent || '0₸';
     const cashDiff = document.getElementById('checklist-cash-diff')?.textContent || '0₸';
+
+    // Get expense lists
+    const kaspiExpenses = getExpenseListText('kaspi');
+    const halykExpenses = getExpenseListText('halyk');
+    const cashExpenses = getExpenseListText('cash');
 
     // Get notes
     const kaspiNotes = document.getElementById('checklist-kaspi-notes')?.value?.trim() || '';
@@ -2906,15 +3097,18 @@ function copyChecklistToClipboard() {
     text += `📅 ${formattedDate}\n\n`;
 
     text += `📱 Kaspi: ${kaspiDiff}\n`;
-    if (kaspiNotes) text += `   ${kaspiNotes}\n`;
+    if (kaspiExpenses) text += kaspiExpenses;
+    if (kaspiNotes) text += `📝 ${kaspiNotes}\n`;
     text += `\n`;
 
     text += `🏦 Halyk: ${halykDiff}\n`;
-    if (halykNotes) text += `   ${halykNotes}\n`;
+    if (halykExpenses) text += halykExpenses;
+    if (halykNotes) text += `📝 ${halykNotes}\n`;
     text += `\n`;
 
     text += `💵 Наличка: ${cashDiff}\n`;
-    if (cashNotes) text += `   ${cashNotes}\n`;
+    if (cashExpenses) text += cashExpenses;
+    if (cashNotes) text += `📝 ${cashNotes}\n`;
     text += `\n`;
 
     text += `--- Проверки ---\n`;
