@@ -1440,6 +1440,327 @@ input[type="checkbox"] {
     font-size: 13px;
     color: #4ade80;
 }
+
+/* ==============================================
+   MOBILE RESPONSIVE STYLES (iPhone 17 Pro, etc.)
+   ============================================== */
+@media (max-width: 480px) {
+    /* Container - remove padding */
+    .container {
+        padding: 12px 8px;
+        max-width: 100%;
+    }
+
+    /* Page header - stack vertically */
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    h1 {
+        font-size: 22px;
+    }
+
+    .date-picker-wrapper {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .date-picker {
+        flex: 1;
+        max-width: none;
+    }
+
+    /* Action buttons - compact grid */
+    .drafts-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        width: 100%;
+    }
+
+    .drafts-actions .btn {
+        font-size: 12px;
+        padding: 10px 8px;
+        justify-content: center;
+        min-height: 44px;
+    }
+
+    .drafts-actions .btn-success {
+        grid-column: 1 / -1;
+    }
+
+    .selected-count {
+        grid-column: 1 / -1;
+        margin-left: 0;
+        text-align: center;
+    }
+
+    /* Section header */
+    .section-header {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+
+    /* Reconciliation row - stack vertically */
+    .reconciliation-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        padding: 10px 12px;
+    }
+
+    .reconciliation-row > * {
+        width: 100%;
+    }
+
+    .reconciliation-row label {
+        display: none;
+    }
+
+    .reconciliation-input {
+        width: 100%;
+        text-align: left;
+        padding: 10px 12px;
+        font-size: 16px;
+    }
+
+    .poster-balance-display {
+        text-align: center;
+        padding: 8px;
+    }
+
+    .reconciliation-result {
+        margin-left: 0;
+        text-align: center;
+        font-size: 15px;
+    }
+
+    /* Table - transform to card layout */
+    .table {
+        display: block;
+    }
+
+    .table thead {
+        display: none;
+    }
+
+    .table tbody {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px;
+    }
+
+    .table tbody tr {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 10px;
+        background: #fff;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        align-items: center;
+    }
+
+    .table tbody tr td {
+        border: none;
+        padding: 0;
+    }
+
+    /* Checkbox - first item */
+    .table tbody tr td:nth-child(1) {
+        width: 24px;
+        flex-shrink: 0;
+    }
+
+    .table tbody tr td:nth-child(1) input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+    }
+
+    /* Completion status */
+    .table tbody tr td.completion-status {
+        width: 32px;
+        flex-shrink: 0;
+    }
+
+    .btn-completion {
+        font-size: 16px;
+        padding: 4px;
+    }
+
+    /* Amount - prominent */
+    .table tbody tr td.amount {
+        flex: 0 0 80px;
+        order: 1;
+    }
+
+    .edit-amount {
+        width: 80px;
+        font-size: 15px;
+        padding: 8px 6px;
+        min-height: 44px;
+    }
+
+    /* Description - full width row */
+    .table tbody tr td.description {
+        flex: 1 1 100%;
+        order: 4;
+        min-width: 0;
+    }
+
+    .edit-description {
+        width: 100%;
+        font-size: 14px;
+        padding: 8px 10px;
+        min-height: 44px;
+    }
+
+    /* Type button - small */
+    .table tbody tr td.type {
+        flex: 0 0 auto;
+        order: 2;
+    }
+
+    .btn-type {
+        font-size: 11px;
+        padding: 4px 8px;
+        min-height: 32px;
+    }
+
+    /* Category - full width row */
+    .table tbody tr td.category {
+        flex: 1 1 100%;
+        order: 5;
+    }
+
+    .edit-category {
+        width: 100%;
+        font-size: 14px;
+        padding: 8px 10px;
+        min-height: 44px;
+    }
+
+    /* Poster account (department) - small */
+    .table tbody tr td.poster-account {
+        flex: 0 0 auto;
+        order: 3;
+    }
+
+    .btn-poster-account {
+        font-size: 10px;
+        padding: 4px 6px;
+        min-width: 60px;
+        min-height: 28px;
+    }
+
+    /* Delete button */
+    .table tbody tr td.actions {
+        flex: 0 0 auto;
+        order: 6;
+        margin-left: auto;
+    }
+
+    .btn-delete {
+        font-size: 16px;
+        padding: 8px;
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    /* Row type indicators for card layout */
+    .draft-row.supply {
+        border-left: 4px solid var(--accent-orange);
+    }
+
+    .draft-row.supply td:first-child {
+        box-shadow: none;
+    }
+
+    .draft-row.transaction {
+        border-left: 4px solid var(--accent-green);
+    }
+
+    .draft-row.transaction td:first-child {
+        box-shadow: none;
+    }
+
+    .draft-row.income {
+        border-left: 4px solid #f59e0b !important;
+    }
+
+    .draft-row.income td:first-child {
+        box-shadow: none !important;
+    }
+
+    /* Section summary */
+    .section-summary {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+
+    /* Total summary */
+    .summary {
+        padding: 12px;
+        gap: 12px;
+        flex-direction: column;
+    }
+
+    .summary p {
+        margin: 0;
+        font-size: 13px;
+    }
+
+    /* Autocomplete dropdown */
+    .autocomplete-results {
+        max-height: 200px;
+        min-width: 100%;
+    }
+
+    .autocomplete-item {
+        padding: 12px 14px;
+        min-height: 44px;
+    }
+
+    /* Empty state */
+    .empty-state {
+        padding: 40px 16px;
+    }
+}
+
+/* Even smaller screens (iPhone SE, etc.) */
+@media (max-width: 375px) {
+    .container {
+        padding: 8px 4px;
+    }
+
+    h1 {
+        font-size: 20px;
+    }
+
+    .drafts-actions .btn {
+        font-size: 11px;
+        padding: 8px 6px;
+    }
+
+    .edit-amount {
+        width: 70px;
+        font-size: 14px;
+    }
+
+    .btn-type {
+        font-size: 10px;
+        padding: 3px 6px;
+    }
+
+    .btn-poster-account {
+        font-size: 9px;
+        padding: 3px 5px;
+        min-width: 50px;
+    }
+}
 </style>
 
 <script>
