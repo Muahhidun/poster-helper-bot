@@ -401,15 +401,86 @@
 <div id="checklist-modal" class="modal-overlay" style="display: none;">
     <div class="modal-content checklist-modal">
         <div class="modal-header">
-            <h3>Чеклист расходов</h3>
+            <h3>📋 Чеклист закрытия смены</h3>
             <button type="button" class="modal-close" id="close-checklist-modal">&times;</button>
         </div>
         <div class="modal-body">
-            <div id="checklist-sections"></div>
+            <!-- Source sections with differences -->
+            <div class="checklist-sources">
+                <div class="checklist-source-item">
+                    <div class="checklist-source-header">
+                        <span class="checklist-source-icon">📱</span>
+                        <span class="checklist-source-name">Kaspi</span>
+                        <span class="checklist-source-diff" id="checklist-kaspi-diff">0₸</span>
+                    </div>
+                    <textarea class="checklist-source-notes" id="checklist-kaspi-notes"
+                              placeholder="Заметки по Kaspi..."></textarea>
+                </div>
+
+                <div class="checklist-source-item">
+                    <div class="checklist-source-header">
+                        <span class="checklist-source-icon">🏦</span>
+                        <span class="checklist-source-name">Halyk</span>
+                        <span class="checklist-source-diff" id="checklist-halyk-diff">0₸</span>
+                    </div>
+                    <textarea class="checklist-source-notes" id="checklist-halyk-notes"
+                              placeholder="Заметки по Halyk..."></textarea>
+                </div>
+
+                <div class="checklist-source-item">
+                    <div class="checklist-source-header">
+                        <span class="checklist-source-icon">💵</span>
+                        <span class="checklist-source-name">Наличка</span>
+                        <span class="checklist-source-diff" id="checklist-cash-diff">0₸</span>
+                    </div>
+                    <textarea class="checklist-source-notes" id="checklist-cash-notes"
+                              placeholder="Было / Оставил..."></textarea>
+                </div>
+            </div>
+
+            <!-- Verification checkboxes -->
+            <div class="checklist-verifications">
+                <label class="checklist-verify-item">
+                    <input type="checkbox" id="check-kaspi-verified">
+                    <span class="checklist-verify-box"></span>
+                    <span class="checklist-verify-text">Kaspi сверен</span>
+                </label>
+
+                <label class="checklist-verify-item">
+                    <input type="checkbox" id="check-halyk-verified">
+                    <span class="checklist-verify-box"></span>
+                    <span class="checklist-verify-text">Halyk сверен</span>
+                </label>
+
+                <label class="checklist-verify-item">
+                    <input type="checkbox" id="check-cash-verified">
+                    <span class="checklist-verify-box"></span>
+                    <span class="checklist-verify-text">Наличка сверена</span>
+                </label>
+
+                <label class="checklist-verify-item">
+                    <input type="checkbox" id="check-poster-verified">
+                    <span class="checklist-verify-box"></span>
+                    <span class="checklist-verify-text">Poster проверен</span>
+                </label>
+
+                <label class="checklist-verify-item">
+                    <input type="checkbox" id="check-collection-done">
+                    <span class="checklist-verify-box"></span>
+                    <span class="checklist-verify-text">Инкассация сделана</span>
+                </label>
+            </div>
+
+            <!-- General notes -->
+            <div class="checklist-general-notes">
+                <label for="checklist-general-notes-input">Общие заметки</label>
+                <textarea id="checklist-general-notes-input"
+                          placeholder="Дополнительные заметки..."></textarea>
+            </div>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-secondary" id="copy-checklist-btn">
-                📋 Копировать
+                📋 Скопировать чеклист
             </button>
             <span id="copy-status" class="copy-status"></span>
         </div>
@@ -1081,75 +1152,171 @@ input[type="checkbox"] {
     border-top: 1px solid #333;
 }
 
-.checklist-section {
-    margin-bottom: 20px;
-}
-
-.checklist-section-title {
-    font-size: 16px;
-    font-weight: 600;
-    margin-bottom: 12px;
-    color: #fff;
-}
-
-.checklist-item {
+/* Checklist source items */
+.checklist-sources {
     display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 8px 0;
-    cursor: pointer;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 24px;
 }
 
-.checklist-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-    margin: 0 -8px;
-    padding: 8px;
+.checklist-source-item {
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.checklist-source-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.checklist-source-icon {
+    font-size: 20px;
+}
+
+.checklist-source-name {
+    font-weight: 600;
+    flex: 1;
+}
+
+.checklist-source-diff {
+    font-weight: 700;
+    font-size: 16px;
+    padding: 4px 8px;
     border-radius: 4px;
+    background: #333;
 }
 
-.checklist-checkbox {
-    width: 20px;
-    height: 20px;
+.checklist-source-diff.positive {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.15);
+}
+
+.checklist-source-diff.negative {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.15);
+}
+
+.checklist-source-notes {
+    width: 100%;
+    min-height: 50px;
+    padding: 8px 10px;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #1a1a1a;
+    color: #fff;
+    font-size: 14px;
+    resize: vertical;
+}
+
+.checklist-source-notes:focus {
+    outline: none;
+    border-color: #666;
+}
+
+.checklist-source-notes::placeholder {
+    color: #666;
+}
+
+/* Verification checkboxes */
+.checklist-verifications {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding: 16px;
+    background: #2a2a2a;
+    border-radius: 8px;
+}
+
+.checklist-verify-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.checklist-verify-item input[type="checkbox"] {
+    display: none;
+}
+
+.checklist-verify-box {
+    width: 24px;
+    height: 24px;
     border: 2px solid #666;
-    border-radius: 50%;
-    flex-shrink: 0;
+    border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-top: 2px;
+    transition: all 0.15s ease;
 }
 
-.checklist-item.checked .checklist-checkbox {
+.checklist-verify-item input:checked + .checklist-verify-box {
     background: #f5a623;
     border-color: #f5a623;
 }
 
-.checklist-item.checked .checklist-checkbox::after {
+.checklist-verify-item input:checked + .checklist-verify-box::after {
     content: '\2714';
     color: #000;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: bold;
 }
 
-.checklist-item.checked .checklist-text {
-    text-decoration: line-through;
+.checklist-verify-item:hover .checklist-verify-box {
+    border-color: #888;
+}
+
+.checklist-verify-text {
+    font-size: 15px;
+    color: #ddd;
+}
+
+.checklist-verify-item input:checked ~ .checklist-verify-text {
+    color: #f5a623;
+}
+
+/* General notes */
+.checklist-general-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.checklist-general-notes label {
+    font-size: 14px;
+    font-weight: 600;
     color: #888;
 }
 
-.checklist-text {
-    flex: 1;
-    font-size: 15px;
-    line-height: 1.4;
+.checklist-general-notes textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px 12px;
+    border: 1px solid #444;
+    border-radius: 6px;
+    background: #2a2a2a;
+    color: #fff;
+    font-size: 14px;
+    resize: vertical;
 }
 
-.checklist-amount {
-    font-weight: 600;
-    margin-right: 8px;
+.checklist-general-notes textarea:focus {
+    outline: none;
+    border-color: #666;
+}
+
+.checklist-general-notes textarea::placeholder {
+    color: #666;
 }
 
 .copy-status {
     font-size: 13px;
-    color: var(--accent-green);
+    color: #4ade80;
 }
 </style>
 
@@ -2598,114 +2765,176 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ========================================
-// Checklist Export Functionality
+// Checklist Shift Closing Functionality
 // ========================================
 
-function openChecklistModal() {
-    const modal = document.getElementById('checklist-modal');
-    const sectionsContainer = document.getElementById('checklist-sections');
+// Get current date from the date picker
+function getChecklistDate() {
+    const datePicker = document.getElementById('date-picker');
+    return datePicker ? datePicker.value : new Date().toISOString().split('T')[0];
+}
 
-    // Collect expenses by section
-    const sections = [
-        { id: 'kaspi', title: 'Kaspi', emoji: '' },
-        { id: 'cash', title: 'Nalichka', emoji: '' }
-    ];
+// Get localStorage key for checklist
+function getChecklistStorageKey() {
+    return `checklist_${getChecklistDate()}`;
+}
 
-    let html = '';
-
-    sections.forEach(section => {
-        const tbody = document.getElementById(`drafts-tbody-${section.id}`);
-        if (!tbody) return;
-
-        const rows = tbody.querySelectorAll('.draft-row:not(.placeholder-row)');
-        if (rows.length === 0) return;
-
-        // Build items for this section
-        const items = [];
-        rows.forEach(row => {
-            const amount = parseFloat(row.querySelector('.edit-amount')?.value) || 0;
-            const description = row.querySelector('.edit-description')?.value || '';
-            const isCompleted = row.classList.contains('completed') ||
-                               row.querySelector('.btn-completion')?.dataset.status === 'completed';
-
-            if (amount > 0 || description) {
-                items.push({
-                    amount: Math.round(amount),
-                    description: description.trim(),
-                    checked: isCompleted
-                });
-            }
-        });
-
-        if (items.length === 0) return;
-
-        html += `<div class="checklist-section">`;
-        html += `<div class="checklist-section-title">${section.title}</div>`;
-
-        items.forEach((item, idx) => {
-            const checkedClass = item.checked ? 'checked' : '';
-            html += `
-                <div class="checklist-item ${checkedClass}" data-section="${section.id}" data-index="${idx}">
-                    <div class="checklist-checkbox"></div>
-                    <div class="checklist-text">
-                        <span class="checklist-amount">${item.amount.toLocaleString('ru-RU')}</span>
-                        ${item.description}
-                    </div>
-                </div>
-            `;
-        });
-
-        html += `</div>`;
-    });
-
-    if (!html) {
-        html = '<p style="color: #888; text-align: center;">No raskhoda</p>';
+// Load checklist data from localStorage
+function loadChecklistData() {
+    const key = getChecklistStorageKey();
+    const saved = localStorage.getItem(key);
+    if (saved) {
+        try {
+            return JSON.parse(saved);
+        } catch (e) {
+            console.error('Failed to parse checklist data:', e);
+        }
     }
+    return {
+        kaspiNotes: '',
+        halykNotes: '',
+        cashNotes: '',
+        kaspiVerified: false,
+        halykVerified: false,
+        cashVerified: false,
+        posterVerified: false,
+        collectionDone: false,
+        generalNotes: ''
+    };
+}
 
-    sectionsContainer.innerHTML = html;
-    modal.style.display = 'flex';
+// Save checklist data to localStorage
+function saveChecklistData() {
+    const data = {
+        kaspiNotes: document.getElementById('checklist-kaspi-notes')?.value || '',
+        halykNotes: document.getElementById('checklist-halyk-notes')?.value || '',
+        cashNotes: document.getElementById('checklist-cash-notes')?.value || '',
+        kaspiVerified: document.getElementById('check-kaspi-verified')?.checked || false,
+        halykVerified: document.getElementById('check-halyk-verified')?.checked || false,
+        cashVerified: document.getElementById('check-cash-verified')?.checked || false,
+        posterVerified: document.getElementById('check-poster-verified')?.checked || false,
+        collectionDone: document.getElementById('check-collection-done')?.checked || false,
+        generalNotes: document.getElementById('checklist-general-notes-input')?.value || ''
+    };
 
-    // Add click handlers for checklist items
-    sectionsContainer.querySelectorAll('.checklist-item').forEach(item => {
-        item.addEventListener('click', function() {
-            this.classList.toggle('checked');
-        });
+    const key = getChecklistStorageKey();
+    localStorage.setItem(key, JSON.stringify(data));
+}
+
+// Update difference display in checklist modal
+function updateChecklistDifferences() {
+    const sources = ['kaspi', 'halyk', 'cash'];
+
+    sources.forEach(source => {
+        const diffEl = document.getElementById(`${source}-difference`);
+        const checklistDiffEl = document.getElementById(`checklist-${source}-diff`);
+
+        if (diffEl && checklistDiffEl) {
+            const diffText = diffEl.textContent;
+            checklistDiffEl.textContent = diffText + '₸';
+
+            // Copy classes for coloring
+            checklistDiffEl.classList.remove('positive', 'negative');
+            if (diffEl.classList.contains('positive')) {
+                checklistDiffEl.classList.add('positive');
+            } else if (diffEl.classList.contains('negative')) {
+                checklistDiffEl.classList.add('negative');
+            }
+        }
     });
 }
 
+// Open checklist modal
+function openChecklistModal() {
+    const modal = document.getElementById('checklist-modal');
+
+    // Load saved data
+    const data = loadChecklistData();
+
+    // Fill in saved values
+    document.getElementById('checklist-kaspi-notes').value = data.kaspiNotes || '';
+    document.getElementById('checklist-halyk-notes').value = data.halykNotes || '';
+    document.getElementById('checklist-cash-notes').value = data.cashNotes || '';
+    document.getElementById('check-kaspi-verified').checked = data.kaspiVerified || false;
+    document.getElementById('check-halyk-verified').checked = data.halykVerified || false;
+    document.getElementById('check-cash-verified').checked = data.cashVerified || false;
+    document.getElementById('check-poster-verified').checked = data.posterVerified || false;
+    document.getElementById('check-collection-done').checked = data.collectionDone || false;
+    document.getElementById('checklist-general-notes-input').value = data.generalNotes || '';
+
+    // Update difference values
+    updateChecklistDifferences();
+
+    modal.style.display = 'flex';
+}
+
+// Close checklist modal (auto-saves on close)
 function closeChecklistModal() {
+    saveChecklistData();
     document.getElementById('checklist-modal').style.display = 'none';
 }
 
+// Copy checklist to clipboard
 function copyChecklistToClipboard() {
-    const sectionsContainer = document.getElementById('checklist-sections');
-    const sections = sectionsContainer.querySelectorAll('.checklist-section');
-
-    let text = '';
-
-    sections.forEach(section => {
-        const title = section.querySelector('.checklist-section-title')?.textContent || '';
-        text += title + '\n';
-
-        const items = section.querySelectorAll('.checklist-item');
-        items.forEach(item => {
-            const isChecked = item.classList.contains('checked');
-            const amount = item.querySelector('.checklist-amount')?.textContent || '';
-            const description = item.querySelector('.checklist-text')?.textContent?.replace(amount, '').trim() || '';
-
-            const checkbox = isChecked ? '[x]' : '[ ]';
-            text += `${checkbox} ${amount} ${description}\n`;
-        });
-
-        text += '\n';
+    const date = getChecklistDate();
+    const formattedDate = new Date(date).toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
     });
+
+    // Get difference values
+    const kaspiDiff = document.getElementById('checklist-kaspi-diff')?.textContent || '0₸';
+    const halykDiff = document.getElementById('checklist-halyk-diff')?.textContent || '0₸';
+    const cashDiff = document.getElementById('checklist-cash-diff')?.textContent || '0₸';
+
+    // Get notes
+    const kaspiNotes = document.getElementById('checklist-kaspi-notes')?.value?.trim() || '';
+    const halykNotes = document.getElementById('checklist-halyk-notes')?.value?.trim() || '';
+    const cashNotes = document.getElementById('checklist-cash-notes')?.value?.trim() || '';
+    const generalNotes = document.getElementById('checklist-general-notes-input')?.value?.trim() || '';
+
+    // Get checkbox states
+    const kaspiVerified = document.getElementById('check-kaspi-verified')?.checked;
+    const halykVerified = document.getElementById('check-halyk-verified')?.checked;
+    const cashVerified = document.getElementById('check-cash-verified')?.checked;
+    const posterVerified = document.getElementById('check-poster-verified')?.checked;
+    const collectionDone = document.getElementById('check-collection-done')?.checked;
+
+    // Build text
+    let text = `📋 Чеклист закрытия смены\n`;
+    text += `📅 ${formattedDate}\n\n`;
+
+    text += `📱 Kaspi: ${kaspiDiff}\n`;
+    if (kaspiNotes) text += `   ${kaspiNotes}\n`;
+    text += `\n`;
+
+    text += `🏦 Halyk: ${halykDiff}\n`;
+    if (halykNotes) text += `   ${halykNotes}\n`;
+    text += `\n`;
+
+    text += `💵 Наличка: ${cashDiff}\n`;
+    if (cashNotes) text += `   ${cashNotes}\n`;
+    text += `\n`;
+
+    text += `--- Проверки ---\n`;
+    text += `${kaspiVerified ? '✅' : '⬜'} Kaspi сверен\n`;
+    text += `${halykVerified ? '✅' : '⬜'} Halyk сверен\n`;
+    text += `${cashVerified ? '✅' : '⬜'} Наличка сверена\n`;
+    text += `${posterVerified ? '✅' : '⬜'} Poster проверен\n`;
+    text += `${collectionDone ? '✅' : '⬜'} Инкассация сделана\n`;
+
+    if (generalNotes) {
+        text += `\n--- Заметки ---\n${generalNotes}\n`;
+    }
 
     navigator.clipboard.writeText(text.trim()).then(() => {
         const status = document.getElementById('copy-status');
-        status.textContent = 'Skopirovano!';
+        status.textContent = 'Скопировано!';
         setTimeout(() => { status.textContent = ''; }, 2000);
     }).catch(err => {
         console.error('Failed to copy:', err);
+        alert('Не удалось скопировать в буфер обмена');
     });
 }
 
@@ -2714,11 +2943,35 @@ document.getElementById('export-checklist-btn')?.addEventListener('click', openC
 document.getElementById('close-checklist-modal')?.addEventListener('click', closeChecklistModal);
 document.getElementById('copy-checklist-btn')?.addEventListener('click', copyChecklistToClipboard);
 
+// Auto-save on any change within the checklist modal
+['checklist-kaspi-notes', 'checklist-halyk-notes', 'checklist-cash-notes',
+ 'checklist-general-notes-input', 'check-kaspi-verified', 'check-halyk-verified',
+ 'check-cash-verified', 'check-poster-verified', 'check-collection-done'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+        el.addEventListener('change', saveChecklistData);
+        if (el.tagName === 'TEXTAREA') {
+            el.addEventListener('input', saveChecklistData);
+        }
+    }
+});
+
 // Close modal on overlay click
 document.getElementById('checklist-modal')?.addEventListener('click', function(e) {
     if (e.target === this) {
         closeChecklistModal();
     }
 });
+
+// Check if we should open checklist view from URL
+function checkChecklistViewParam() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('view') === 'checklist') {
+        // Small delay to ensure page is fully loaded
+        setTimeout(openChecklistModal, 100);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', checkChecklistViewParam);
 </script>
 {% endblock %}
