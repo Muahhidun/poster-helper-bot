@@ -1489,9 +1489,26 @@ def sync_expenses_from_poster():
                                 skipped_count += 1
                             continue
 
-                        # Description from category name or comment
+                        # Check if this is a supply transaction that already has a linked expense draft
+                        # Poster creates transactions like "Поставка №12685 от «Омск упаковки»" for supplies
                         comment = txn.get('comment', '') or ''
                         description = comment if comment else category_name
+
+                        import re
+                        supply_match = re.search(r'Поставка\s*[№N#]\s*(\d+)', description)
+                        if supply_match and not existing_draft:
+                            supply_num = supply_match.group(1)
+                            # Look for expense draft with poster_transaction_id = "supply_12685,..."
+                            supply_draft = next(
+                                (d for d in existing_drafts
+                                 if d.get('poster_transaction_id', '').startswith('supply_') and
+                                    supply_num in d['poster_transaction_id'].replace('supply_', '').split(',')),
+                                None
+                            )
+                            if supply_draft:
+                                skipped_count += 1
+                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})")
+                                continue
 
                         # Detect if this is an income transaction by category name
                         is_income = txn_type == '1' or 'приход' in category_lower or 'поступлен' in category_lower
@@ -2093,6 +2110,22 @@ def api_sync_expenses_from_poster():
                                 skipped += 1
                             continue
 
+                        # Check if this is a supply transaction that already has a linked expense draft
+                        import re
+                        supply_match = re.search(r'Поставка\s*[№N#]\s*(\d+)', description)
+                        if supply_match and not existing_draft:
+                            supply_num = supply_match.group(1)
+                            supply_draft = next(
+                                (d for d in existing_drafts
+                                 if d.get('poster_transaction_id', '').startswith('supply_') and
+                                    supply_num in d['poster_transaction_id'].replace('supply_', '').split(',')),
+                                None
+                            )
+                            if supply_draft:
+                                skipped += 1
+                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})", flush=True)
+                                continue
+
                         # Determine source from finance account name (or direct txn account_name)
                         finance_acc_name = finance_acc_name_raw.lower() if finance_acc_name_raw else ''
                         source = 'cash'
@@ -2194,20 +2227,27 @@ def api_process_expenses():
 
                 try:
                     # Create transaction in Poster
-                    result = await client.create_transaction(
-                        amount=draft['amount'],
-                        category=draft.get('category', ''),
-                        comment=draft.get('description', ''),
-                        account_id=draft.get('account_id'),
-                        is_income=draft.get('is_income', False)
+                    is_income = bool(draft.get('is_income'))
+                    txn_type = 1 if is_income else 0
+                    new_txn_id = await client.create_transaction(
+                        transaction_type=txn_type,
+                        category_id=1,  # default category
+                        account_from_id=draft.get('account_id') or 1,
+                        amount=int(draft['amount']),
+                        comment=draft.get('description', '')
                     )
 
-                    if result.get('success'):
-                        # Mark as completed
-                        db.update_expense_draft(draft['id'], completion_status='completed')
+                    if new_txn_id:
+                        # Store poster_transaction_id and mark as completed
+                        db.update_expense_draft(
+                            draft['id'],
+                            completion_status='completed',
+                            poster_transaction_id=f"{account['id']}_{new_txn_id}",
+                            poster_amount=draft['amount']
+                        )
                         created += 1
                     else:
-                        errors.append(f"Draft {draft['id']}: {result.get('error', 'Unknown error')}")
+                        errors.append(f"Draft {draft['id']}: Transaction creation returned no ID")
 
                 finally:
                     await client.close()
@@ -2670,13 +2710,20 @@ def process_drafts():
                                 txn_type = 1 if is_income else 0
 
                                 # Create new transaction
-                                await client.create_transaction(
+                                new_txn_id = await client.create_transaction(
                                     transaction_type=txn_type,
                                     category_id=cat_id,
                                     account_from_id=account_id,
                                     amount=int(draft['amount']),
                                     comment=draft['description']
                                 )
+                                # Store poster_transaction_id so sync won't create duplicates
+                                if new_txn_id:
+                                    db.update_expense_draft(
+                                        draft['id'],
+                                        poster_transaction_id=f"{poster_account_id}_{new_txn_id}",
+                                        poster_amount=draft['amount']
+                                    )
                                 total_success += 1
                                 all_processed_ids.append(draft['id'])
                                 type_label = "доход" if is_income else "расход"
@@ -3550,10 +3597,14 @@ def process_supply(draft_id):
             # Also mark linked expense draft as in_poster (stay visible, show green)
             # and sync the source from supply to expense
             if draft.get('linked_expense_draft_id'):
-                # Update source on expense draft to match supply
+                # Store supply IDs so sync can match Poster transactions
+                # Poster creates finance transactions with description "Поставка №{supply_id} от «...»"
+                supply_ids_str = ','.join(str(s['supply_id']) for s in created_supplies)
+                # Update source and poster_transaction_id on expense draft
                 db.update_expense_draft(
                     draft['linked_expense_draft_id'],
-                    source=draft.get('source', 'cash')
+                    source=draft.get('source', 'cash'),
+                    poster_transaction_id=f"supply_{supply_ids_str}"
                 )
                 # Mark as in Poster (keeps it visible with green status)
                 db.mark_drafts_in_poster([draft['linked_expense_draft_id']])
