@@ -1460,9 +1460,12 @@ def sync_expenses_from_poster():
                         amount = abs(float(amount_raw)) / 100
 
                         # Check if already imported — find matching draft
+                        # Support both formats: composite "accountId_txnId" and simple "txnId"
                         existing_draft = next(
                             (d for d in existing_drafts
-                             if d.get('poster_transaction_id') == poster_transaction_id),
+                             if d.get('poster_transaction_id') == poster_transaction_id
+                             or (d.get('poster_transaction_id') == str(txn_id) and
+                                 d.get('poster_account_id') == account['id'])),
                             None
                         )
 
@@ -2054,10 +2057,13 @@ def api_sync_expenses_from_poster():
                         print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('name', 'NOT FOUND')}'", flush=True)
 
                         # Check if already synced - find matching draft
+                        # Support both formats: composite "accountId_txnId" and simple "txnId"
+                        composite_txn_id = f"{account['id']}_{txn_id}"
                         existing_draft = next(
                             (d for d in existing_drafts
-                             if d.get('poster_transaction_id') == str(txn_id) and
-                                d.get('poster_account_id') == account['id']),
+                             if d.get('poster_transaction_id') == composite_txn_id
+                             or (d.get('poster_transaction_id') == str(txn_id) and
+                                 d.get('poster_account_id') == account['id'])),
                             None
                         )
 
@@ -2107,7 +2113,7 @@ def api_sync_expenses_from_poster():
                             source=source,
                             account_id=finance_acc.get('account_id'),
                             poster_account_id=account['id'],
-                            poster_transaction_id=str(txn_id),
+                            poster_transaction_id=composite_txn_id,
                             is_income=(txn_type == '1'),
                             completion_status='completed',
                             poster_amount=amount
