@@ -1,819 +1,631 @@
 {% extends "base.html" %}
 
-{% block title %}Закрытие смены - PizzBurg{% endblock %}
+{% block title %}Закрытие смены{% endblock %}
 
 {% block content %}
-<div class="shift-closing-container">
-    <h1>Закрытие смены</h1>
-
-    <div class="date-header">
-        <span id="current-date"></span>
-        <span id="accounts-info" class="accounts-badge"></span>
+<div class="sc">
+    <div class="sc-header">
+        <span id="current-date" class="sc-date"></span>
+        <span id="orders_info" class="sc-orders"></span>
     </div>
 
-    <div class="info-banner" id="loading-banner">
-        Загрузка данных Poster...
-    </div>
+    <div class="sc-banner" id="loading-banner">Загрузка...</div>
 
-    <!-- Фактические данные (ввод) -->
-    <div class="section-card">
-        <h3 class="section-title">Фактические данные</h3>
-
-        <!-- Безнал терминалы -->
-        <div class="input-group-label">Безнал (терминалы)</div>
-        <div class="two-cols">
-            <div class="input-field">
-                <label for="wolt">Wolt</label>
-                <div class="input-wrapper">
-                    <input type="text" id="wolt" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                    <span class="currency">T</span>
-                </div>
+    <!-- Безнал -->
+    <div class="sc-card">
+        <div class="sc-card-title">Безнал</div>
+        <div class="sc-row-pair">
+            <div class="sc-field">
+                <label>Wolt</label>
+                <input type="text" id="wolt" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
             </div>
-            <div class="input-field">
-                <label for="halyk">Halyk</label>
-                <div class="input-wrapper">
-                    <input type="text" id="halyk" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                    <span class="currency">T</span>
-                </div>
+            <div class="sc-field">
+                <label>Halyk</label>
+                <input type="text" id="halyk" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
             </div>
         </div>
-
-        <div class="input-field">
-            <label for="kaspi">Kaspi терминал</label>
-            <div class="input-wrapper">
-                <input type="text" id="kaspi" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                <span class="currency">T</span>
-            </div>
+        <div class="sc-field">
+            <label>Kaspi</label>
+            <input type="text" id="kaspi" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
         </div>
-
-        <div class="input-field minus-field">
-            <label for="kaspi_cafe">- Kaspi от PizzBurg-Cafe</label>
-            <div class="input-wrapper">
-                <input type="text" id="kaspi_cafe" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()" class="minus-input">
-                <span class="currency">T</span>
-            </div>
-        </div>
-
-        <div class="separator"></div>
-
-        <!-- Наличка -->
-        <div class="input-group-label">Наличные</div>
-        <div class="two-cols">
-            <div class="input-field">
-                <label for="cash_bills">Бумажные</label>
-                <div class="input-wrapper">
-                    <input type="text" id="cash_bills" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                    <span class="currency">T</span>
-                </div>
-            </div>
-            <div class="input-field">
-                <label for="cash_coins">Мелочь</label>
-                <div class="input-wrapper">
-                    <input type="text" id="cash_coins" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                    <span class="currency">T</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- = Фактический -->
-        <div class="subtotal-row" id="fact_total_row" style="display:none">
-            <span class="subtotal-label">= Фактический:</span>
-            <span class="subtotal-value" id="fact_total_value">0 T</span>
-        </div>
-
-        <div class="separator"></div>
-
-        <!-- Смена, внесения, расходы -->
-        <div class="input-field">
-            <label for="shift_start">Смена (остаток на начало)</label>
-            <div class="input-wrapper">
-                <input type="text" id="shift_start" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                <span class="currency">T</span>
-            </div>
-        </div>
-
-        <div class="input-field">
-            <label for="deposits">Внесения</label>
-            <div class="input-wrapper">
-                <input type="text" id="deposits" inputmode="numeric" placeholder="0" value="0" oninput="debouncedCalculate()">
-                <span class="currency">T</span>
-            </div>
-        </div>
-
-        <div class="input-field">
-            <label for="expenses">Расходы с кассы</label>
-            <div class="input-wrapper">
-                <input type="text" id="expenses" inputmode="numeric" placeholder="0" oninput="debouncedCalculate()">
-                <span class="currency">T</span>
-            </div>
-        </div>
-
-        <!-- Итого фактический -->
-        <div class="subtotal-row highlight" id="fact_adjusted_row" style="display:none">
-            <span class="subtotal-label">Итого фактич.:</span>
-            <span class="subtotal-value" id="fact_adjusted_value">0 T</span>
+        <div class="sc-field sc-minus">
+            <label>- Kaspi Cafe</label>
+            <input type="text" id="kaspi_cafe" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
         </div>
     </div>
 
-    <!-- Данные Poster (readonly) -->
-    <div class="section-card">
-        <h3 class="section-title">Данные Poster</h3>
-
-        <div class="poster-row">
-            <span class="poster-label">Итого безнал:</span>
-            <span class="poster-value" id="poster_cashless">-- T</span>
+    <!-- Наличные -->
+    <div class="sc-card">
+        <div class="sc-card-title">Наличные</div>
+        <div class="sc-row-pair">
+            <div class="sc-field">
+                <label>Бумажные</label>
+                <input type="text" id="cash_bills" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+            </div>
+            <div class="sc-field">
+                <label>Мелочь</label>
+                <input type="text" id="cash_coins" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+            </div>
         </div>
+    </div>
 
-        <div class="poster-row">
-            <span class="poster-label">Картой (Poster):</span>
-            <span class="poster-value" id="poster_card_display">-- T</span>
+    <!-- Промежуточный итог -->
+    <div class="sc-subtotal" id="fact_total_row" style="display:none">
+        <span>Фактический</span>
+        <span id="fact_total_value" class="sc-subtotal-num">0</span>
+    </div>
+
+    <!-- Смена / Внесения / Расходы -->
+    <div class="sc-card">
+        <div class="sc-card-title">Корректировки</div>
+        <div class="sc-field">
+            <label>Смена (начало)</label>
+            <input type="text" id="shift_start" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
         </div>
-
-        <div class="poster-row diff-cashless" id="cashless_diff_row" style="display:none">
-            <span class="poster-label">Разница безнал:</span>
-            <span class="poster-value" id="cashless_diff_value">0 T</span>
+        <div class="sc-row-pair">
+            <div class="sc-field">
+                <label>Внесения</label>
+                <input type="text" id="deposits" inputmode="decimal" placeholder="0" value="0" oninput="debouncedCalculate()">
+            </div>
+            <div class="sc-field">
+                <label>Расходы</label>
+                <input type="text" id="expenses" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+            </div>
         </div>
+    </div>
 
-        <div class="separator"></div>
+    <!-- Итого фактический -->
+    <div class="sc-subtotal accent" id="fact_adjusted_row" style="display:none">
+        <span>Итого фактич.</span>
+        <span id="fact_adjusted_value" class="sc-subtotal-num">0</span>
+    </div>
 
-        <div class="poster-row">
-            <span class="poster-label">Poster (торговля):</span>
-            <span class="poster-value" id="poster_trade_display">-- T</span>
+    <!-- Poster -->
+    <div class="sc-card sc-card-poster">
+        <div class="sc-card-title">Poster</div>
+        <div class="sc-info-row">
+            <span>Безнал факт</span>
+            <span id="poster_cashless" class="sc-info-val">--</span>
         </div>
-
-        <div class="poster-row">
-            <span class="poster-label">Бонусы:</span>
-            <span class="poster-value bonus" id="poster_bonus_display">-- T</span>
+        <div class="sc-info-row">
+            <span>Безнал Poster</span>
+            <span id="poster_card_display" class="sc-info-val">--</span>
         </div>
-
-        <div class="subtotal-row highlight" id="poster_total_row" style="display:none">
-            <span class="subtotal-label">Итого Poster:</span>
-            <span class="subtotal-value" id="poster_total_value">-- T</span>
+        <div class="sc-info-row sc-diff" id="cashless_diff_row" style="display:none">
+            <span>Разница безнал</span>
+            <span id="cashless_diff_value" class="sc-info-val">0</span>
+        </div>
+        <div class="sc-info-sep"></div>
+        <div class="sc-info-row">
+            <span>Торговля</span>
+            <span id="poster_trade_display" class="sc-info-val">--</span>
+        </div>
+        <div class="sc-info-row">
+            <span>Бонусы</span>
+            <span id="poster_bonus_display" class="sc-info-val sc-red">--</span>
+        </div>
+        <div class="sc-subtotal accent inside" id="poster_total_row" style="display:none">
+            <span>Итого Poster</span>
+            <span id="poster_total_value" class="sc-subtotal-num">--</span>
         </div>
     </div>
 
     <!-- ИТОГО ДЕНЬ -->
-    <div class="day-result" id="day_result_block">
-        <div class="day-result-label">ИТОГО ДЕНЬ</div>
-        <div class="day-result-value" id="day_result_value">-- T</div>
-        <div class="day-result-status" id="day_result_status"></div>
+    <div class="sc-day-result" id="day_result_block">
+        <div class="sc-day-label">ИТОГО ДЕНЬ</div>
+        <div class="sc-day-value" id="day_result_value">--</div>
+        <div class="sc-day-status" id="day_result_status"></div>
     </div>
 
     <!-- Инкассация -->
-    <div class="section-card">
-        <div class="input-field">
-            <label for="cash_to_leave">Оставить на смену (бумажные)</label>
-            <div class="input-wrapper">
-                <input type="text" id="cash_to_leave" inputmode="numeric" placeholder="15000" value="15000" oninput="debouncedCalculate()">
-                <span class="currency">T</span>
-            </div>
+    <div class="sc-card">
+        <div class="sc-card-title">Инкассация</div>
+        <div class="sc-field">
+            <label>Оставить на смену</label>
+            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="15000" value="15000" oninput="debouncedCalculate()">
         </div>
-
-        <div class="poster-row" id="shift_left_row" style="display:none">
-            <span class="poster-label">Смена оставили:</span>
-            <span class="poster-value" id="shift_left_value">0 T</span>
+        <div class="sc-info-row" id="shift_left_row" style="display:none">
+            <span>Смена оставили</span>
+            <span id="shift_left_value" class="sc-info-val">0</span>
         </div>
-        <div class="shift-left-hint" id="shift_left_hint" style="display:none"></div>
-
-        <div class="collection-block" id="collection_block" style="display:none">
-            <span class="collection-label">Инкассация:</span>
-            <span class="collection-value" id="collection_value">0 T</span>
+        <div class="sc-hint" id="shift_left_hint" style="display:none"></div>
+        <div class="sc-collection" id="collection_block" style="display:none">
+            <span>Инкассация</span>
+            <span id="collection_value">0</span>
         </div>
     </div>
 
-    <!-- Кол-во заказов -->
-    <div class="orders-info" id="orders_info" style="display:none"></div>
-
-    <!-- Обновить -->
-    <div class="actions-section">
-        <button type="button" class="btn btn-primary" onclick="loadPosterData()">
-            Обновить данные Poster
-        </button>
+    <!-- Действия -->
+    <div class="sc-actions">
+        <button type="button" class="sc-btn" onclick="loadPosterData()">Обновить Poster</button>
+        <button type="button" class="sc-btn sc-btn-sec" onclick="loadExpenseReport()">Отчёт расходов</button>
     </div>
 
-    <!-- Отчёт по расходам -->
-    <div class="section-card">
-        <div class="expense-report-header">
-            <h3 class="section-title" style="margin-bottom:0">Отчёт по расходам</h3>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="loadExpenseReport()">
-                Сформировать
-            </button>
+    <!-- Отчёт -->
+    <div id="expense-report-container" style="display:none" class="sc-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="sc-card-title" style="margin:0">Отчёт</div>
+            <button type="button" class="sc-btn sc-btn-sm" onclick="copyReport()">Скопировать</button>
         </div>
-        <div id="expense-report-container" style="display: none;">
-            <div class="report-actions">
-                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyReport()">
-                    Скопировать
-                </button>
-            </div>
-            <pre id="expense-report-text" class="expense-report-text"></pre>
-        </div>
+        <pre id="expense-report-text" class="sc-report"></pre>
     </div>
 </div>
 
 <style>
-.shift-closing-container {
-    max-width: 600px;
+/* ===== Mobile-first shift closing ===== */
+*{box-sizing:border-box}
+
+.sc {
+    max-width: 480px;
     margin: 0 auto;
-    padding: 16px;
+    padding: 8px 10px 24px;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
 }
 
-h1 {
-    margin-bottom: 16px;
-    text-align: center;
-    font-size: 22px;
-}
-
-.date-header {
+/* Header */
+.sc-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
-    padding: 12px 16px;
-    background: #f8f9fa;
-    border-radius: 8px;
-    font-size: 18px;
-    font-weight: 600;
-}
-
-.accounts-badge {
-    font-size: 13px;
-    color: #666;
-    font-weight: normal;
-}
-
-.info-banner {
-    background: #e3f2fd;
-    color: #1565c0;
-    padding: 10px 16px;
-    border-radius: 8px;
-    text-align: center;
-    margin-bottom: 16px;
-    font-size: 14px;
-}
-
-.info-banner.hidden { display: none; }
-.info-banner.error { background: #f8d7da; color: #721c24; }
-
-/* Section card */
-.section-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 16px;
-}
-
-.section-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: #1f2937;
-    margin-bottom: 14px;
-}
-
-.input-group-label {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #9ca3af;
-    margin-bottom: 8px;
-    font-weight: 600;
-}
-
-/* Two-column grid */
-.two-cols {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 10px;
-}
-
-/* Input field */
-.input-field {
-    margin-bottom: 10px;
-}
-
-.input-field label {
-    display: block;
-    font-size: 13px;
-    color: #6b7280;
+    padding: 10px 0;
     margin-bottom: 4px;
 }
-
-.input-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+.sc-date {
+    font-size: 17px;
+    font-weight: 700;
+    color: #1c1c1e;
+}
+.sc-orders {
+    font-size: 13px;
+    color: #8e8e93;
 }
 
-.input-wrapper input {
-    flex: 1;
-    padding: 10px 12px;
-    border: 2px solid #e5e7eb;
+/* Banner */
+.sc-banner {
+    background: #007aff20;
+    color: #007aff;
+    padding: 8px 12px;
     border-radius: 8px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 10px;
+}
+.sc-banner.hidden { display: none; }
+.sc-banner.error { background: #ff3b3020; color: #ff3b30; }
+
+/* Card */
+.sc-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.sc-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #8e8e93;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 10px;
+}
+
+/* Field */
+.sc-field {
+    margin-bottom: 8px;
+}
+.sc-field:last-child { margin-bottom: 0; }
+.sc-field label {
+    display: block;
+    font-size: 13px;
+    color: #6c6c70;
+    margin-bottom: 3px;
+    font-weight: 500;
+}
+.sc-field input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1.5px solid #d1d1d6;
+    border-radius: 10px;
     font-size: 17px;
     text-align: right;
-    font-family: 'Courier New', monospace;
+    font-variant-numeric: tabular-nums;
     font-weight: 600;
+    color: #1c1c1e;
     background: #fff;
+    -webkit-appearance: none;
+    appearance: none;
+    transition: border-color 0.15s;
 }
-
-.input-wrapper input:focus {
+.sc-field input:focus {
     outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+    border-color: #007aff;
+    box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
+}
+.sc-field input::placeholder { color: #c7c7cc; }
+
+/* Minus field */
+.sc-minus label { color: #ff3b30; }
+.sc-minus input {
+    border-color: #ffb4ab;
+    color: #ff3b30;
+}
+.sc-minus input:focus {
+    border-color: #ff3b30;
+    box-shadow: 0 0 0 3px rgba(255,59,48,0.12);
 }
 
-.input-wrapper .currency {
-    font-size: 15px;
-    color: #9ca3af;
-    font-weight: 600;
-    min-width: 14px;
+/* Two-col pair */
+.sc-row-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
 }
+.sc-row-pair .sc-field { margin-bottom: 0; }
 
-/* Minus field (Kaspi cafe) */
-.minus-field label {
-    color: #ef4444;
-}
-
-.minus-input {
-    border-color: #fca5a5 !important;
-}
-
-.minus-input:focus {
-    border-color: #ef4444 !important;
-    box-shadow: 0 0 0 3px rgba(239,68,68,0.1) !important;
-}
-
-/* Separator */
-.separator {
-    height: 1px;
-    background: #e5e7eb;
-    margin: 14px 0;
-}
-
-/* Subtotal row */
-.subtotal-row {
+/* Subtotal */
+.sc-subtotal {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 10px 12px;
-    border-radius: 8px;
-    background: #f0f9ff;
-    margin-top: 10px;
-}
-
-.subtotal-row.highlight {
-    background: #eff6ff;
-}
-
-.subtotal-label {
+    border-radius: 10px;
+    background: #f2f2f7;
+    margin-bottom: 8px;
     font-size: 15px;
     font-weight: 600;
-    color: #1f2937;
+    color: #3a3a3c;
 }
-
-.subtotal-value {
-    font-family: 'Courier New', monospace;
-    font-size: 18px;
+.sc-subtotal.accent {
+    background: #007aff12;
+}
+.sc-subtotal.accent .sc-subtotal-num {
+    color: #007aff;
+}
+.sc-subtotal.inside {
+    margin: 8px -4px -4px;
+    border-radius: 8px;
+}
+.sc-subtotal-num {
+    font-variant-numeric: tabular-nums;
+    font-size: 17px;
     font-weight: 700;
-    color: #2563eb;
 }
 
-/* Poster rows (readonly data) */
-.poster-row {
+/* Poster info rows */
+.sc-card-poster {
+    background: #f9f9fb;
+}
+.sc-info-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 12px;
-    border-radius: 6px;
-    background: #f9fafb;
-    margin-bottom: 8px;
-}
-
-.poster-label {
+    padding: 6px 0;
     font-size: 14px;
-    color: #6b7280;
+    color: #6c6c70;
 }
-
-.poster-value {
-    font-family: 'Courier New', monospace;
-    font-size: 16px;
+.sc-info-val {
+    font-variant-numeric: tabular-nums;
     font-weight: 600;
-    color: #374151;
-}
-
-.poster-value.bonus {
-    color: #ef4444;
-}
-
-/* Cashless diff */
-.diff-cashless {
-    transition: background-color 0.2s;
-}
-.diff-cashless.positive { background: #dcfce7; }
-.diff-cashless.positive .poster-value { color: #16a34a; }
-.diff-cashless.negative { background: #fee2e2; }
-.diff-cashless.negative .poster-value { color: #dc2626; }
-
-/* Day Result Block */
-.day-result {
-    text-align: center;
-    padding: 24px;
-    border-radius: 12px;
-    margin-bottom: 16px;
-    background: #f8f9fa;
-    transition: background-color 0.3s;
-}
-
-.day-result.positive { background: #dcfce7; }
-.day-result.negative { background: #fee2e2; }
-.day-result.zero { background: #dbeafe; }
-
-.day-result-label {
-    font-size: 13px;
-    color: #6b7280;
-    margin-bottom: 8px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.day-result-value {
-    font-size: 42px;
-    font-weight: 700;
-    font-family: 'Courier New', monospace;
-    color: #374151;
-    transition: color 0.3s;
-}
-
-.day-result.positive .day-result-value { color: #16a34a; }
-.day-result.negative .day-result-value { color: #dc2626; }
-.day-result.zero .day-result-value { color: #2563eb; }
-
-.day-result-status {
-    font-size: 16px;
-    margin-top: 8px;
-    color: #6b7280;
-}
-.day-result.positive .day-result-status { color: #16a34a; }
-.day-result.negative .day-result-status { color: #dc2626; }
-.day-result.zero .day-result-status { color: #2563eb; }
-
-/* Collection block */
-.collection-block {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 16px;
-    border-radius: 8px;
-    background: #1f2937;
-    margin-top: 12px;
-}
-
-.collection-label {
-    font-size: 16px;
-    font-weight: 600;
-    color: #fff;
-}
-
-.collection-value {
-    font-family: 'Courier New', monospace;
-    font-size: 22px;
-    font-weight: 700;
-    color: #fff;
-}
-
-.shift-left-hint {
-    text-align: center;
-    font-size: 12px;
-    color: #9ca3af;
-    margin-top: 4px;
-}
-
-/* Orders info */
-.orders-info {
-    text-align: center;
-    font-size: 13px;
-    color: #9ca3af;
-    margin-bottom: 16px;
-}
-
-/* Actions */
-.actions-section {
-    text-align: center;
-    margin-bottom: 20px;
-}
-
-.btn {
-    padding: 10px 20px;
-    border-radius: 8px;
+    color: #1c1c1e;
     font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    border: none;
-    transition: background-color 0.2s;
+}
+.sc-info-val.sc-red { color: #ff3b30; }
+.sc-info-sep {
+    height: 1px;
+    background: #e5e5ea;
+    margin: 6px 0;
 }
 
-.btn-primary { background: #3b82f6; color: white; }
-.btn-primary:hover { background: #2563eb; }
-.btn-secondary { background: #6b7280; color: white; }
-.btn-secondary:hover { background: #4b5563; }
-.btn-sm { padding: 6px 14px; font-size: 13px; }
-.btn-outline-secondary {
-    background: transparent;
-    border: 1px solid #6b7280;
-    color: #6b7280;
-}
-.btn-outline-secondary:hover { background: #6b7280; color: white; }
+/* Diff row */
+.sc-diff { border-radius: 6px; padding: 6px 8px; }
+.sc-diff.positive { background: #34c75920; }
+.sc-diff.positive .sc-info-val { color: #30d158; }
+.sc-diff.negative { background: #ff3b3015; }
+.sc-diff.negative .sc-info-val { color: #ff3b30; }
 
-/* Expense report */
-.expense-report-header {
+/* Day result */
+.sc-day-result {
+    text-align: center;
+    padding: 20px 12px;
+    border-radius: 14px;
+    margin-bottom: 8px;
+    background: #f2f2f7;
+    transition: background 0.2s;
+}
+.sc-day-result.positive { background: #34c75920; }
+.sc-day-result.negative { background: #ff3b3018; }
+.sc-day-result.zero { background: #007aff15; }
+.sc-day-label {
+    font-size: 11px;
+    color: #8e8e93;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 4px;
+}
+.sc-day-value {
+    font-size: 38px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #3a3a3c;
+    line-height: 1.1;
+}
+.sc-day-result.positive .sc-day-value { color: #30d158; }
+.sc-day-result.negative .sc-day-value { color: #ff3b30; }
+.sc-day-result.zero .sc-day-value { color: #007aff; }
+.sc-day-status {
+    font-size: 14px;
+    margin-top: 4px;
+    color: #8e8e93;
+}
+.sc-day-result.positive .sc-day-status { color: #30d158; }
+.sc-day-result.negative .sc-day-status { color: #ff3b30; }
+.sc-day-result.zero .sc-day-status { color: #007aff; }
+
+/* Collection */
+.sc-collection {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #1c1c1e;
+    margin-top: 10px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+}
+.sc-collection span:last-child {
+    font-size: 20px;
+    font-variant-numeric: tabular-nums;
 }
 
-.report-actions {
-    margin-bottom: 8px;
-    text-align: right;
+.sc-hint {
+    text-align: center;
+    font-size: 11px;
+    color: #aeaeb2;
+    margin-top: 2px;
 }
 
-.expense-report-text {
-    background: #1a1a2e;
-    color: #eee;
-    padding: 16px;
+/* Buttons */
+.sc-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.sc-btn {
+    flex: 1;
+    padding: 10px 0;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    background: #007aff;
+    color: #fff;
+    -webkit-appearance: none;
+    transition: opacity 0.15s;
+}
+.sc-btn:active { opacity: 0.7; }
+.sc-btn-sec {
+    background: #e5e5ea;
+    color: #1c1c1e;
+}
+.sc-btn-sm {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    background: #e5e5ea;
+    color: #1c1c1e;
+}
+
+/* Report */
+.sc-report {
+    background: #1c1c1e;
+    color: #e5e5ea;
+    padding: 12px;
     border-radius: 8px;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: 12px;
+    line-height: 1.5;
     white-space: pre-wrap;
     word-wrap: break-word;
-    max-height: 500px;
+    max-height: 400px;
     overflow-y: auto;
+    margin: 0;
+    font-family: 'SF Mono', 'Menlo', monospace;
 }
 
-/* Calculating indicator */
-.calculating-indicator {
-    position: fixed;
-    bottom: 16px;
-    left: 16px;
-    right: 16px;
-    padding: 10px;
-    border-radius: 8px;
-    text-align: center;
-    background: #3b82f6;
-    color: white;
-    font-weight: 600;
-    font-size: 14px;
-    z-index: 50;
-}
+/* Loading */
+.loading { opacity: 0.5; pointer-events: none; }
 
-/* Loading state */
-.loading { opacity: 0.6; pointer-events: none; }
-
-@media (max-width: 480px) {
-    .shift-closing-container { padding: 12px; }
-    h1 { font-size: 20px; }
-    .day-result-value { font-size: 36px; }
-    .input-wrapper input { font-size: 16px; padding: 8px 10px; }
+/* Tiny screens (iPhone SE) */
+@media (max-width: 374px) {
+    .sc { padding: 6px 8px 20px; }
+    .sc-field input { font-size: 16px; padding: 9px 10px; }
+    .sc-day-value { font-size: 32px; }
+    .sc-collection span:last-child { font-size: 18px; }
 }
 </style>
 
 <script>
-// Poster data (from API, in tiyins)
 let posterData = null;
 let debounceTimer = null;
 
-// Format number with spaces
-function formatMoney(num) {
-    return Math.round(num).toLocaleString('ru-RU');
+function fmt(n) {
+    return Math.round(n).toLocaleString('ru-RU');
 }
 
-// Parse input value
-function parseInput(id) {
+function pi(id) {
     const el = document.getElementById(id);
     if (!el) return 0;
-    const value = el.value.replace(/\s/g, '').replace(/,/g, '.');
-    return parseFloat(value) || 0;
+    return parseFloat(el.value.replace(/\s/g, '').replace(/,/g, '.')) || 0;
 }
 
-// Debounced calculate (300ms)
 function debouncedCalculate() {
     clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(calculate, 300);
+    debounceTimer = setTimeout(calculate, 250);
 }
 
-// Load Poster data
 async function loadPosterData() {
-    const banner = document.getElementById('loading-banner');
-    banner.textContent = 'Загрузка данных Poster...';
-    banner.classList.remove('hidden', 'error');
+    const b = document.getElementById('loading-banner');
+    b.textContent = 'Загрузка Poster...';
+    b.classList.remove('hidden', 'error');
 
     try {
-        document.querySelector('.shift-closing-container').classList.add('loading');
+        document.querySelector('.sc').classList.add('loading');
+        const r = await fetch('/api/shift-closing/poster-data');
+        const d = await r.json();
 
-        const response = await fetch('/api/shift-closing/poster-data');
-        const data = await response.json();
+        if (d.success) {
+            posterData = d;
 
-        if (data.success) {
-            posterData = data;
+            if (d.shift_start > 0)
+                document.getElementById('shift_start').value = String(d.shift_start / 100);
 
-            // Set shift_start from Poster if available
-            if (data.shift_start && data.shift_start > 0) {
-                document.getElementById('shift_start').value = String(data.shift_start / 100);
-            }
+            document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
+            document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
+            document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
 
-            // Display Poster data
-            document.getElementById('poster_trade_display').textContent =
-                formatMoney(data.trade_total / 100) + ' T';
-            document.getElementById('poster_bonus_display').textContent =
-                '-' + formatMoney(data.bonus / 100) + ' T';
-            document.getElementById('poster_card_display').textContent =
-                formatMoney(data.poster_card / 100) + ' T';
+            const oi = document.getElementById('orders_info');
+            oi.textContent = d.transactions_count + ' заказов';
 
-            // Show accounts info
-            const accountsInfo = document.getElementById('accounts-info');
-            accountsInfo.textContent = data.accounts_count + ' завед.';
-
-            // Show orders info
-            const ordersInfo = document.getElementById('orders_info');
-            ordersInfo.textContent = 'Закрытых заказов: ' + data.transactions_count;
-            ordersInfo.style.display = 'block';
-
-            banner.textContent = 'Данные загружены';
-            setTimeout(() => banner.classList.add('hidden'), 2000);
-
+            b.textContent = 'Готово';
+            setTimeout(() => b.classList.add('hidden'), 1500);
             calculate();
         } else {
-            banner.textContent = 'Ошибка: ' + (data.error || 'Unknown error');
-            banner.classList.add('error');
+            b.textContent = d.error || 'Ошибка';
+            b.classList.add('error');
         }
     } catch (e) {
-        console.error('Error loading Poster data:', e);
-        banner.textContent = 'Не удалось загрузить данные';
-        banner.classList.add('error');
+        b.textContent = 'Ошибка загрузки';
+        b.classList.add('error');
     } finally {
-        document.querySelector('.shift-closing-container').classList.remove('loading');
+        document.querySelector('.sc').classList.remove('loading');
     }
 }
 
-// Calculate via backend API
 async function calculate() {
     if (!posterData) return;
 
     try {
         const body = {
-            wolt: parseInput('wolt'),
-            halyk: parseInput('halyk'),
-            kaspi: parseInput('kaspi'),
-            kaspi_cafe: parseInput('kaspi_cafe'),
-            cash_bills: parseInput('cash_bills'),
-            cash_coins: parseInput('cash_coins'),
-            shift_start: parseInput('shift_start'),
-            deposits: parseInput('deposits'),
-            expenses: parseInput('expenses'),
-            cash_to_leave: parseInput('cash_to_leave'),
+            wolt: pi('wolt'), halyk: pi('halyk'),
+            kaspi: pi('kaspi'), kaspi_cafe: pi('kaspi_cafe'),
+            cash_bills: pi('cash_bills'), cash_coins: pi('cash_coins'),
+            shift_start: pi('shift_start'), deposits: pi('deposits'),
+            expenses: pi('expenses'), cash_to_leave: pi('cash_to_leave'),
             poster_trade: posterData.trade_total,
             poster_bonus: posterData.bonus,
             poster_card: posterData.poster_card,
         };
 
-        const response = await fetch('/api/shift-closing/calculate', {
+        const r = await fetch('/api/shift-closing/calculate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
         });
-        const data = await response.json();
-
-        if (data.success) {
-            const c = data.calculations;
-            updateDisplay(c);
-        }
-    } catch (err) {
-        console.error('Calculation error:', err);
-    }
+        const d = await r.json();
+        if (d.success) show(d.calculations);
+    } catch (e) {}
 }
 
-function updateDisplay(c) {
-    // = Фактический
-    const factTotalRow = document.getElementById('fact_total_row');
-    factTotalRow.style.display = 'flex';
-    document.getElementById('fact_total_value').textContent = formatMoney(c.fact_total) + ' T';
+function show(c) {
+    // Factual
+    document.getElementById('fact_total_row').style.display = 'flex';
+    document.getElementById('fact_total_value').textContent = fmt(c.fact_total);
 
-    // Итого фактич.
-    const factAdjRow = document.getElementById('fact_adjusted_row');
-    factAdjRow.style.display = 'flex';
-    document.getElementById('fact_adjusted_value').textContent = formatMoney(c.fact_adjusted) + ' T';
+    document.getElementById('fact_adjusted_row').style.display = 'flex';
+    document.getElementById('fact_adjusted_value').textContent = fmt(c.fact_adjusted);
 
-    // Poster - Итого безнал
-    document.getElementById('poster_cashless').textContent = formatMoney(c.fact_cashless) + ' T';
+    // Poster cashless
+    document.getElementById('poster_cashless').textContent = fmt(c.fact_cashless);
 
     // Cashless diff
-    const cashlessDiffRow = document.getElementById('cashless_diff_row');
-    const cashlessDiff = c.cashless_diff;
-    if (Math.abs(cashlessDiff) >= 1) {
-        cashlessDiffRow.style.display = 'flex';
-        cashlessDiffRow.classList.remove('positive', 'negative');
-        cashlessDiffRow.classList.add(cashlessDiff > 0 ? 'positive' : 'negative');
+    const cdr = document.getElementById('cashless_diff_row');
+    if (Math.abs(c.cashless_diff) >= 1) {
+        cdr.style.display = 'flex';
+        cdr.classList.remove('positive', 'negative');
+        cdr.classList.add(c.cashless_diff > 0 ? 'positive' : 'negative');
         document.getElementById('cashless_diff_value').textContent =
-            (cashlessDiff > 0 ? '+' : '') + formatMoney(cashlessDiff) + ' T';
+            (c.cashless_diff > 0 ? '+' : '') + fmt(c.cashless_diff);
     } else {
-        cashlessDiffRow.style.display = 'none';
+        cdr.style.display = 'none';
     }
 
-    // Итого Poster
-    const posterTotalRow = document.getElementById('poster_total_row');
-    posterTotalRow.style.display = 'flex';
-    document.getElementById('poster_total_value').textContent = formatMoney(c.poster_total) + ' T';
+    // Poster total
+    document.getElementById('poster_total_row').style.display = 'flex';
+    document.getElementById('poster_total_value').textContent = fmt(c.poster_total);
 
-    // ИТОГО ДЕНЬ
-    const dayResult = c.day_result;
-    const block = document.getElementById('day_result_block');
-    const valueEl = document.getElementById('day_result_value');
-    const statusEl = document.getElementById('day_result_status');
+    // Day result
+    const dr = c.day_result;
+    const bl = document.getElementById('day_result_block');
+    const vl = document.getElementById('day_result_value');
+    const st = document.getElementById('day_result_status');
+    bl.classList.remove('positive', 'negative', 'zero');
 
-    block.classList.remove('positive', 'negative', 'zero');
-
-    if (dayResult > 0) {
-        block.classList.add('positive');
-        valueEl.textContent = '+' + formatMoney(dayResult) + ' T';
-        statusEl.textContent = '(излишек)';
-    } else if (dayResult < 0) {
-        block.classList.add('negative');
-        valueEl.textContent = formatMoney(dayResult) + ' T';
-        statusEl.textContent = '(недостача)';
+    if (dr > 0) {
+        bl.classList.add('positive');
+        vl.textContent = '+' + fmt(dr);
+        st.textContent = 'излишек';
+    } else if (dr < 0) {
+        bl.classList.add('negative');
+        vl.textContent = fmt(dr);
+        st.textContent = 'недостача';
     } else {
-        block.classList.add('zero');
-        valueEl.textContent = '0 T';
-        statusEl.textContent = '(идеально!)';
+        bl.classList.add('zero');
+        vl.textContent = '0';
+        st.textContent = 'идеально';
     }
 
-    // Смена оставили
-    const shiftLeftRow = document.getElementById('shift_left_row');
-    shiftLeftRow.style.display = 'flex';
-    document.getElementById('shift_left_value').textContent = formatMoney(c.shift_left) + ' T';
+    // Shift left
+    document.getElementById('shift_left_row').style.display = 'flex';
+    document.getElementById('shift_left_value').textContent = fmt(c.shift_left);
 
-    // Hint
-    const hint = document.getElementById('shift_left_hint');
-    hint.style.display = 'block';
-    hint.textContent = '(' + formatMoney(parseInput('cash_to_leave')) + ' бумажные + ' +
-        formatMoney(parseInput('cash_coins')) + ' мелочь)';
+    const h = document.getElementById('shift_left_hint');
+    h.style.display = 'block';
+    h.textContent = fmt(pi('cash_to_leave')) + ' + ' + fmt(pi('cash_coins')) + ' мелочь';
 
-    // Инкассация
-    const collBlock = document.getElementById('collection_block');
-    collBlock.style.display = 'flex';
-    document.getElementById('collection_value').textContent = formatMoney(c.collection) + ' T';
+    // Collection
+    document.getElementById('collection_block').style.display = 'flex';
+    document.getElementById('collection_value').textContent = fmt(c.collection);
 }
 
-// Load expense report
 async function loadExpenseReport() {
-    const container = document.getElementById('expense-report-container');
-    const textEl = document.getElementById('expense-report-text');
-
     try {
-        const response = await fetch('/api/expense-report');
-        const data = await response.json();
-
-        if (data.success) {
-            textEl.textContent = data.report;
-            container.style.display = 'block';
-        } else {
-            alert('Ошибка: ' + (data.error || 'Не удалось загрузить отчёт'));
+        const r = await fetch('/api/expense-report');
+        const d = await r.json();
+        if (d.success) {
+            document.getElementById('expense-report-text').textContent = d.report;
+            document.getElementById('expense-report-container').style.display = 'block';
         }
-    } catch (err) {
-        console.error('Error loading expense report:', err);
-        alert('Ошибка загрузки отчёта');
-    }
+    } catch (e) {}
 }
 
-// Copy report to clipboard
 function copyReport() {
-    const text = document.getElementById('expense-report-text').textContent;
-    navigator.clipboard.writeText(text).then(() => {
-        alert('Скопировано!');
+    const t = document.getElementById('expense-report-text').textContent;
+    navigator.clipboard.writeText(t).then(() => {
+        const btn = event.target;
+        btn.textContent = 'Готово';
+        setTimeout(() => btn.textContent = 'Скопировать', 1500);
     }).catch(() => {
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        document.body.appendChild(textarea);
-        textarea.select();
+        const ta = document.createElement('textarea');
+        ta.value = t;
+        document.body.appendChild(ta);
+        ta.select();
         document.execCommand('copy');
-        document.body.removeChild(textarea);
-        alert('Скопировано!');
+        document.body.removeChild(ta);
     });
 }
 
-// Initialize
 document.addEventListener('DOMContentLoaded', function() {
-    // Set current date
-    const today = new Date();
-    const dateStr = today.toLocaleDateString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-    });
-    document.getElementById('current-date').textContent = dateStr;
-
-    // Load Poster data automatically
+    document.getElementById('current-date').textContent =
+        new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
     loadPosterData();
 });
 </script>
