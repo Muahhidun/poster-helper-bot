@@ -3017,19 +3017,15 @@ document.getElementById('sync-poster-btn').addEventListener('click', async funct
         const result = await response.json();
 
         if (result.success) {
-            if (result.synced > 0 || result.updated > 0) {
-                // Reload page to show new/updated drafts
-                let msg = '';
-                if (result.synced > 0) msg += `Добавлено: ${result.synced}`;
-                if (result.updated > 0) msg += (msg ? ', ' : '') + `Обновлено: ${result.updated}`;
-                alert(`✅ ${msg}`);
-                location.reload();
-            } else {
-                // No new items and no updates - refresh Poster data and update sync status
-                btn.textContent = '🔄 Обновление статусов...';
-                await refreshPosterData();
-                alert(`ℹ️ Новых транзакций не найдено.\nСтатусы совпадения обновлены.`);
-            }
+            // Build informative message
+            let parts = [];
+            if (result.synced > 0) parts.push(`добавлено: ${result.synced}`);
+            if (result.updated > 0) parts.push(`обновлено: ${result.updated}`);
+            if (result.skipped > 0) parts.push(`без изменений: ${result.skipped}`);
+            const msg = parts.length > 0 ? parts.join(', ') : 'Нет транзакций за сегодня';
+            alert(`✅ Синхронизация: ${msg}`);
+            // Always reload to show fresh data
+            location.reload();
         } else {
             alert(`❌ Ошибка: ${result.error || 'Неизвестная ошибка'}`);
         }
