@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTelegram } from '../hooks/useTelegram'
 import { useApi } from '../hooks/useApi'
@@ -13,44 +13,179 @@ function formatMoney(amount: number): string {
   return Math.round(amount).toLocaleString('ru-RU')
 }
 
-// Parse input value (allow expressions like 35270)
+// Parse input value
 function parseInputValue(value: string): number {
   const cleaned = value.replace(/\s/g, '').replace(/,/g, '.')
   const num = parseFloat(cleaned)
   return isNaN(num) ? 0 : num
 }
 
+// Get today's date in Kazakhstan timezone (UTC+5) as YYYY-MM-DD
+function getKzToday(): string {
+  const now = new Date()
+  const kzTime = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000)
+  return kzTime.toISOString().slice(0, 10)
+}
+
+// Format YYYY-MM-DD to DD.MM.YYYY
+function formatDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-')
+  return `${d}.${m}.${y}`
+}
+
+// Format YYYY-MM-DD to YYYYMMDD (for Poster API)
+function toPosterDate(dateStr: string): string {
+  return dateStr.replace(/-/g, '')
+}
+
+// localStorage key for inputs
+function storageKey(date: string): string {
+  return `shift_closing_${date}`
+}
+
+interface InputState {
+  wolt: string
+  halyk: string
+  kaspi: string
+  kaspiCafe: string
+  cashBills: string
+  cashCoins: string
+  shiftStart: string
+  deposits: string
+  expenses: string
+  cashToLeave: string
+}
+
+const defaultInputs: InputState = {
+  wolt: '', halyk: '', kaspi: '', kaspiCafe: '',
+  cashBills: '', cashCoins: '', shiftStart: '',
+  deposits: '0', expenses: '', cashToLeave: '15000',
+}
+
 export const ShiftClosing: React.FC = () => {
   const navigate = useNavigate()
   const { webApp, themeParams } = useTelegram()
 
-  // Load Poster data
+  // Selected date
+  const [selectedDate, setSelectedDate] = useState(getKzToday)
+  const isToday = selectedDate === getKzToday()
+
+  // History dates
+  const [historyDates, setHistoryDates] = useState<string[]>([])
+
+  // View mode: 'edit' for today (or reopen past), 'view' for viewing saved history
+  const [viewMode, setViewMode] = useState<'edit' | 'view'>('edit')
+
+  // Load Poster data (only for today or editable dates)
   const { data: posterData, loading, error, refetch } = useApi(() =>
-    getApiClient().getShiftClosingPosterData()
-  )
+    getApiClient().getShiftClosingPosterData(isToday ? undefined : toPosterDate(selectedDate))
+  , [selectedDate])
 
-  // Form state - manual input fields (all in tenge)
-  const [wolt, setWolt] = useState('')
-  const [halyk, setHalyk] = useState('')
-  const [kaspi, setKaspi] = useState('')
-  const [kaspiCafe, setKaspiCafe] = useState('')
-  const [cashBills, setCashBills] = useState('')
-  const [cashCoins, setCashCoins] = useState('')
-  const [shiftStart, setShiftStart] = useState('')
-  const [deposits, setDeposits] = useState('0')
-  const [expenses, setExpenses] = useState('')
-  const [cashToLeave, setCashToLeave] = useState('15000')
-
-  // Calculated values
+  // Form state
+  const [inputs, setInputs] = useState<InputState>(defaultInputs)
   const [calculations, setCalculations] = useState<ShiftClosingCalculations | null>(null)
   const [calculating, setCalculating] = useState(false)
+  const [reportCopied, setReportCopied] = useState(false)
+  const [saving, setSaving] = useState(false)
 
-  // Set shift_start from Poster data when loaded
+  // Track if shift_start was auto-set (so we don't overwrite user edits)
+  const shiftStartAutoSet = useRef(false)
+
+  // Helper to update a single input field
+  const setField = useCallback((field: keyof InputState, value: string) => {
+    setInputs(prev => ({ ...prev, [field]: value }))
+  }, [])
+
+  // Save inputs to localStorage
+  const saveToLocalStorage = useCallback((date: string, state: InputState) => {
+    try {
+      localStorage.setItem(storageKey(date), JSON.stringify(state))
+    } catch { /* ignore */ }
+  }, [])
+
+  // Load inputs from localStorage
+  const loadFromLocalStorage = useCallback((date: string): InputState | null => {
+    try {
+      const raw = localStorage.getItem(storageKey(date))
+      if (raw) return JSON.parse(raw)
+    } catch { /* ignore */ }
+    return null
+  }, [])
+
+  // Load history dates on mount
   useEffect(() => {
-    if (posterData?.shift_start) {
-      setShiftStart(String(posterData.shift_start / 100))
+    getApiClient().getShiftClosingDates().then(res => {
+      if (res.success) setHistoryDates(res.dates)
+    }).catch(() => {})
+  }, [])
+
+  // When date changes, load saved data or localStorage
+  useEffect(() => {
+    shiftStartAutoSet.current = false
+
+    // Try to load saved closing from backend
+    getApiClient().getShiftClosingHistory(selectedDate).then(res => {
+      if (res.success && res.closing) {
+        // Restore input values from saved closing
+        const c = res.closing
+        const restored: InputState = {
+          wolt: String(c.wolt || ''),
+          halyk: String(c.halyk || ''),
+          kaspi: String(c.kaspi || ''),
+          kaspiCafe: String(c.kaspi_cafe || ''),
+          cashBills: String(c.cash_bills || ''),
+          cashCoins: String(c.cash_coins || ''),
+          shiftStart: String(c.shift_start || ''),
+          deposits: String(c.deposits || '0'),
+          expenses: String(c.expenses || ''),
+          cashToLeave: String(c.cash_to_leave || '15000'),
+        }
+        setInputs(restored)
+        shiftStartAutoSet.current = true
+        setViewMode(isToday ? 'edit' : 'view')
+      } else {
+        // No saved data found
+        // Try localStorage
+        const local = loadFromLocalStorage(selectedDate)
+        if (local) {
+          setInputs(local)
+          shiftStartAutoSet.current = !!local.shiftStart
+        } else {
+          setInputs(defaultInputs)
+        }
+        setViewMode('edit')
+      }
+    }).catch(() => {
+      const local = loadFromLocalStorage(selectedDate)
+      if (local) {
+        setInputs(local)
+      } else {
+        setInputs(defaultInputs)
+      }
+      setViewMode('edit')
+    })
+  }, [selectedDate, isToday, loadFromLocalStorage])
+
+  // Set shift_start from previous day's shift_left (priority) or Poster
+  useEffect(() => {
+    if (!posterData || shiftStartAutoSet.current) return
+
+    if (posterData.prev_shift_left != null) {
+      // Use previous day's "Смена оставили" as today's shift_start
+      setInputs(prev => ({ ...prev, shiftStart: String(posterData.prev_shift_left! / 100) }))
+    } else if (posterData.shift_start) {
+      // Fallback to Poster cash drawer calculation
+      setInputs(prev => ({ ...prev, shiftStart: String(posterData.shift_start / 100) }))
     }
+    shiftStartAutoSet.current = true
   }, [posterData])
+
+  // Save inputs to localStorage on every change
+  useEffect(() => {
+    if (viewMode === 'edit') {
+      saveToLocalStorage(selectedDate, inputs)
+    }
+  }, [inputs, selectedDate, viewMode, saveToLocalStorage])
 
   // Calculate totals when inputs change
   const calculateTotals = useCallback(async () => {
@@ -60,16 +195,16 @@ export const ShiftClosing: React.FC = () => {
 
     try {
       const result = await getApiClient().calculateShiftClosing({
-        wolt: parseInputValue(wolt),
-        halyk: parseInputValue(halyk),
-        kaspi: parseInputValue(kaspi),
-        kaspi_cafe: parseInputValue(kaspiCafe),
-        cash_bills: parseInputValue(cashBills),
-        cash_coins: parseInputValue(cashCoins),
-        shift_start: parseInputValue(shiftStart),
-        deposits: parseInputValue(deposits),
-        expenses: parseInputValue(expenses),
-        cash_to_leave: parseInputValue(cashToLeave),
+        wolt: parseInputValue(inputs.wolt),
+        halyk: parseInputValue(inputs.halyk),
+        kaspi: parseInputValue(inputs.kaspi),
+        kaspi_cafe: parseInputValue(inputs.kaspiCafe),
+        cash_bills: parseInputValue(inputs.cashBills),
+        cash_coins: parseInputValue(inputs.cashCoins),
+        shift_start: parseInputValue(inputs.shiftStart),
+        deposits: parseInputValue(inputs.deposits),
+        expenses: parseInputValue(inputs.expenses),
+        cash_to_leave: parseInputValue(inputs.cashToLeave),
         poster_trade: posterData.trade_total,
         poster_bonus: posterData.bonus,
         poster_card: posterData.poster_card,
@@ -83,16 +218,77 @@ export const ShiftClosing: React.FC = () => {
     } finally {
       setCalculating(false)
     }
-  }, [wolt, halyk, kaspi, kaspiCafe, cashBills, cashCoins, shiftStart, deposits, expenses, cashToLeave, posterData])
+  }, [inputs, posterData])
 
   // Debounced calculation
   useEffect(() => {
     const timer = setTimeout(() => {
       calculateTotals()
     }, 300)
-
     return () => clearTimeout(timer)
   }, [calculateTotals])
+
+  // Auto-save to backend when calculations change and we have real input
+  useEffect(() => {
+    if (!calculations || viewMode !== 'edit') return
+
+    const hasInput = parseInputValue(inputs.cashBills) > 0 ||
+      parseInputValue(inputs.wolt) > 0 || parseInputValue(inputs.kaspi) > 0 ||
+      parseInputValue(inputs.halyk) > 0
+
+    if (!hasInput) return
+
+    const saveTimer = setTimeout(() => {
+      setSaving(true)
+      getApiClient().saveShiftClosing({
+        date: selectedDate,
+        wolt: parseInputValue(inputs.wolt),
+        halyk: parseInputValue(inputs.halyk),
+        kaspi: parseInputValue(inputs.kaspi),
+        kaspi_cafe: parseInputValue(inputs.kaspiCafe),
+        cash_bills: parseInputValue(inputs.cashBills),
+        cash_coins: parseInputValue(inputs.cashCoins),
+        shift_start: parseInputValue(inputs.shiftStart),
+        deposits: parseInputValue(inputs.deposits),
+        expenses: parseInputValue(inputs.expenses),
+        cash_to_leave: parseInputValue(inputs.cashToLeave),
+        poster_trade: calculations.poster_trade,
+        poster_bonus: calculations.poster_bonus,
+        poster_card: calculations.poster_card,
+        poster_cash: 0,
+        transactions_count: posterData?.transactions_count || 0,
+        fact_cashless: calculations.fact_cashless,
+        fact_total: calculations.fact_total,
+        fact_adjusted: calculations.fact_adjusted,
+        poster_total: calculations.poster_total,
+        day_result: calculations.day_result,
+        shift_left: calculations.shift_left,
+        collection: calculations.collection,
+        cashless_diff: calculations.cashless_diff,
+      }).then(() => {
+        // Update history dates if this date isn't there yet
+        if (!historyDates.includes(selectedDate)) {
+          setHistoryDates(prev => [selectedDate, ...prev].sort().reverse())
+        }
+      }).catch(() => {}).finally(() => setSaving(false))
+    }, 1000)
+
+    return () => clearTimeout(saveTimer)
+  }, [calculations, viewMode, selectedDate, inputs, posterData, historyDates])
+
+  // Copy report to clipboard
+  const handleCopyReport = useCallback(async () => {
+    try {
+      const res = await getApiClient().getShiftClosingReport(selectedDate)
+      if (res.success && res.report) {
+        await navigator.clipboard.writeText(res.report)
+        setReportCopied(true)
+        setTimeout(() => setReportCopied(false), 2000)
+      }
+    } catch (err) {
+      console.error('Report error:', err)
+    }
+  }, [selectedDate])
 
   // Setup back button
   useEffect(() => {
@@ -111,11 +307,9 @@ export const ShiftClosing: React.FC = () => {
   if (loading) return <Loading />
   if (error) return <ErrorMessage message={error.message} onRetry={refetch} />
 
-  const today = new Date().toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  })
+  // Build date options for selector: today + history dates
+  const today = getKzToday()
+  const allDates = Array.from(new Set([today, ...historyDates])).sort().reverse()
 
   // Day result styling
   const dayResult = calculations?.day_result ?? 0
@@ -124,19 +318,53 @@ export const ShiftClosing: React.FC = () => {
   const dayResultColor = isPositive ? '#22c55e' : isNegative ? '#ef4444' : themeParams.text_color
   const dayResultLabel = isPositive ? '(излишек)' : isNegative ? '(недостача)' : '(идеально!)'
 
+  const isReadonly = viewMode === 'view'
+
+  const inputStyle = {
+    backgroundColor: isReadonly ? (themeParams.secondary_bg_color || '#f3f4f6') : (themeParams.bg_color || '#ffffff'),
+    color: themeParams.text_color,
+    borderColor: themeParams.hint_color,
+  }
+
   return (
     <div style={{ backgroundColor: themeParams.bg_color || '#ffffff' }} className="min-h-screen pb-8">
       <Header title="Закрытие смены" showBack />
 
       <div className="p-4">
-        {/* Date Header */}
+        {/* Date Selector */}
         <div
-          className="text-center mb-6 p-3 rounded-lg"
+          className="mb-6 p-3 rounded-lg"
           style={{ backgroundColor: themeParams.secondary_bg_color || '#f3f4f6' }}
         >
-          <span style={{ color: themeParams.text_color }} className="text-lg font-semibold">
-            {today}
-          </span>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1" style={{ WebkitOverflowScrolling: 'touch' }}>
+            {allDates.map(d => (
+              <button
+                key={d}
+                onClick={() => setSelectedDate(d)}
+                className="px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap flex-shrink-0"
+                style={{
+                  backgroundColor: d === selectedDate ? themeParams.button_color : themeParams.bg_color,
+                  color: d === selectedDate ? themeParams.button_text_color : themeParams.text_color,
+                }}
+              >
+                {d === today ? `${formatDate(d)} (сегодня)` : formatDate(d)}
+              </button>
+            ))}
+          </div>
+          {isReadonly && (
+            <div className="mt-2 flex justify-between items-center">
+              <span className="text-xs" style={{ color: themeParams.hint_color }}>
+                Просмотр сохранённых данных
+              </span>
+              <button
+                onClick={() => setViewMode('edit')}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: themeParams.button_color, color: themeParams.button_text_color }}
+              >
+                Редактировать
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Two Column Layout */}
@@ -164,15 +392,12 @@ export const ShiftClosing: React.FC = () => {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={wolt}
-                    onChange={(e) => setWolt(e.target.value)}
+                    value={inputs.wolt}
+                    onChange={(e) => setField('wolt', e.target.value)}
+                    readOnly={isReadonly}
                     placeholder="0"
                     className="w-full p-3 rounded-lg border text-right"
-                    style={{
-                      backgroundColor: themeParams.bg_color || '#ffffff',
-                      color: themeParams.text_color,
-                      borderColor: themeParams.hint_color,
-                    }}
+                    style={inputStyle}
                   />
                 </div>
                 <div>
@@ -182,15 +407,12 @@ export const ShiftClosing: React.FC = () => {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={halyk}
-                    onChange={(e) => setHalyk(e.target.value)}
+                    value={inputs.halyk}
+                    onChange={(e) => setField('halyk', e.target.value)}
+                    readOnly={isReadonly}
                     placeholder="0"
                     className="w-full p-3 rounded-lg border text-right"
-                    style={{
-                      backgroundColor: themeParams.bg_color || '#ffffff',
-                      color: themeParams.text_color,
-                      borderColor: themeParams.hint_color,
-                    }}
+                    style={inputStyle}
                   />
                 </div>
               </div>
@@ -202,15 +424,12 @@ export const ShiftClosing: React.FC = () => {
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={kaspi}
-                  onChange={(e) => setKaspi(e.target.value)}
+                  value={inputs.kaspi}
+                  onChange={(e) => setField('kaspi', e.target.value)}
+                  readOnly={isReadonly}
                   placeholder="0"
                   className="w-full p-3 rounded-lg border text-right"
-                  style={{
-                    backgroundColor: themeParams.bg_color || '#ffffff',
-                    color: themeParams.text_color,
-                    borderColor: themeParams.hint_color,
-                  }}
+                  style={inputStyle}
                 />
               </div>
 
@@ -221,13 +440,13 @@ export const ShiftClosing: React.FC = () => {
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={kaspiCafe}
-                  onChange={(e) => setKaspiCafe(e.target.value)}
+                  value={inputs.kaspiCafe}
+                  onChange={(e) => setField('kaspiCafe', e.target.value)}
+                  readOnly={isReadonly}
                   placeholder="0"
                   className="w-full p-3 rounded-lg border text-right"
                   style={{
-                    backgroundColor: themeParams.bg_color || '#ffffff',
-                    color: themeParams.text_color,
+                    ...inputStyle,
                     borderColor: '#f87171',
                   }}
                 />
@@ -244,15 +463,12 @@ export const ShiftClosing: React.FC = () => {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={cashBills}
-                    onChange={(e) => setCashBills(e.target.value)}
+                    value={inputs.cashBills}
+                    onChange={(e) => setField('cashBills', e.target.value)}
+                    readOnly={isReadonly}
                     placeholder="0"
                     className="w-full p-3 rounded-lg border text-right"
-                    style={{
-                      backgroundColor: themeParams.bg_color || '#ffffff',
-                      color: themeParams.text_color,
-                      borderColor: themeParams.hint_color,
-                    }}
+                    style={inputStyle}
                   />
                 </div>
                 <div>
@@ -262,15 +478,12 @@ export const ShiftClosing: React.FC = () => {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={cashCoins}
-                    onChange={(e) => setCashCoins(e.target.value)}
+                    value={inputs.cashCoins}
+                    onChange={(e) => setField('cashCoins', e.target.value)}
+                    readOnly={isReadonly}
                     placeholder="0"
                     className="w-full p-3 rounded-lg border text-right"
-                    style={{
-                      backgroundColor: themeParams.bg_color || '#ffffff',
-                      color: themeParams.text_color,
-                      borderColor: themeParams.hint_color,
-                    }}
+                    style={inputStyle}
                   />
                 </div>
               </div>
@@ -302,15 +515,12 @@ export const ShiftClosing: React.FC = () => {
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={shiftStart}
-                  onChange={(e) => setShiftStart(e.target.value)}
+                  value={inputs.shiftStart}
+                  onChange={(e) => setField('shiftStart', e.target.value)}
+                  readOnly={isReadonly}
                   placeholder="0"
                   className="w-full p-3 rounded-lg border text-right"
-                  style={{
-                    backgroundColor: themeParams.bg_color || '#ffffff',
-                    color: themeParams.text_color,
-                    borderColor: themeParams.hint_color,
-                  }}
+                  style={inputStyle}
                 />
               </div>
 
@@ -321,15 +531,12 @@ export const ShiftClosing: React.FC = () => {
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={deposits}
-                  onChange={(e) => setDeposits(e.target.value)}
+                  value={inputs.deposits}
+                  onChange={(e) => setField('deposits', e.target.value)}
+                  readOnly={isReadonly}
                   placeholder="0"
                   className="w-full p-3 rounded-lg border text-right"
-                  style={{
-                    backgroundColor: themeParams.bg_color || '#ffffff',
-                    color: themeParams.text_color,
-                    borderColor: themeParams.hint_color,
-                  }}
+                  style={inputStyle}
                 />
               </div>
 
@@ -340,15 +547,12 @@ export const ShiftClosing: React.FC = () => {
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={expenses}
-                  onChange={(e) => setExpenses(e.target.value)}
+                  value={inputs.expenses}
+                  onChange={(e) => setField('expenses', e.target.value)}
+                  readOnly={isReadonly}
                   placeholder="0"
                   className="w-full p-3 rounded-lg border text-right"
-                  style={{
-                    backgroundColor: themeParams.bg_color || '#ffffff',
-                    color: themeParams.text_color,
-                    borderColor: themeParams.hint_color,
-                  }}
+                  style={inputStyle}
                 />
               </div>
             </div>
@@ -476,15 +680,12 @@ export const ShiftClosing: React.FC = () => {
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={cashToLeave}
-                  onChange={(e) => setCashToLeave(e.target.value)}
+                  value={inputs.cashToLeave}
+                  onChange={(e) => setField('cashToLeave', e.target.value)}
+                  readOnly={isReadonly}
                   placeholder="15000"
                   className="w-full p-3 rounded-lg border text-right"
-                  style={{
-                    backgroundColor: themeParams.bg_color || '#ffffff',
-                    color: themeParams.text_color,
-                    borderColor: themeParams.hint_color,
-                  }}
+                  style={inputStyle}
                 />
               </div>
 
@@ -499,7 +700,7 @@ export const ShiftClosing: React.FC = () => {
                     </span>
                   </div>
                   <div className="text-xs text-center" style={{ color: themeParams.hint_color }}>
-                    ({formatMoney(parseInputValue(cashToLeave))} бумажные + {formatMoney(parseInputValue(cashCoins))} мелочь)
+                    ({formatMoney(parseInputValue(inputs.cashToLeave))} бумажные + {formatMoney(parseInputValue(inputs.cashCoins))} мелочь)
                   </div>
 
                   <div
@@ -518,10 +719,25 @@ export const ShiftClosing: React.FC = () => {
             </div>
           </div>
 
+          {/* Report Button */}
+          {calculations && (
+            <button
+              onClick={handleCopyReport}
+              className="w-full p-4 rounded-lg text-center font-medium"
+              style={{
+                backgroundColor: reportCopied ? '#22c55e' : themeParams.secondary_bg_color || '#f3f4f6',
+                color: reportCopied ? '#ffffff' : themeParams.text_color,
+              }}
+            >
+              {reportCopied ? 'Скопировано!' : 'Скопировать отчёт закрытия смены'}
+            </button>
+          )}
+
           {/* Transactions count info */}
           {posterData && (
             <div className="text-center text-sm" style={{ color: themeParams.hint_color }}>
               Закрытых заказов: {posterData.transactions_count}
+              {saving && ' | Сохранение...'}
             </div>
           )}
         </div>

@@ -25,6 +25,10 @@ import type {
   SyncFromPosterResponse,
   ShiftReconciliationResponse,
   SaveReconciliationRequest,
+  ShiftClosingHistoryResponse,
+  ShiftClosingDatesResponse,
+  ShiftClosingReportResponse,
+  ShiftClosingData,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -202,6 +206,29 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
     })
+  }
+
+  async saveShiftClosing(data: ShiftClosingData & { date?: string }): Promise<{ success: boolean }> {
+    return this.request('/api/shift-closing/save', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getShiftClosingHistory(date: string): Promise<ShiftClosingHistoryResponse> {
+    return this.request<ShiftClosingHistoryResponse>(`/api/shift-closing/history?date=${date}`)
+  }
+
+  async getShiftClosingDates(): Promise<ShiftClosingDatesResponse> {
+    return this.request<ShiftClosingDatesResponse>('/api/shift-closing/dates')
+  }
+
+  async getShiftClosingReport(date?: string): Promise<ShiftClosingReportResponse> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const queryString = params.toString()
+    const endpoint = queryString ? `/api/shift-closing/report?${queryString}` : '/api/shift-closing/report'
+    return this.request<ShiftClosingReportResponse>(endpoint)
   }
 
   // Expenses

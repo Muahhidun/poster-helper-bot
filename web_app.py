@@ -4040,6 +4040,25 @@ def api_shift_closing_poster_data():
         data = loop.run_until_complete(get_poster_data_primary())
         loop.close()
 
+        # Look up previous day's shift_left from saved history
+        try:
+            if date is None:
+                kz_tz = timezone(timedelta(hours=5))
+                target_date = datetime.now(kz_tz).date()
+            else:
+                target_date = datetime.strptime(date, '%Y%m%d').date()
+            prev_date = (target_date - timedelta(days=1)).strftime('%Y-%m-%d')
+            prev_closing = db.get_shift_closing(g.user_id, prev_date)
+            if prev_closing and prev_closing.get('shift_left') is not None:
+                # shift_left is stored in tenge, convert to tiyins for consistency
+                data['prev_shift_left'] = float(prev_closing['shift_left']) * 100
+                print(f"[SHIFT] Previous day ({prev_date}) shift_left: {prev_closing['shift_left']}₸", flush=True)
+            else:
+                data['prev_shift_left'] = None
+        except Exception as e:
+            print(f"[SHIFT] Error getting previous shift_left: {e}", flush=True)
+            data['prev_shift_left'] = None
+
         return jsonify(data)
 
     except Exception as e:
@@ -4132,6 +4151,165 @@ def api_shift_closing_calculate():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/shift-closing/save', methods=['POST'])
+def api_shift_closing_save():
+    """Save shift closing data for a specific date"""
+    data = request.json
+    db = get_database()
+
+    try:
+        kz_tz = timezone(timedelta(hours=5))
+        date = data.get('date') or datetime.now(kz_tz).strftime('%Y-%m-%d')
+
+        db.save_shift_closing(g.user_id, date, data)
+
+        return jsonify({'success': True, 'date': date})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/shift-closing/history')
+def api_shift_closing_history():
+    """Get shift closing data for a specific date"""
+    date = request.args.get('date')
+    db = get_database()
+
+    if not date:
+        kz_tz = timezone(timedelta(hours=5))
+        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+
+    try:
+        closing = db.get_shift_closing(g.user_id, date)
+        return jsonify({
+            'success': True,
+            'date': date,
+            'closing': closing
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/shift-closing/dates')
+def api_shift_closing_dates():
+    """Get list of dates with shift closing history"""
+    db = get_database()
+
+    try:
+        dates = db.get_shift_closing_dates(g.user_id)
+        return jsonify({
+            'success': True,
+            'dates': dates
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/shift-closing/report')
+def api_shift_closing_report():
+    """Generate text report for shift closing (for copying to WhatsApp)"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+    kz_tz = timezone(timedelta(hours=5))
+
+    date = request.args.get('date')
+    if not date:
+        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+
+    try:
+        closing = db.get_shift_closing(g.user_id, date)
+
+        if not closing:
+            return jsonify({'success': False, 'error': 'Нет данных закрытия смены за эту дату'})
+
+        # Format date for display
+        try:
+            dt = datetime.strptime(date, '%Y-%m-%d')
+            date_display = dt.strftime('%d.%m.%Y')
+        except Exception:
+            date_display = date
+
+        def fmt(val):
+            """Format number with space as thousands separator"""
+            return f"{int(round(float(val or 0))):,}".replace(',', ' ')
+
+        day_result = float(closing.get('day_result', 0))
+        day_label = "излишек" if day_result > 0 else "недостача" if day_result < 0 else "ровно"
+        day_sign = "+" if day_result > 0 else ""
+
+        lines = [
+            f"Закрытие смены {date_display}",
+            "",
+            "Безнал терминалы:",
+            f"  Wolt: {fmt(closing.get('wolt'))}",
+            f"  Halyk: {fmt(closing.get('halyk'))}",
+            f"  Kaspi: {fmt(closing.get('kaspi'))}",
+        ]
+
+        kaspi_cafe = float(closing.get('kaspi_cafe', 0))
+        if kaspi_cafe > 0:
+            lines.append(f"  Kaspi Cafe: -{fmt(kaspi_cafe)}")
+
+        lines += [
+            f"Итого безнал: {fmt(closing.get('fact_cashless'))}",
+            "",
+            "Наличные:",
+            f"  Бумажные: {fmt(closing.get('cash_bills'))}",
+            f"  Мелочь: {fmt(closing.get('cash_coins'))}",
+            "",
+            f"Фактический: {fmt(closing.get('fact_total'))}",
+            f"Смена начало: {fmt(closing.get('shift_start'))}",
+        ]
+
+        deposits = float(closing.get('deposits', 0))
+        if deposits > 0:
+            lines.append(f"Внесения: {fmt(deposits)}")
+
+        expenses = float(closing.get('expenses', 0))
+        if expenses > 0:
+            lines.append(f"Расходы: {fmt(expenses)}")
+
+        lines += [
+            f"Итого фактич: {fmt(closing.get('fact_adjusted'))}",
+            "",
+            f"Poster торговля: {fmt(closing.get('poster_trade'))}",
+            f"Poster бонусы: -{fmt(closing.get('poster_bonus'))}",
+            f"Итого Poster: {fmt(closing.get('poster_total'))}",
+            "",
+            f"ИТОГО ДЕНЬ: {day_sign}{fmt(day_result)} ({day_label})",
+            "",
+            f"Смена оставили: {fmt(closing.get('shift_left'))}",
+            f"Инкассация: {fmt(closing.get('collection'))}",
+        ]
+
+        cashless_diff = float(closing.get('cashless_diff', 0))
+        if abs(cashless_diff) >= 1:
+            diff_sign = "+" if cashless_diff > 0 else ""
+            lines.append(f"Разница безнал: {diff_sign}{fmt(cashless_diff)}")
+
+        report = "\n".join(lines)
+
+        return jsonify({
+            'success': True,
+            'report': report,
+            'date': date
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/expense-report')
