@@ -384,7 +384,7 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                price_for_api = round(item['price'])
+                price_for_api = item['price']
 
                 item_type = item.get('type', 'ingredient')
                 poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
@@ -400,10 +400,10 @@ class PosterClient:
 
         def _build_legacy_data(type_map):
             """Build form data in legacy flat format (works for some accounts)"""
-            total_amount = sum(
-                round(item['num'] * round(item['price']))
+            total_amount = round(sum(
+                item['num'] * item['price']
                 for item in ingredients
-            )
+            ), 2)
 
             data = {
                 'date': date,
@@ -423,8 +423,8 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                price_for_api = round(item['price'])
-                ingredient_sum = round(num * price_for_api)
+                price_for_api = item['price']
+                ingredient_sum = round(num * price_for_api, 2)
 
                 item_type = item.get('type', 'ingredient')
                 poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
@@ -524,12 +524,11 @@ class PosterClient:
 
         Note: Requires ALL supply parameters, not just status
         """
-        # Calculate total amount using rounded prices (same as ingredient_sum calculation)
-        # This ensures transaction amount matches sum of ingredient_sums
-        total_amount = sum(
-            round(item['num'] * round(item['price']))
+        # Calculate total amount preserving decimal precision
+        total_amount = round(sum(
+            item['num'] * item['price']
             for item in ingredients
-        )
+        ), 2)
 
         # Build form data (same as create_supply but with supply_id and status)
         data = {
@@ -553,12 +552,8 @@ class PosterClient:
                 else:
                     num_for_api = str(num)
 
-            # Calculate price for API (round to nearest integer, not truncate)
-            price_for_api = round(item['price'])
-
-            # Calculate ingredient_sum using the same price that goes to API
-            # This ensures: num * price_for_api ≈ ingredient_sum (Poster validates this)
-            ingredient_sum = round(num * price_for_api)
+            price_for_api = item['price']
+            ingredient_sum = round(num * price_for_api, 2)
 
             # Poster API type: 1=ingredient, 2=semi-product (полуфабрикат), 4=product (товар)
             item_type = item.get('type', 'ingredient')
