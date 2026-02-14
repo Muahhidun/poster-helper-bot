@@ -320,6 +320,7 @@ export interface ShiftClosingPosterData {
   shift_start: number      // Остаток на начало смены - в тийинах
   transactions_count: number
   accounts_count?: number
+  prev_shift_left: number | null  // Previous day's shift_left (in tiyins), for auto-fill
   // For reconciliation (in tenge):
   halyk_expected: number   // Card from primary account (Halyk terminal)
   kaspi_expected: number   // Card from secondary account (Kaspi terminal)
@@ -373,6 +374,51 @@ export interface ShiftClosingCalculations {
 export interface ShiftClosingCalculateResponse {
   success: boolean
   calculations: ShiftClosingCalculations
+  error?: string
+}
+
+// Shift Closing History
+export interface ShiftClosingData {
+  wolt: number
+  halyk: number
+  kaspi: number
+  kaspi_cafe: number
+  cash_bills: number
+  cash_coins: number
+  shift_start: number
+  deposits: number
+  expenses: number
+  cash_to_leave: number
+  poster_trade: number
+  poster_bonus: number
+  poster_card: number
+  poster_cash: number
+  transactions_count: number
+  fact_cashless: number
+  fact_total: number
+  fact_adjusted: number
+  poster_total: number
+  day_result: number
+  shift_left: number
+  collection: number
+  cashless_diff: number
+}
+
+export interface ShiftClosingHistoryResponse {
+  success: boolean
+  date: string
+  closing: ShiftClosingData | null
+}
+
+export interface ShiftClosingDatesResponse {
+  success: boolean
+  dates: string[]
+}
+
+export interface ShiftClosingReportResponse {
+  success: boolean
+  report: string
+  date: string
   error?: string
 }
 

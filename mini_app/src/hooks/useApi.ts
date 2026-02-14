@@ -8,8 +8,23 @@ interface UseApiOptions {
 
 export function useApi<T>(
   fetcher: () => Promise<T>,
-  options: UseApiOptions = {}
+  depsOrOptions?: any[] | UseApiOptions,
+  maybeOptions?: UseApiOptions
 ) {
+  // Support both signatures:
+  // useApi(fetcher, options)
+  // useApi(fetcher, deps, options)
+  let deps: any[] | undefined
+  let options: UseApiOptions
+
+  if (Array.isArray(depsOrOptions)) {
+    deps = depsOrOptions
+    options = maybeOptions || {}
+  } else {
+    deps = undefined
+    options = depsOrOptions || {}
+  }
+
   const { enabled = true, onSuccess, onError } = options
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState<boolean>(enabled)
@@ -36,7 +51,7 @@ export function useApi<T>(
       refetch()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled])
+  }, [enabled, ...(deps || [])])
 
   return { data, loading, error, refetch }
 }

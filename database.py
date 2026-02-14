@@ -306,6 +306,47 @@ class UserDatabase:
                 ON shift_reconciliation(telegram_user_id, date)
             """)
 
+            # Table for shift closings (история закрытий смены)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS shift_closings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_user_id INTEGER NOT NULL,
+                    date TEXT NOT NULL,
+                    wolt REAL DEFAULT 0,
+                    halyk REAL DEFAULT 0,
+                    kaspi REAL DEFAULT 0,
+                    kaspi_cafe REAL DEFAULT 0,
+                    cash_bills REAL DEFAULT 0,
+                    cash_coins REAL DEFAULT 0,
+                    shift_start REAL DEFAULT 0,
+                    deposits REAL DEFAULT 0,
+                    expenses REAL DEFAULT 0,
+                    cash_to_leave REAL DEFAULT 15000,
+                    poster_trade REAL DEFAULT 0,
+                    poster_bonus REAL DEFAULT 0,
+                    poster_card REAL DEFAULT 0,
+                    poster_cash REAL DEFAULT 0,
+                    transactions_count INTEGER DEFAULT 0,
+                    fact_cashless REAL DEFAULT 0,
+                    fact_total REAL DEFAULT 0,
+                    fact_adjusted REAL DEFAULT 0,
+                    poster_total REAL DEFAULT 0,
+                    day_result REAL DEFAULT 0,
+                    shift_left REAL DEFAULT 0,
+                    collection REAL DEFAULT 0,
+                    cashless_diff REAL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT,
+                    UNIQUE(telegram_user_id, date),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_shift_closings_user_date
+                ON shift_closings(telegram_user_id, date)
+            """)
+
             # Table for supply drafts (черновики поставок)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS supply_drafts (
@@ -597,6 +638,47 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_shift_reconciliation_user_date
                 ON shift_reconciliation(telegram_user_id, date)
+            """)
+
+            # Table for shift closings (история закрытий смены)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS shift_closings (
+                    id SERIAL PRIMARY KEY,
+                    telegram_user_id BIGINT NOT NULL,
+                    date DATE NOT NULL,
+                    wolt REAL DEFAULT 0,
+                    halyk REAL DEFAULT 0,
+                    kaspi REAL DEFAULT 0,
+                    kaspi_cafe REAL DEFAULT 0,
+                    cash_bills REAL DEFAULT 0,
+                    cash_coins REAL DEFAULT 0,
+                    shift_start REAL DEFAULT 0,
+                    deposits REAL DEFAULT 0,
+                    expenses REAL DEFAULT 0,
+                    cash_to_leave REAL DEFAULT 15000,
+                    poster_trade REAL DEFAULT 0,
+                    poster_bonus REAL DEFAULT 0,
+                    poster_card REAL DEFAULT 0,
+                    poster_cash REAL DEFAULT 0,
+                    transactions_count INTEGER DEFAULT 0,
+                    fact_cashless REAL DEFAULT 0,
+                    fact_total REAL DEFAULT 0,
+                    fact_adjusted REAL DEFAULT 0,
+                    poster_total REAL DEFAULT 0,
+                    day_result REAL DEFAULT 0,
+                    shift_left REAL DEFAULT 0,
+                    collection REAL DEFAULT 0,
+                    cashless_diff REAL DEFAULT 0,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP,
+                    UNIQUE(telegram_user_id, date),
+                    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_shift_closings_user_date
+                ON shift_closings(telegram_user_id, date)
             """)
 
             # Table for supply drafts (черновики поставок)
@@ -2629,6 +2711,101 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to save shift reconciliation: {e}")
             return False
+
+    # ==================== Shift Closings Methods ====================
+
+    def save_shift_closing(self, telegram_user_id: int, date: str, data: dict) -> bool:
+        """Save or update shift closing data for a specific date (upsert)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            fields = [
+                'wolt', 'halyk', 'kaspi', 'kaspi_cafe', 'cash_bills', 'cash_coins',
+                'shift_start', 'deposits', 'expenses', 'cash_to_leave',
+                'poster_trade', 'poster_bonus', 'poster_card', 'poster_cash',
+                'transactions_count',
+                'fact_cashless', 'fact_total', 'fact_adjusted', 'poster_total',
+                'day_result', 'shift_left', 'collection', 'cashless_diff'
+            ]
+
+            values = [data.get(f, 0) for f in fields]
+
+            if DB_TYPE == "sqlite":
+                placeholders = ', '.join(['?'] * (len(fields) + 2))
+                fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
+                update_parts = ', '.join([f'{f} = excluded.{f}' for f in fields])
+                cursor.execute(f"""
+                    INSERT INTO shift_closings ({fields_str})
+                    VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date)
+                    DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                """, [telegram_user_id, date] + values)
+            else:
+                placeholders = ', '.join(['%s'] * (len(fields) + 2))
+                fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
+                update_parts = ', '.join([f'{f} = EXCLUDED.{f}' for f in fields])
+                cursor.execute(f"""
+                    INSERT INTO shift_closings ({fields_str})
+                    VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date)
+                    DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                """, [telegram_user_id, date] + values)
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save shift closing: {e}")
+            return False
+
+    def get_shift_closing(self, telegram_user_id: int, date: str) -> Optional[Dict]:
+        """Get shift closing data for a specific date"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT * FROM shift_closings
+                WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+            """, (telegram_user_id, date))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get shift closing: {e}")
+            return None
+
+    def get_shift_closing_dates(self, telegram_user_id: int, limit: int = 30) -> list:
+        """Get list of dates that have shift closing data"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            limit_placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT date FROM shift_closings
+                WHERE telegram_user_id = {placeholder}
+                ORDER BY date DESC
+                LIMIT {limit_placeholder}
+            """, (telegram_user_id, limit))
+
+            rows = cursor.fetchall()
+            conn.close()
+            return [str(row[0]) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Failed to get shift closing dates: {e}")
+            return []
 
     # ==================== Supply Drafts Methods ====================
 
