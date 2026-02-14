@@ -1530,6 +1530,24 @@ def sync_expenses_from_poster():
                                 print(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})")
                                 continue
 
+                            # Fallback: if poster_transaction_id link is missing, match by expense_type='supply' + amount
+                            supply_amount_draft = next(
+                                (d for d in existing_drafts
+                                 if d.get('expense_type') == 'supply' and
+                                    d.get('status') == 'pending' and
+                                    abs(float(d.get('amount', 0)) - amount) < 1),
+                                None
+                            )
+                            if supply_amount_draft:
+                                # Link them now so future syncs find it faster
+                                db.update_expense_draft(
+                                    supply_amount_draft['id'],
+                                    poster_transaction_id=f"supply_{supply_num}"
+                                )
+                                skipped_count += 1
+                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: fallback matched draft #{supply_amount_draft['id']} by amount {amount}₸ (linked as supply_{supply_num})")
+                                continue
+
                         # Detect if this is an income transaction by category name
                         is_income = txn_type == '1' or 'приход' in category_lower or 'поступлен' in category_lower
 
@@ -2187,6 +2205,24 @@ def api_sync_expenses_from_poster():
                             if supply_draft:
                                 skipped += 1
                                 print(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})", flush=True)
+                                continue
+
+                            # Fallback: if poster_transaction_id link is missing, match by expense_type='supply' + amount
+                            supply_amount_draft = next(
+                                (d for d in existing_drafts
+                                 if d.get('expense_type') == 'supply' and
+                                    d.get('status') == 'pending' and
+                                    abs(float(d.get('amount', 0)) - amount) < 1),
+                                None
+                            )
+                            if supply_amount_draft:
+                                # Link them now so future syncs find it faster
+                                db.update_expense_draft(
+                                    supply_amount_draft['id'],
+                                    poster_transaction_id=f"supply_{supply_num}"
+                                )
+                                skipped += 1
+                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: fallback matched draft #{supply_amount_draft['id']} by amount {amount}₸ (linked as supply_{supply_num})", flush=True)
                                 continue
 
                         # Determine source from finance account name (or direct txn account_name)
@@ -3690,14 +3726,18 @@ def process_supply(draft_id):
                 # Store supply IDs so sync can match Poster transactions
                 # Poster creates finance transactions with description "Поставка №{supply_id} от «...»"
                 supply_ids_str = ','.join(str(s['supply_id']) for s in created_supplies)
+                poster_txn_id = f"supply_{supply_ids_str}"
                 # Update source and poster_transaction_id on expense draft
-                db.update_expense_draft(
+                update_ok = db.update_expense_draft(
                     draft['linked_expense_draft_id'],
                     source=draft.get('source', 'cash'),
-                    poster_transaction_id=f"supply_{supply_ids_str}"
+                    poster_transaction_id=poster_txn_id
                 )
+                logger.info(f"🔗 Linked expense draft #{draft['linked_expense_draft_id']} → {poster_txn_id} (update_ok={update_ok})")
                 # Mark as in Poster (keeps it visible with green status)
                 db.mark_drafts_in_poster([draft['linked_expense_draft_id']])
+            else:
+                logger.warning(f"⚠️ Supply draft #{draft_id} has no linked_expense_draft_id — sync may create duplicate!")
 
             # Format response
             supply_ids = [s['supply_id'] for s in created_supplies]
