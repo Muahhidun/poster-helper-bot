@@ -1016,27 +1016,82 @@ function renderDateButtons(dates) {
 }
 
 // ========= Shift closing report =========
-async function loadShiftReport() {
-    const btn = document.getElementById('report-btn');
-    btn.textContent = 'Загрузка...';
+function loadShiftReport() {
+    // Generate report from current form data (no need to fetch from server)
+    const fmtR = n => Math.round(n).toLocaleString('ru-RU').replace(/\u00A0/g, ' ');
+    const dateDisplay = fmtDateFull(currentDate);
 
-    try {
-        const r = await fetch('/api/shift-closing/report?date=' + currentDate);
-        const d = await r.json();
-        if (d.success && d.report) {
-            document.getElementById('report-text').textContent = d.report;
-            document.getElementById('report-container').style.display = 'block';
-        } else {
-            // If no saved data, try expense report as fallback
-            const r2 = await fetch('/api/expense-report');
-            const d2 = await r2.json();
-            if (d2.success) {
-                document.getElementById('report-text').textContent = d2.report;
-                document.getElementById('report-container').style.display = 'block';
-            }
-        }
-    } catch(e) {}
-    btn.textContent = 'Отчёт смены';
+    const wolt = pi('wolt'), halyk = pi('halyk');
+    const kaspi = pi('kaspi'), kaspi_cafe = pi('kaspi_cafe');
+    const cash_bills = pi('cash_bills'), cash_coins = pi('cash_coins');
+    const shift_start = pi('shift_start');
+    const expenses = pi('expenses'), cash_to_leave = pi('cash_to_leave');
+
+    const calc = lastCalc || {};
+    const fact_cashless = calc.fact_cashless || (wolt + halyk + (kaspi - kaspi_cafe));
+    const fact_total = calc.fact_total || (fact_cashless + cash_bills + cash_coins);
+    const fact_adjusted = calc.fact_adjusted || 0;
+    const poster_trade = calc.poster_trade || (posterData ? posterData.trade_total / 100 : 0);
+    const poster_bonus = calc.poster_bonus || (posterData ? posterData.bonus / 100 : 0);
+    const poster_total = calc.poster_total || (poster_trade - poster_bonus);
+    const poster_card = calc.poster_card || (posterData ? posterData.poster_card / 100 : 0);
+    const day_result = calc.day_result || 0;
+    const shift_left = calc.shift_left || (cash_to_leave + cash_coins);
+    const collection = calc.collection || (cash_bills - cash_to_leave + expenses);
+    const cashless_diff = calc.cashless_diff || (fact_cashless - poster_card);
+
+    const dayLabel = day_result > 0 ? 'излишек' : day_result < 0 ? 'недостача' : 'ровно';
+    const daySign = day_result > 0 ? '+' : '';
+
+    let lines = [
+        'Закрытие смены ' + dateDisplay,
+        '',
+        'Безнал терминалы:',
+        '  Wolt: ' + fmtR(wolt),
+        '  Halyk: ' + fmtR(halyk),
+        '  Kaspi: ' + fmtR(kaspi),
+    ];
+
+    if (kaspi_cafe > 0) {
+        lines.push('  Kaspi Cafe: -' + fmtR(kaspi_cafe));
+    }
+
+    lines = lines.concat([
+        'Итого безнал: ' + fmtR(fact_cashless),
+        '',
+        'Наличные:',
+        '  Бумажные: ' + fmtR(cash_bills),
+        '  Мелочь: ' + fmtR(cash_coins),
+        '',
+        'Фактический: ' + fmtR(fact_total),
+        'Смена начало: ' + fmtR(shift_start),
+    ]);
+
+    if (expenses > 0) {
+        lines.push('Расходы: ' + fmtR(expenses));
+    }
+
+    lines = lines.concat([
+        'Итого фактич: ' + fmtR(fact_adjusted),
+        '',
+        'Poster торговля: ' + fmtR(poster_trade),
+        'Poster бонусы: -' + fmtR(poster_bonus),
+        'Итого Poster: ' + fmtR(poster_total),
+        '',
+        'ИТОГО ДЕНЬ: ' + daySign + fmtR(day_result) + ' (' + dayLabel + ')',
+        '',
+        'Смена оставили: ' + fmtR(shift_left),
+        'Инкассация: ' + fmtR(collection),
+    ]);
+
+    if (Math.abs(cashless_diff) >= 1) {
+        const diffSign = cashless_diff > 0 ? '+' : '';
+        lines.push('Разница безнал: ' + diffSign + fmtR(cashless_diff));
+    }
+
+    const report = lines.join('\n');
+    document.getElementById('report-text').textContent = report;
+    document.getElementById('report-container').style.display = 'block';
 }
 
 function copyReport() {
