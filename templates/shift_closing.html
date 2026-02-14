@@ -559,8 +559,14 @@ function pi(id) {
 
 // Get today in KZ timezone (UTC+5) as YYYY-MM-DD
 function getTodayStr() {
+    // "Business day" logic: before 6:00 AM KZ time, the business day is still yesterday
     const now = new Date();
     const kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
+    const kzHour = kz.getUTCHours();
+    if (kzHour < 6) {
+        // Before 6 AM — business day is yesterday
+        kz.setUTCDate(kz.getUTCDate() - 1);
+    }
     return kz.toISOString().slice(0, 10);
 }
 
@@ -713,8 +719,7 @@ async function loadDateData(date) {
     // 2. Load Poster data
     try {
         document.querySelector('.sc').classList.add('loading');
-        const dateParam = isToday ? '' : '?date=' + toPosterDate(date);
-        const r = await fetch('/api/shift-closing/poster-data' + dateParam);
+        const r = await fetch('/api/shift-closing/poster-data?date=' + toPosterDate(date));
         const d = await r.json();
 
         if (d.success) {

@@ -3944,7 +3944,13 @@ def api_shift_closing_poster_data():
 
         async def get_poster_data_primary():
             if date is None:
-                date_param = datetime.now().strftime("%Y%m%d")
+                # Business day logic: before 6 AM KZ time, use yesterday
+                kz_tz = timezone(timedelta(hours=5))
+                kz_now = datetime.now(kz_tz)
+                if kz_now.hour < 6:
+                    date_param = (kz_now - timedelta(days=1)).strftime("%Y%m%d")
+                else:
+                    date_param = kz_now.strftime("%Y%m%d")
             else:
                 date_param = date
 
@@ -4042,11 +4048,8 @@ def api_shift_closing_poster_data():
 
         # Look up previous day's shift_left from saved history
         try:
-            if date is None:
-                kz_tz = timezone(timedelta(hours=5))
-                target_date = datetime.now(kz_tz).date()
-            else:
-                target_date = datetime.strptime(date, '%Y%m%d').date()
+            # Use the actual date that was queried (date_param from the async function)
+            target_date = datetime.strptime(data.get('date', date or ''), '%Y%m%d').date()
             prev_date = (target_date - timedelta(days=1)).strftime('%Y-%m-%d')
             prev_closing = db.get_shift_closing(g.user_id, prev_date)
             if prev_closing and prev_closing.get('shift_left') is not None:
