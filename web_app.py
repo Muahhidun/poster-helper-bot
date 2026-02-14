@@ -1407,12 +1407,18 @@ def sync_expenses_from_poster():
         synced_count = 0
         updated_count = 0
         skipped_count = 0
+        deleted_count = 0
         errors = []
+
+        # Track which poster_transaction_ids we see in Poster today
+        seen_poster_ids = set()
+        synced_account_ids = set()
 
         # Load all existing drafts once
         existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
         for account in poster_accounts:
+            synced_account_ids.add(str(account['id']))
             try:
                 client = PosterClient(
                     telegram_user_id=TELEGRAM_USER_ID,
@@ -1454,6 +1460,9 @@ def sync_expenses_from_poster():
                         # Build unique poster_transaction_id
                         txn_id = txn.get('transaction_id')
                         poster_transaction_id = f"{account['id']}_{txn_id}"
+                        seen_poster_ids.add(poster_transaction_id)
+                        # Also track the simple txn_id format for legacy matching
+                        seen_poster_ids.add(str(txn_id))
 
                         # Extract amount
                         amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
@@ -1574,9 +1583,38 @@ def sync_expenses_from_poster():
                 import traceback
                 traceback.print_exc()
 
-        return synced_count, updated_count, skipped_count, errors
+        # Detect and remove drafts whose Poster transactions were deleted
+        today_str = today.strftime('%Y-%m-%d')
+        for draft in existing_drafts:
+            ptid = draft.get('poster_transaction_id', '') or ''
+            # Only check drafts synced from Poster (not supply-linked or manual)
+            if not ptid or ptid.startswith('supply_'):
+                continue
+            # Only check pending drafts — don't touch processed ones
+            if draft.get('status') != 'pending':
+                continue
+            # Only check drafts created today (older drafts won't be in today's Poster fetch)
+            draft_created = draft.get('created_at', '')
+            if draft_created:
+                draft_date = str(draft_created)[:10]  # "2026-02-14 12:00:00" -> "2026-02-14"
+                if draft_date != today_str:
+                    continue
+            else:
+                continue
+            # Check if this draft's transaction still exists in Poster
+            if ptid not in seen_poster_ids:
+                # For composite ID format "accountId_txnId", verify the account was synced
+                if '_' in ptid:
+                    account_part = ptid.split('_')[0]
+                    if account_part not in synced_account_ids:
+                        continue  # Account wasn't synced (maybe error), don't delete
+                db.delete_expense_draft(draft['id'])
+                deleted_count += 1
+                print(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
 
-    synced, updated, skipped, errors = loop.run_until_complete(fetch_and_sync())
+        return synced_count, updated_count, skipped_count, deleted_count, errors
+
+    synced, updated, skipped, deleted, errors = loop.run_until_complete(fetch_and_sync())
     loop.close()
 
     msg_parts = []
@@ -1584,6 +1622,8 @@ def sync_expenses_from_poster():
         msg_parts.append(f'новых: {synced}')
     if updated > 0:
         msg_parts.append(f'обновлено: {updated}')
+    if deleted > 0:
+        msg_parts.append(f'удалено: {deleted}')
     if skipped > 0:
         msg_parts.append(f'без изменений: {skipped}')
     message = 'Синхронизация: ' + ', '.join(msg_parts) if msg_parts else 'Нет транзакций'
@@ -1592,6 +1632,7 @@ def sync_expenses_from_poster():
         'success': True,
         'synced': synced,
         'updated': updated,
+        'deleted': deleted,
         'skipped': skipped,
         'errors': errors,
         'message': message
@@ -2016,15 +2057,21 @@ def api_sync_expenses_from_poster():
     synced = 0
     updated = 0
     skipped = 0
+    deleted = 0
     errors = []
 
     async def sync_from_all_accounts():
-        nonlocal synced, updated, skipped, errors
+        nonlocal synced, updated, skipped, deleted, errors
+
+        # Track which poster_transaction_ids we see in Poster today
+        seen_poster_ids = set()
+        synced_account_ids = set()
 
         # Load all existing drafts once (not per-transaction)
         existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
         for account in poster_accounts:
+            synced_account_ids.add(str(account['id']))
             try:
                 from poster_client import PosterClient
                 client = PosterClient(
@@ -2087,6 +2134,8 @@ def api_sync_expenses_from_poster():
                         # Check if already synced - find matching draft
                         # Support both formats: composite "accountId_txnId" and simple "txnId"
                         composite_txn_id = f"{account['id']}_{txn_id}"
+                        seen_poster_ids.add(composite_txn_id)
+                        seen_poster_ids.add(str(txn_id))
                         existing_draft = next(
                             (d for d in existing_drafts
                              if d.get('poster_transaction_id') == composite_txn_id
@@ -2173,18 +2222,44 @@ def api_sync_expenses_from_poster():
             except Exception as e:
                 errors.append(f"{account['account_name']}: {str(e)}")
 
+        # Detect and remove drafts whose Poster transactions were deleted
+        today_str = today.strftime('%Y-%m-%d')
+        for draft in existing_drafts:
+            ptid = draft.get('poster_transaction_id', '') or ''
+            if not ptid or ptid.startswith('supply_'):
+                continue
+            if draft.get('status') != 'pending':
+                continue
+            draft_created = draft.get('created_at', '')
+            if draft_created:
+                draft_date = str(draft_created)[:10]
+                if draft_date != today_str:
+                    continue
+            else:
+                continue
+            if ptid not in seen_poster_ids:
+                if '_' in ptid:
+                    account_part = ptid.split('_')[0]
+                    if account_part not in synced_account_ids:
+                        continue
+                db.delete_expense_draft(draft['id'])
+                deleted += 1
+                print(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
+
     try:
         loop.run_until_complete(sync_from_all_accounts())
         loop.close()
     except Exception as e:
         loop.close()
-        return jsonify({'success': False, 'error': str(e), 'synced': synced, 'updated': updated, 'skipped': skipped, 'errors': errors})
+        return jsonify({'success': False, 'error': str(e), 'synced': synced, 'updated': updated, 'deleted': deleted, 'skipped': skipped, 'errors': errors})
 
     msg_parts = []
     if synced > 0:
         msg_parts.append(f'новых: {synced}')
     if updated > 0:
         msg_parts.append(f'обновлено: {updated}')
+    if deleted > 0:
+        msg_parts.append(f'удалено: {deleted}')
     if skipped > 0:
         msg_parts.append(f'без изменений: {skipped}')
     message = 'Синхронизация: ' + ', '.join(msg_parts) if msg_parts else 'Нет транзакций'
@@ -2193,6 +2268,7 @@ def api_sync_expenses_from_poster():
         'success': True,
         'synced': synced,
         'updated': updated,
+        'deleted': deleted,
         'skipped': skipped,
         'errors': errors,
         'message': message
