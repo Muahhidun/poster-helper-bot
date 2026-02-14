@@ -4,9 +4,23 @@
 
 {% block content %}
 <div class="sc">
+    <!-- Date selector -->
+    <div class="sc-dates" id="dates-bar">
+        <button class="sc-date-btn active" id="btn-today" onclick="selectDate(getTodayStr())">
+            <span class="sc-date-btn-date" id="btn-today-label"></span>
+            <span class="sc-date-btn-sub">сегодня</span>
+        </button>
+    </div>
+
     <div class="sc-header">
         <span id="current-date" class="sc-date"></span>
         <span id="orders_info" class="sc-orders"></span>
+    </div>
+
+    <!-- Readonly banner -->
+    <div class="sc-banner sc-banner-readonly hidden" id="readonly-banner">
+        Просмотр сохранённых данных
+        <button type="button" class="sc-btn-sm" style="margin-left:8px" onclick="enableEdit()">Редактировать</button>
     </div>
 
     <div class="sc-banner" id="loading-banner">Загрузка...</div>
@@ -17,20 +31,20 @@
         <div class="sc-row-pair">
             <div class="sc-field">
                 <label>Wolt</label>
-                <input type="text" id="wolt" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+                <input type="text" id="wolt" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
             <div class="sc-field">
                 <label>Halyk</label>
-                <input type="text" id="halyk" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+                <input type="text" id="halyk" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
         </div>
         <div class="sc-field">
             <label>Kaspi</label>
-            <input type="text" id="kaspi" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+            <input type="text" id="kaspi" inputmode="decimal" placeholder="0" oninput="onInput()">
         </div>
         <div class="sc-field sc-minus">
             <label>- Kaspi Cafe</label>
-            <input type="text" id="kaspi_cafe" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+            <input type="text" id="kaspi_cafe" inputmode="decimal" placeholder="0" oninput="onInput()">
         </div>
     </div>
 
@@ -40,11 +54,11 @@
         <div class="sc-row-pair">
             <div class="sc-field">
                 <label>Бумажные</label>
-                <input type="text" id="cash_bills" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+                <input type="text" id="cash_bills" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
             <div class="sc-field">
                 <label>Мелочь</label>
-                <input type="text" id="cash_coins" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+                <input type="text" id="cash_coins" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
         </div>
     </div>
@@ -61,11 +75,11 @@
         <div class="sc-row-pair">
             <div class="sc-field">
                 <label>Смена (начало)</label>
-                <input type="text" id="shift_start" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+                <input type="text" id="shift_start" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
             <div class="sc-field">
                 <label>Расходы с кассы</label>
-                <input type="text" id="expenses" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
+                <input type="text" id="expenses" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
         </div>
     </div>
@@ -118,7 +132,7 @@
         <div class="sc-card-title">Инкассация</div>
         <div class="sc-field">
             <label>Оставить на смену</label>
-            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="15000" value="15000" oninput="debouncedCalculate()">
+            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="15000" value="15000" oninput="onInput()">
         </div>
         <div class="sc-info-row" id="shift_left_row" style="display:none">
             <span>Смена оставили</span>
@@ -134,16 +148,19 @@
     <!-- Действия -->
     <div class="sc-actions">
         <button type="button" class="sc-btn" onclick="loadPosterData()">Обновить Poster</button>
-        <button type="button" class="sc-btn sc-btn-sec" onclick="loadExpenseReport()">Отчёт расходов</button>
+        <button type="button" class="sc-btn sc-btn-sec" id="report-btn" onclick="loadShiftReport()">Отчёт смены</button>
     </div>
 
+    <!-- Saving indicator -->
+    <div class="sc-save-status hidden" id="save-status">Сохранено</div>
+
     <!-- Отчёт -->
-    <div id="expense-report-container" style="display:none" class="sc-card">
+    <div id="report-container" style="display:none" class="sc-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <div class="sc-card-title" style="margin:0">Отчёт</div>
+            <div class="sc-card-title" style="margin:0">Отчёт закрытия смены</div>
             <button type="button" class="sc-btn sc-btn-sm" onclick="copyReport()">Скопировать</button>
         </div>
-        <pre id="expense-report-text" class="sc-report"></pre>
+        <pre id="report-text" class="sc-report"></pre>
     </div>
 </div>
 
@@ -159,12 +176,51 @@
     -webkit-text-size-adjust: 100%;
 }
 
+/* Date selector bar */
+.sc-dates {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 6px 0 10px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+.sc-dates::-webkit-scrollbar { display: none; }
+.sc-date-btn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1.5px solid #d1d1d6;
+    background: #fff;
+    cursor: pointer;
+    text-align: center;
+    min-width: 70px;
+    transition: all 0.15s;
+}
+.sc-date-btn.active {
+    background: #007aff;
+    border-color: #007aff;
+    color: #fff;
+}
+.sc-date-btn.active .sc-date-btn-sub { color: rgba(255,255,255,0.7); }
+.sc-date-btn-date {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+}
+.sc-date-btn-sub {
+    display: block;
+    font-size: 10px;
+    color: #8e8e93;
+    margin-top: 1px;
+}
+
 /* Header */
 .sc-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 0;
+    padding: 6px 0;
     margin-bottom: 4px;
 }
 .sc-date {
@@ -188,8 +244,25 @@
     font-weight: 500;
     margin-bottom: 10px;
 }
-.sc-banner.hidden { display: none; }
+.sc-banner.hidden, .hidden { display: none !important; }
 .sc-banner.error { background: #ff3b3020; color: #ff3b30; }
+.sc-banner-readonly {
+    background: #ff950020;
+    color: #ff9500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Save status */
+.sc-save-status {
+    text-align: center;
+    font-size: 12px;
+    color: #30d158;
+    padding: 4px;
+    margin-bottom: 6px;
+    transition: opacity 0.3s;
+}
 
 /* Card */
 .sc-card {
@@ -241,6 +314,10 @@
     box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
 }
 .sc-field input::placeholder { color: #c7c7cc; }
+.sc-field input[readonly] {
+    background: #f2f2f7;
+    color: #8e8e93;
+}
 
 /* Minus field */
 .sc-minus label { color: #ff3b30; }
@@ -452,6 +529,11 @@
 <script>
 let posterData = null;
 let debounceTimer = null;
+let saveTimer = null;
+let lastCalc = null;
+let currentDate = '';
+let isReadonly = false;
+const INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
 
 function fmt(n) {
     return Math.round(n).toLocaleString('ru-RU');
@@ -463,51 +545,254 @@ function pi(id) {
     return parseFloat(el.value.replace(/\s/g, '').replace(/,/g, '.')) || 0;
 }
 
-function debouncedCalculate() {
+// Get today in KZ timezone (UTC+5) as YYYY-MM-DD
+function getTodayStr() {
+    const now = new Date();
+    const kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
+    return kz.toISOString().slice(0, 10);
+}
+
+// Format YYYY-MM-DD to DD.MM
+function fmtDateShort(s) {
+    const p = s.split('-');
+    return p[2] + '.' + p[1];
+}
+
+// Format YYYY-MM-DD to DD.MM.YYYY
+function fmtDateFull(s) {
+    const p = s.split('-');
+    return p[2] + '.' + p[1] + '.' + p[0];
+}
+
+// Format YYYY-MM-DD to YYYYMMDD for Poster API
+function toPosterDate(s) {
+    return s.replace(/-/g, '');
+}
+
+// ========= localStorage persistence =========
+function lsKey(date) { return 'sc_' + date; }
+
+function saveToLS() {
+    const data = {};
+    INPUT_IDS.forEach(id => { data[id] = document.getElementById(id).value; });
+    try { localStorage.setItem(lsKey(currentDate), JSON.stringify(data)); } catch(e) {}
+}
+
+function loadFromLS(date) {
+    try {
+        const raw = localStorage.getItem(lsKey(date));
+        if (raw) return JSON.parse(raw);
+    } catch(e) {}
+    return null;
+}
+
+// ========= Input handler =========
+function onInput() {
+    if (isReadonly) return;
+    saveToLS();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(calculate, 250);
 }
 
-async function loadPosterData() {
-    const b = document.getElementById('loading-banner');
-    b.textContent = 'Загрузка Poster...';
-    b.classList.remove('hidden', 'error');
+// ========= Date selector =========
+function selectDate(date) {
+    if (date === currentDate) return;
+    currentDate = date;
 
+    // Update header
+    document.getElementById('current-date').textContent = fmtDateFull(date);
+
+    // Highlight active button
+    document.querySelectorAll('.sc-date-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.date === date);
+    });
+
+    // Reset display
+    posterData = null;
+    lastCalc = null;
+    resetDisplay();
+
+    // Hide report
+    document.getElementById('report-container').style.display = 'none';
+
+    // Load data for this date
+    loadDateData(date);
+}
+
+function resetDisplay() {
+    ['fact_total_row','fact_adjusted_row','cashless_diff_row','poster_total_row',
+     'shift_left_row','shift_left_hint','collection_block'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+    });
+    document.getElementById('day_result_value').textContent = '--';
+    document.getElementById('day_result_status').textContent = '';
+    document.getElementById('day_result_block').classList.remove('positive','negative','zero');
+    ['poster_cashless','poster_card_display','poster_trade_display'].forEach(id => {
+        document.getElementById(id).textContent = '--';
+    });
+    document.getElementById('poster_bonus_display').textContent = '--';
+    document.getElementById('orders_info').textContent = '';
+}
+
+async function loadDateData(date) {
+    const banner = document.getElementById('loading-banner');
+    const readonlyBanner = document.getElementById('readonly-banner');
+
+    banner.textContent = 'Загрузка...';
+    banner.classList.remove('hidden', 'error');
+    readonlyBanner.classList.add('hidden');
+
+    // Clear all inputs
+    INPUT_IDS.forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('cash_to_leave').value = '15000';
+
+    const isToday = date === getTodayStr();
+    let shiftStartSet = false;
+
+    // 1. Try to load saved shift closing from backend
+    try {
+        const r = await fetch('/api/shift-closing/history?date=' + date);
+        const d = await r.json();
+        if (d.success && d.closing) {
+            const c = d.closing;
+            // Restore inputs from saved data
+            if (c.wolt) document.getElementById('wolt').value = c.wolt;
+            if (c.halyk) document.getElementById('halyk').value = c.halyk;
+            if (c.kaspi) document.getElementById('kaspi').value = c.kaspi;
+            if (c.kaspi_cafe) document.getElementById('kaspi_cafe').value = c.kaspi_cafe;
+            if (c.cash_bills) document.getElementById('cash_bills').value = c.cash_bills;
+            if (c.cash_coins) document.getElementById('cash_coins').value = c.cash_coins;
+            if (c.shift_start) { document.getElementById('shift_start').value = c.shift_start; shiftStartSet = true; }
+            if (c.expenses) document.getElementById('expenses').value = c.expenses;
+            if (c.cash_to_leave) document.getElementById('cash_to_leave').value = c.cash_to_leave;
+            if (c.deposits) document.getElementById('deposits') && (document.getElementById('deposits').value = c.deposits);
+
+            if (!isToday) {
+                setReadonly(true);
+            } else {
+                setReadonly(false);
+            }
+
+            // Save to localStorage too
+            saveToLS();
+        } else {
+            // No saved data — try localStorage
+            const ls = loadFromLS(date);
+            if (ls) {
+                INPUT_IDS.forEach(id => {
+                    if (ls[id]) document.getElementById(id).value = ls[id];
+                });
+                if (ls.shift_start) shiftStartSet = true;
+            }
+            setReadonly(false);
+        }
+    } catch(e) {
+        // Network error — try localStorage
+        const ls = loadFromLS(date);
+        if (ls) {
+            INPUT_IDS.forEach(id => {
+                if (ls[id]) document.getElementById(id).value = ls[id];
+            });
+            if (ls.shift_start) shiftStartSet = true;
+        }
+        setReadonly(false);
+    }
+
+    // 2. Load Poster data
     try {
         document.querySelector('.sc').classList.add('loading');
-        const r = await fetch('/api/shift-closing/poster-data');
+        const dateParam = isToday ? '' : '?date=' + toPosterDate(date);
+        const r = await fetch('/api/shift-closing/poster-data' + dateParam);
         const d = await r.json();
 
         if (d.success) {
             posterData = d;
 
-            // Auto-fill shift_start from Poster (cash drawer opening balance)
-            if (d.shift_start && d.shift_start !== 0)
-                document.getElementById('shift_start').value = String(Math.round(d.shift_start / 100));
+            // Auto-fill shift_start from previous day's shift_left (priority)
+            if (!shiftStartSet) {
+                if (d.prev_shift_left != null && d.prev_shift_left !== 0) {
+                    document.getElementById('shift_start').value = String(Math.round(d.prev_shift_left / 100));
+                    shiftStartSet = true;
+                } else if (d.shift_start && d.shift_start !== 0) {
+                    document.getElementById('shift_start').value = String(Math.round(d.shift_start / 100));
+                    shiftStartSet = true;
+                }
+                saveToLS();
+            }
 
-            // Display Poster data (all in tiyins, convert to tenge)
+            // Display Poster data
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
             document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
+            document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
 
-            const oi = document.getElementById('orders_info');
-            oi.textContent = d.transactions_count + ' заказов';
-
-            b.textContent = 'Готово';
-            setTimeout(() => b.classList.add('hidden'), 1500);
+            banner.textContent = 'Готово';
+            setTimeout(() => banner.classList.add('hidden'), 1200);
             calculate();
         } else {
-            b.textContent = d.error || 'Ошибка';
-            b.classList.add('error');
+            banner.textContent = d.error || 'Ошибка Poster';
+            banner.classList.add('error');
         }
-    } catch (e) {
-        b.textContent = 'Ошибка загрузки';
-        b.classList.add('error');
+    } catch(e) {
+        banner.textContent = 'Ошибка загрузки Poster';
+        banner.classList.add('error');
     } finally {
         document.querySelector('.sc').classList.remove('loading');
     }
 }
 
+function setReadonly(val) {
+    isReadonly = val;
+    const banner = document.getElementById('readonly-banner');
+    if (val) {
+        banner.classList.remove('hidden');
+        INPUT_IDS.forEach(id => document.getElementById(id).setAttribute('readonly', ''));
+    } else {
+        banner.classList.add('hidden');
+        INPUT_IDS.forEach(id => document.getElementById(id).removeAttribute('readonly'));
+    }
+}
+
+function enableEdit() {
+    setReadonly(false);
+}
+
+// ========= Poster data reload =========
+async function loadPosterData() {
+    const banner = document.getElementById('loading-banner');
+    banner.textContent = 'Загрузка Poster...';
+    banner.classList.remove('hidden', 'error');
+
+    try {
+        document.querySelector('.sc').classList.add('loading');
+        const isToday = currentDate === getTodayStr();
+        const dateParam = isToday ? '' : '?date=' + toPosterDate(currentDate);
+        const r = await fetch('/api/shift-closing/poster-data' + dateParam);
+        const d = await r.json();
+
+        if (d.success) {
+            posterData = d;
+            document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
+            document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
+            document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
+            document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
+
+            banner.textContent = 'Готово';
+            setTimeout(() => banner.classList.add('hidden'), 1200);
+            calculate();
+        } else {
+            banner.textContent = d.error || 'Ошибка';
+            banner.classList.add('error');
+        }
+    } catch(e) {
+        banner.textContent = 'Ошибка загрузки';
+        banner.classList.add('error');
+    } finally {
+        document.querySelector('.sc').classList.remove('loading');
+    }
+}
+
+// ========= Calculate =========
 async function calculate() {
     if (!posterData) return;
 
@@ -529,11 +814,15 @@ async function calculate() {
             body: JSON.stringify(body),
         });
         const d = await r.json();
-        if (d.success) show(d.calculations);
-    } catch (e) {}
+        if (d.success) {
+            lastCalc = d.calculations;
+            showCalc(d.calculations);
+            scheduleSave(d.calculations);
+        }
+    } catch(e) {}
 }
 
-function show(c) {
+function showCalc(c) {
     // Factual
     document.getElementById('fact_total_row').style.display = 'flex';
     document.getElementById('fact_total_value').textContent = fmt(c.fact_total);
@@ -594,22 +883,125 @@ function show(c) {
     document.getElementById('collection_value').textContent = fmt(c.collection);
 }
 
-async function loadExpenseReport() {
+// ========= Auto-save to backend =========
+function scheduleSave(calc) {
+    if (isReadonly) return;
+
+    // Only save if there's meaningful input
+    const hasInput = pi('cash_bills') > 0 || pi('wolt') > 0 || pi('kaspi') > 0 || pi('halyk') > 0;
+    if (!hasInput) return;
+
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => doSave(calc), 1500);
+}
+
+async function doSave(calc) {
+    const data = {
+        date: currentDate,
+        wolt: pi('wolt'), halyk: pi('halyk'),
+        kaspi: pi('kaspi'), kaspi_cafe: pi('kaspi_cafe'),
+        cash_bills: pi('cash_bills'), cash_coins: pi('cash_coins'),
+        shift_start: pi('shift_start'), deposits: 0,
+        expenses: pi('expenses'), cash_to_leave: pi('cash_to_leave'),
+        poster_trade: calc.poster_trade, poster_bonus: calc.poster_bonus,
+        poster_card: calc.poster_card, poster_cash: 0,
+        transactions_count: posterData ? posterData.transactions_count : 0,
+        fact_cashless: calc.fact_cashless, fact_total: calc.fact_total,
+        fact_adjusted: calc.fact_adjusted, poster_total: calc.poster_total,
+        day_result: calc.day_result, shift_left: calc.shift_left,
+        collection: calc.collection, cashless_diff: calc.cashless_diff,
+    };
+
     try {
-        const r = await fetch('/api/expense-report');
+        const r = await fetch('/api/shift-closing/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
         const d = await r.json();
         if (d.success) {
-            document.getElementById('expense-report-text').textContent = d.report;
-            document.getElementById('expense-report-container').style.display = 'block';
+            const ss = document.getElementById('save-status');
+            ss.classList.remove('hidden');
+            setTimeout(() => ss.classList.add('hidden'), 2000);
+
+            // Refresh history dates
+            loadHistoryDates();
         }
-    } catch (e) {}
+    } catch(e) {}
+}
+
+// ========= History dates =========
+async function loadHistoryDates() {
+    try {
+        const r = await fetch('/api/shift-closing/dates');
+        const d = await r.json();
+        if (d.success && d.dates) {
+            renderDateButtons(d.dates);
+        }
+    } catch(e) {}
+}
+
+function renderDateButtons(dates) {
+    const bar = document.getElementById('dates-bar');
+    const today = getTodayStr();
+
+    // Build unique sorted dates (today first, then history descending)
+    const allDates = [today];
+    dates.forEach(d => { if (d !== today && allDates.indexOf(d) === -1) allDates.push(d); });
+
+    bar.innerHTML = '';
+    allDates.forEach(d => {
+        const btn = document.createElement('button');
+        btn.className = 'sc-date-btn' + (d === currentDate ? ' active' : '');
+        btn.dataset.date = d;
+        btn.onclick = () => selectDate(d);
+
+        const dateSpan = document.createElement('span');
+        dateSpan.className = 'sc-date-btn-date';
+        dateSpan.textContent = fmtDateShort(d);
+
+        btn.appendChild(dateSpan);
+
+        if (d === today) {
+            const sub = document.createElement('span');
+            sub.className = 'sc-date-btn-sub';
+            sub.textContent = 'сегодня';
+            btn.appendChild(sub);
+        }
+
+        bar.appendChild(btn);
+    });
+}
+
+// ========= Shift closing report =========
+async function loadShiftReport() {
+    const btn = document.getElementById('report-btn');
+    btn.textContent = 'Загрузка...';
+
+    try {
+        const r = await fetch('/api/shift-closing/report?date=' + currentDate);
+        const d = await r.json();
+        if (d.success && d.report) {
+            document.getElementById('report-text').textContent = d.report;
+            document.getElementById('report-container').style.display = 'block';
+        } else {
+            // If no saved data, try expense report as fallback
+            const r2 = await fetch('/api/expense-report');
+            const d2 = await r2.json();
+            if (d2.success) {
+                document.getElementById('report-text').textContent = d2.report;
+                document.getElementById('report-container').style.display = 'block';
+            }
+        }
+    } catch(e) {}
+    btn.textContent = 'Отчёт смены';
 }
 
 function copyReport() {
-    const t = document.getElementById('expense-report-text').textContent;
+    const t = document.getElementById('report-text').textContent;
     navigator.clipboard.writeText(t).then(() => {
         const btn = event.target;
-        btn.textContent = 'Готово';
+        btn.textContent = 'Готово!';
         setTimeout(() => btn.textContent = 'Скопировать', 1500);
     }).catch(() => {
         const ta = document.createElement('textarea');
@@ -621,10 +1013,16 @@ function copyReport() {
     });
 }
 
+// ========= Init =========
 document.addEventListener('DOMContentLoaded', function() {
-    document.getElementById('current-date').textContent =
-        new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    loadPosterData();
+    currentDate = getTodayStr();
+    document.getElementById('current-date').textContent = fmtDateFull(currentDate);
+    document.getElementById('btn-today-label').textContent = fmtDateShort(currentDate);
+    document.getElementById('btn-today').dataset.date = currentDate;
+
+    // Load history dates then load today's data
+    loadHistoryDates();
+    loadDateData(currentDate);
 });
 </script>
 {% endblock %}
