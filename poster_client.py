@@ -158,6 +158,23 @@ class PosterClient:
         })
         return result.get('response', [])
 
+    async def get_cash_shifts(self, date_from: str, date_to: str) -> List[Dict]:
+        """
+        Get cash register shifts for a date range
+
+        Args:
+            date_from: Start date in format "YYYYMMDD"
+            date_to: End date in format "YYYYMMDD"
+
+        Returns:
+            List of cash shifts with amount_start, amount_end, amount_collection etc.
+        """
+        result = await self._request('GET', 'finance.getCashShifts', params={
+            'dateFrom': date_from,
+            'dateTo': date_to
+        })
+        return result.get('response', [])
+
     async def remove_transaction(self, transaction_id: int) -> bool:
         """
         Delete a transaction (receipt/order) from Poster

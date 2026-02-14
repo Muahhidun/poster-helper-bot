@@ -570,6 +570,14 @@ function getTodayStr() {
     return kz.toISOString().slice(0, 10);
 }
 
+// Get previous date string (YYYY-MM-DD) for a given date
+function getPrevDateStr(s) {
+    const p = s.split('-');
+    const d = new Date(parseInt(p[0]), parseInt(p[1]) - 1, parseInt(p[2]));
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+}
+
 // Format YYYY-MM-DD to DD.MM
 function fmtDateShort(s) {
     const p = s.split('-');
@@ -694,13 +702,15 @@ async function loadDateData(date) {
             // Save to localStorage too
             saveToLS();
         } else {
-            // No saved data — try localStorage
+            // No saved data — try localStorage (but DON'T block server prev_shift_left)
             const ls = loadFromLS(date);
             if (ls) {
                 INPUT_IDS.forEach(id => {
                     if (ls[id]) document.getElementById(id).value = ls[id];
                 });
-                if (ls.shift_start) shiftStartSet = true;
+                // NOTE: don't set shiftStartSet=true from localStorage
+                // because it might have stale auto-filled value from Poster cash drawer
+                // Server's prev_shift_left should override it
             }
             setReadonly(false);
         }
@@ -711,7 +721,6 @@ async function loadDateData(date) {
             INPUT_IDS.forEach(id => {
                 if (ls[id]) document.getElementById(id).value = ls[id];
             });
-            if (ls.shift_start) shiftStartSet = true;
         }
         setReadonly(false);
     }
@@ -725,14 +734,43 @@ async function loadDateData(date) {
         if (d.success) {
             posterData = d;
 
-            // Auto-fill shift_start from previous day's shift_left (priority)
+            // Auto-fill shift_start from previous day's shift_left
+            // Priority: 1) our DB saved data → 2) Poster getCashShifts → 3) localStorage → 4) Poster cash drawer calc
             if (!shiftStartSet) {
+                let prevShiftLeft = null;
+                let source = '';
+
+                // Priority 1: prev_shift_left from our DB (saved shift closing)
                 if (d.prev_shift_left != null && d.prev_shift_left !== 0) {
-                    document.getElementById('shift_start').value = String(Math.round(d.prev_shift_left / 100));
+                    prevShiftLeft = Math.round(d.prev_shift_left / 100);
+                    source = 'DB';
+                }
+
+                // Priority 2: Poster getCashShifts (amount_end of previous day's last shift)
+                if (prevShiftLeft == null && d.poster_prev_shift_left != null && d.poster_prev_shift_left !== 0) {
+                    prevShiftLeft = Math.round(d.poster_prev_shift_left / 100);
+                    source = 'Poster getCashShifts';
+                }
+
+                // Priority 3: check localStorage for previous day's saved data
+                if (prevShiftLeft == null) {
+                    const prevDate = getPrevDateStr(date);
+                    const prevLS = loadFromLS(prevDate);
+                    if (prevLS && prevLS.cash_to_leave && prevLS.cash_coins) {
+                        prevShiftLeft = (parseFloat(prevLS.cash_to_leave) || 0) + (parseFloat(prevLS.cash_coins) || 0);
+                        source = 'localStorage';
+                    }
+                }
+
+                // Apply the best available value, or fallback to Poster cash drawer
+                if (prevShiftLeft != null && prevShiftLeft !== 0) {
+                    document.getElementById('shift_start').value = String(prevShiftLeft);
                     shiftStartSet = true;
+                    console.log('[SHIFT] shift_start=' + prevShiftLeft + ' (source: ' + source + ')');
                 } else if (d.shift_start && d.shift_start !== 0) {
                     document.getElementById('shift_start').value = String(Math.round(d.shift_start / 100));
                     shiftStartSet = true;
+                    console.log('[SHIFT] shift_start=' + Math.round(d.shift_start / 100) + ' (source: Poster cash drawer)');
                 }
                 saveToLS();
             }
