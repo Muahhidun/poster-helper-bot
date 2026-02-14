@@ -3021,6 +3021,7 @@ document.getElementById('sync-poster-btn').addEventListener('click', async funct
             let parts = [];
             if (result.synced > 0) parts.push(`добавлено: ${result.synced}`);
             if (result.updated > 0) parts.push(`обновлено: ${result.updated}`);
+            if (result.deleted > 0) parts.push(`удалено: ${result.deleted}`);
             if (result.skipped > 0) parts.push(`без изменений: ${result.skipped}`);
             const msg = parts.length > 0 ? parts.join(', ') : 'Нет транзакций за сегодня';
             alert(`✅ Синхронизация: ${msg}`);
