@@ -844,13 +844,20 @@ def api_create_supply():
                     if source == 'kaspi':
                         # Look for Kaspi account
                         for acc in finance_accounts:
-                            if 'kaspi' in acc.get('name', '').lower():
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                            if 'kaspi' in acc_name:
+                                finance_account_id = int(acc['account_id'])
+                                break
+                    elif source == 'halyk':
+                        for acc in finance_accounts:
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                            if 'халык' in acc_name or 'halyk' in acc_name:
                                 finance_account_id = int(acc['account_id'])
                                 break
                     else:
                         # Look for cash/purchase accounts
                         for acc in finance_accounts:
-                            acc_name = acc.get('name', '').lower()
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
                             if 'закуп' in acc_name or 'оставил' in acc_name:
                                 finance_account_id = int(acc['account_id'])
                                 break
@@ -1155,7 +1162,7 @@ def list_expenses():
         'cash': 0
     }
     for acc in accounts:
-        name_lower = (acc.get('name') or '').lower()
+        name_lower = (acc.get('account_name') or acc.get('name', '')).lower()
         # Balance is in kopecks/tiyn, convert to tenge
         balance = float(acc.get('balance') or 0) / 100
 
@@ -1439,7 +1446,7 @@ def sync_expenses_from_poster():
                     # Debug: print account map
                     print(f"📊 Finance accounts for {account['account_name']}:")
                     for acc in finance_accounts:
-                        print(f"   - ID {acc.get('account_id')}: {acc.get('name')}")
+                        print(f"   - ID {acc.get('account_id')}: {acc.get('account_name') or acc.get('name')}")
 
                     for txn in transactions:
                         # Accept both expense (type=0) and income (type=1) transactions
@@ -1559,7 +1566,7 @@ def sync_expenses_from_poster():
                         txn_account_name = txn.get('account_name', '') or ''
 
                         finance_acc = account_map.get(str(account_from_id), {})
-                        finance_acc_name = (finance_acc.get('name') or txn_account_name or '').lower()
+                        finance_acc_name = (finance_acc.get('account_name') or finance_acc.get('name') or txn_account_name or '').lower()
 
                         print(f"   Transaction #{txn_id}: account_from={account_from_id}, acc_name='{finance_acc_name}', desc='{description}'")
 
@@ -1712,7 +1719,7 @@ def api_poster_transactions():
 
                         account_from_id = txn.get('account_from_id') or txn.get('account_from')
                         finance_acc = account_map.get(str(account_from_id), {})
-                        finance_acc_name = finance_acc.get('name', '')
+                        finance_acc_name = (finance_acc.get('account_name') or finance_acc.get('name', ''))
 
                         all_transactions.append({
                             'id': f"{account['id']}_{txn_id}",
@@ -1857,7 +1864,7 @@ def api_get_expenses():
         'cash': 0  # This is the "Оставил в кассе" balance from Poster
     }
     for acc in accounts:
-        name_lower = (acc.get('name') or '').lower()
+        name_lower = (acc.get('account_name') or acc.get('name', '')).lower()
         # Balance is in kopecks/tiyn, convert to tenge
         balance = float(acc.get('balance') or 0) / 100
 
@@ -2107,7 +2114,7 @@ def api_sync_expenses_from_poster():
                     # Debug: log finance accounts
                     print(f"[SYNC DEBUG] Finance accounts for {account['account_name']}:", flush=True)
                     for acc in finance_accounts:
-                        print(f"  - account_id={acc.get('account_id')}, name='{acc.get('name')}'", flush=True)
+                        print(f"  - account_id={acc.get('account_id')}, name='{acc.get('account_name') or acc.get('name')}'", flush=True)
 
                     for idx, txn in enumerate(transactions):
                         # Debug: log first transaction structure
@@ -2144,10 +2151,10 @@ def api_sync_expenses_from_poster():
 
                         finance_acc = account_map.get(str(account_from_id), {})
                         # Use finance account name or fall back to direct txn account_name
-                        finance_acc_name_raw = finance_acc.get('name') or txn_account_name
+                        finance_acc_name_raw = (finance_acc.get('account_name') or finance_acc.get('name')) or txn_account_name
 
                         # Debug: log account lookup
-                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('name', 'NOT FOUND')}'", flush=True)
+                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('account_name') or finance_acc.get('name', 'NOT FOUND')}'", flush=True)
 
                         # Check if already synced - find matching draft
                         # Support both formats: composite "accountId_txnId" and simple "txnId"
@@ -2747,25 +2754,42 @@ def process_drafts():
                     if not default_cat_id and category_map:
                         default_cat_id = list(category_map.values())[0]
 
+                    # Debug: log available finance accounts for this Poster account
+                    print(f"[DEBUG] Finance accounts for {account['account_name']}:", flush=True)
+                    for acc in finance_accounts:
+                        acc_name = (acc.get('account_name') or acc.get('name', ''))
+                        print(f"  - id={acc.get('account_id')}, name='{acc_name}'", flush=True)
+
                     for draft in account_transactions:
                         # Find finance account: prefer manually selected, then auto-detect by source
                         account_id = draft.get('account_id')
 
                         if not account_id:
                             # Auto-detect based on source
+                            # Note: Poster API returns 'account_name' field, not 'name'
                             if draft['source'] == 'kaspi':
                                 for acc in finance_accounts:
-                                    if 'kaspi' in acc.get('name', '').lower():
+                                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                    if 'kaspi' in acc_name:
+                                        account_id = int(acc['account_id'])
+                                        break
+                            elif draft['source'] == 'halyk':
+                                for acc in finance_accounts:
+                                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                    if 'халык' in acc_name or 'halyk' in acc_name:
                                         account_id = int(acc['account_id'])
                                         break
                             else:
                                 for acc in finance_accounts:
-                                    if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                    if 'закуп' in acc_name or 'оставил' in acc_name:
                                         account_id = int(acc['account_id'])
                                         break
 
                         if not account_id and finance_accounts:
                             account_id = int(finance_accounts[0]['account_id'])
+
+                        print(f"[DEBUG] Draft '{draft.get('description')}' source='{draft['source']}' -> account_id={account_id}", flush=True)
 
                         # Find category: exact match, partial match, or default
                         draft_category = (draft.get('category') or '').lower().strip()
@@ -3281,7 +3305,8 @@ def process_all_supplies():
                         account_id_poster = None
 
                         for acc in poster_accounts:
-                            if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                            if 'закуп' in acc_name or 'оставил' in acc_name:
                                 account_id_poster = int(acc['account_id'])
                                 break
 
@@ -3547,12 +3572,20 @@ def process_supply(draft_id):
                         source = draft.get('source', 'cash')
                         if source == 'kaspi':
                             for acc in finance_accounts:
-                                if 'kaspi' in acc.get('name', '').lower():
+                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                if 'kaspi' in acc_name:
+                                    account_id = int(acc['account_id'])
+                                    break
+                        elif source == 'halyk':
+                            for acc in finance_accounts:
+                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                if 'халык' in acc_name or 'halyk' in acc_name:
                                     account_id = int(acc['account_id'])
                                     break
                         else:
                             for acc in finance_accounts:
-                                if 'закуп' in acc.get('name', '').lower() or 'оставил' in acc.get('name', '').lower():
+                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                if 'закуп' in acc_name or 'оставил' in acc_name:
                                     account_id = int(acc['account_id'])
                                     break
 
