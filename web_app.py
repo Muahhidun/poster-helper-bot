@@ -3893,7 +3893,7 @@ def shift_closing():
 
 @app.route('/api/shift-closing/poster-data')
 def api_shift_closing_poster_data():
-    """Get Poster data for shift closing - income by finance account (Kaspi, Halyk, Cash) from PRIMARY business account only"""
+    """Get Poster data for shift closing - sales breakdown from PRIMARY business account only"""
     date = request.args.get('date')  # Format: YYYYMMDD
 
     try:
@@ -3916,110 +3916,94 @@ def api_shift_closing_poster_data():
             else:
                 date_param = date
 
-            # Totals for reconciliation (primary account only)
-            kaspi_expected = 0     # Income to Kaspi accounts (in kopecks/tiyins)
-            halyk_expected = 0     # Income to Halyk accounts (in kopecks/tiyins)
-            cash_expected = 0      # Income to Cash accounts (in kopecks/tiyins)
+            client = PosterClient(
+                telegram_user_id=g.user_id,
+                poster_token=primary_account['poster_token'],
+                poster_user_id=primary_account['poster_user_id'],
+                poster_base_url=primary_account['poster_base_url']
+            )
 
-            # For sales stats
-            total_transactions = 0
-            total_sum = 0
-            bonus_total = 0
+            account_name = primary_account.get('account_name', 'unknown')
 
-            # Details by business account
-            details_by_account = {}
+            try:
+                # 1. Get sales data from dash.getTransactions (correct source for payment breakdown)
+                result = await client._request('GET', 'dash.getTransactions', params={
+                    'dateFrom': date_param,
+                    'dateTo': date_param
+                })
+                transactions = result.get('response', [])
+                closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
 
-            for account in [primary_account]:
-                client = PosterClient(
-                    telegram_user_id=g.user_id,
-                    poster_token=account['poster_token'],
-                    poster_user_id=account['poster_user_id'],
-                    poster_base_url=account['poster_base_url']
-                )
+                total_cash = 0    # payed_cash
+                total_card = 0    # payed_card (Карточки)
+                total_sum = 0     # payed_sum (Оборот)
 
-                account_name = account.get('account_name', account.get('poster_base_url', 'unknown'))
+                for tx in closed_transactions:
+                    total_cash += int(tx.get('payed_cash', 0))
+                    total_card += int(tx.get('payed_card', 0))
+                    total_sum += int(tx.get('payed_sum', 0))
 
-                try:
-                    # 1. Get finance accounts to map account_id -> account name
-                    finance_accounts = await client.get_accounts()
-                    account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+                # Бонусы (онлайн-оплата) = Оборот - (наличные + карта)
+                # Same formula as cash_shift_closing.py
+                bonus = total_sum - total_cash - total_card
 
-                    # 2. Get finance transactions for the day
-                    finance_transactions = await client.get_transactions(date_param, date_param)
+                # Торговля = cash + card (без бонусов)
+                trade_total = total_cash + total_card
 
-                    # 3. Sum income (type=1) by finance account type
-                    acc_kaspi = 0
-                    acc_halyk = 0
-                    acc_cash = 0
+                print(f"[SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
+                      f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
+                      f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
 
-                    for txn in finance_transactions:
+                # 2. Get shift_start from cash drawer account
+                # Strategy: get current balance of cash drawer, subtract today's net cash movements
+                finance_accounts = await client.get_accounts()
+                cash_drawer_balance = 0
+                cash_drawer_id = None
+
+                for acc in finance_accounts:
+                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                    if 'ящик' in acc_name or 'денежн' in acc_name:
+                        cash_drawer_balance = int(float(acc.get('balance', 0)))
+                        cash_drawer_id = str(acc.get('account_id'))
+                        print(f"[SHIFT] Cash drawer: id={cash_drawer_id}, name='{acc.get('account_name') or acc.get('name')}', balance={cash_drawer_balance/100:,.0f}₸", flush=True)
+                        break
+
+                shift_start = 0
+                if cash_drawer_id:
+                    # Get today's finance transactions to calculate net movement on cash drawer
+                    finance_txns = await client.get_transactions(date_param, date_param)
+                    net_movement = 0  # positive = money came in, negative = money went out
+
+                    for txn in finance_txns:
                         txn_type = str(txn.get('type', ''))
-                        if txn_type != '1':  # Only income transactions
-                            continue
-
                         amount = abs(int(txn.get('amount', 0)))
-                        acc_id = str(txn.get('account_id', ''))
-                        fin_account = account_map.get(acc_id, {})
-                        fin_account_name = (fin_account.get('account_name') or fin_account.get('name', '')).lower()
+                        txn_account = str(txn.get('account_id') or txn.get('account_from_id') or txn.get('account_from', ''))
 
-                        # Categorize by account name
-                        if 'kaspi' in fin_account_name:
-                            acc_kaspi += amount
-                        elif 'халык' in fin_account_name or 'halyk' in fin_account_name:
-                            acc_halyk += amount
-                        elif 'налич' in fin_account_name or 'cash' in fin_account_name or 'касса' in fin_account_name or 'оставил' in fin_account_name:
-                            acc_cash += amount
+                        if txn_account == cash_drawer_id:
+                            if txn_type == '1':  # income
+                                net_movement += amount
+                            elif txn_type == '0':  # expense
+                                net_movement -= amount
 
-                    kaspi_expected += acc_kaspi
-                    halyk_expected += acc_halyk
-                    cash_expected += acc_cash
+                    # opening_balance = current_balance - net_movement
+                    shift_start = cash_drawer_balance - net_movement
+                    print(f"[SHIFT] Cash drawer: current={cash_drawer_balance/100:,.0f}₸, "
+                          f"net_movement={net_movement/100:,.0f}₸, opening={shift_start/100:,.0f}₸", flush=True)
 
-                    # Store details
-                    details_by_account[account_name] = {
-                        'kaspi': acc_kaspi / 100,
-                        'halyk': acc_halyk / 100,
-                        'cash': acc_cash / 100
-                    }
-
-                    # 4. Get sales data for stats
-                    result = await client._request('GET', 'dash.getTransactions', params={
-                        'dateFrom': date_param,
-                        'dateTo': date_param
-                    })
-                    transactions = result.get('response', [])
-                    closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
-                    total_transactions += len(closed_transactions)
-
-                    for tx in closed_transactions:
-                        total_sum += int(tx.get('payed_sum', 0))
-                        bonus_total += int(tx.get('payed_bonus', 0))
-
-                finally:
-                    await client.close()
-
-            # poster_card = total card income (Kaspi + Halyk) in tiyins
-            poster_card_total = kaspi_expected + halyk_expected
-
-            return {
-                'success': True,
-                'date': date_param,
-                'transactions_count': total_transactions,
-                'accounts_count': 1,
-                'account_name': primary_account.get('account_name', ''),
-                'total_sum': total_sum,
-                'bonus': bonus_total,
-                # For shift closing calculator (all in tiyins):
-                'trade_total': total_sum,              # Торговля за день (payed_sum)
-                'poster_card': poster_card_total,      # Безнал картой (Kaspi + Halyk income)
-                'poster_cash': cash_expected,          # Наличка
-                'shift_start': 0,                      # Остаток на начало (user fills manually)
-                # For reconciliation (all in tenge):
-                'kaspi_expected': kaspi_expected / 100,   # Kaspi income
-                'halyk_expected': halyk_expected / 100,   # Halyk income
-                'cash_expected': cash_expected / 100,     # Cash income
-                # Details by business account (for debugging)
-                'details_by_account': details_by_account
-            }
+                return {
+                    'success': True,
+                    'date': date_param,
+                    'transactions_count': len(closed_transactions),
+                    'account_name': account_name,
+                    # For shift closing calculator (all in tiyins):
+                    'trade_total': total_sum,              # Оборот (с бонусами) - для формулы "Торговля - Бонусы"
+                    'bonus': bonus,                        # Бонусы (онлайн-оплата)
+                    'poster_card': total_card,             # Безнал картой (payed_card)
+                    'poster_cash': total_cash,             # Наличка (payed_cash)
+                    'shift_start': shift_start,            # Остаток на начало (из Poster)
+                }
+            finally:
+                await client.close()
 
         data = loop.run_until_complete(get_poster_data_primary())
         loop.close()
@@ -4046,7 +4030,6 @@ def api_shift_closing_calculate():
         cash_bills = float(data.get('cash_bills', 0))
         cash_coins = float(data.get('cash_coins', 0))
         shift_start = float(data.get('shift_start', 0))
-        deposits = float(data.get('deposits', 0))
         expenses = float(data.get('expenses', 0))
         cash_to_leave = float(data.get('cash_to_leave', 15000))
 
@@ -4062,8 +4045,8 @@ def api_shift_closing_calculate():
         # 2. Фактический = безнал + наличка (бумажная + мелочь)
         fact_total = fact_cashless + cash_bills + cash_coins
 
-        # 3. Итого фактический = Фактический - Смена + Расходы - Внесения
-        fact_adjusted = fact_total - shift_start - deposits + expenses
+        # 3. Итого фактический = Фактический - Смена + Расходы
+        fact_adjusted = fact_total - shift_start + expenses
 
         # 4. Итого Poster = Торговля - Бонусы (но trade_total уже без бонусов!)
         # Значит: poster_total = poster_trade (которая уже "С учётом скидок")
@@ -4093,7 +4076,6 @@ def api_shift_closing_calculate():
                 'cash_bills': cash_bills,
                 'cash_coins': cash_coins,
                 'shift_start': shift_start,
-                'deposits': deposits,
                 'expenses': expenses,
                 'cash_to_leave': cash_to_leave,
 

@@ -55,20 +55,16 @@
         <span id="fact_total_value" class="sc-subtotal-num">0</span>
     </div>
 
-    <!-- Смена / Внесения / Расходы -->
+    <!-- Смена / Расходы -->
     <div class="sc-card">
         <div class="sc-card-title">Корректировки</div>
-        <div class="sc-field">
-            <label>Смена (начало)</label>
-            <input type="text" id="shift_start" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
-        </div>
         <div class="sc-row-pair">
             <div class="sc-field">
-                <label>Внесения</label>
-                <input type="text" id="deposits" inputmode="decimal" placeholder="0" value="0" oninput="debouncedCalculate()">
+                <label>Смена (начало)</label>
+                <input type="text" id="shift_start" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
             </div>
             <div class="sc-field">
-                <label>Расходы</label>
+                <label>Расходы с кассы</label>
                 <input type="text" id="expenses" inputmode="decimal" placeholder="0" oninput="debouncedCalculate()">
             </div>
         </div>
@@ -485,9 +481,11 @@ async function loadPosterData() {
         if (d.success) {
             posterData = d;
 
-            if (d.shift_start > 0)
-                document.getElementById('shift_start').value = String(d.shift_start / 100);
+            // Auto-fill shift_start from Poster (cash drawer opening balance)
+            if (d.shift_start && d.shift_start !== 0)
+                document.getElementById('shift_start').value = String(Math.round(d.shift_start / 100));
 
+            // Display Poster data (all in tiyins, convert to tenge)
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
             document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
@@ -518,7 +516,7 @@ async function calculate() {
             wolt: pi('wolt'), halyk: pi('halyk'),
             kaspi: pi('kaspi'), kaspi_cafe: pi('kaspi_cafe'),
             cash_bills: pi('cash_bills'), cash_coins: pi('cash_coins'),
-            shift_start: pi('shift_start'), deposits: pi('deposits'),
+            shift_start: pi('shift_start'),
             expenses: pi('expenses'), cash_to_leave: pi('cash_to_leave'),
             poster_trade: posterData.trade_total,
             poster_bonus: posterData.bonus,
