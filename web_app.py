@@ -1459,6 +1459,10 @@ def sync_expenses_from_poster():
                         amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
                         amount = abs(float(amount_raw)) / 100
 
+                        # Build description from comment or category
+                        comment = txn.get('comment', '') or ''
+                        description = comment if comment else category_name
+
                         # Check if already imported — find matching draft
                         # Support both formats: composite "accountId_txnId" and simple "txnId"
                         existing_draft = next(
@@ -1470,29 +1474,36 @@ def sync_expenses_from_poster():
                         )
 
                         if existing_draft:
-                            # Draft exists — check if amount changed in Poster
+                            # Draft exists — check if amount or description changed in Poster
                             old_poster_amount = existing_draft.get('poster_amount')
                             old_amount = existing_draft.get('amount', 0)
+                            old_description = existing_draft.get('description', '')
 
+                            update_fields = {}
+
+                            # Check amount change
                             if old_poster_amount is None or abs(float(old_poster_amount) - amount) >= 0.01:
-                                update_fields = {'poster_amount': amount}
+                                update_fields['poster_amount'] = amount
                                 # Update amount if user hasn't manually changed it
                                 if old_poster_amount is not None and abs(float(old_amount) - float(old_poster_amount)) < 0.01:
                                     update_fields['amount'] = amount
                                 if old_poster_amount is None:
                                     update_fields['amount'] = amount
 
+                            # Check description change
+                            if description and description != old_description:
+                                update_fields['description'] = description
+
+                            if update_fields:
                                 db.update_expense_draft(existing_draft['id'], **update_fields)
                                 updated_count += 1
-                                print(f"[SYNC] Updated draft #{existing_draft['id']}: poster_amount {old_poster_amount}→{amount}", flush=True)
+                                print(f"[SYNC] Updated draft #{existing_draft['id']}: {update_fields}", flush=True)
                             else:
                                 skipped_count += 1
                             continue
 
                         # Check if this is a supply transaction that already has a linked expense draft
                         # Poster creates transactions like "Поставка №12685 от «Омск упаковки»" for supplies
-                        comment = txn.get('comment', '') or ''
-                        description = comment if comment else category_name
 
                         import re
                         supply_match = re.search(r'Поставка\s*[№N#]\s*(\d+)', description)
@@ -2085,27 +2096,30 @@ def api_sync_expenses_from_poster():
                         )
 
                         if existing_draft:
-                            # Draft exists — check if amount changed in Poster
+                            # Draft exists — check if amount or description changed in Poster
                             old_poster_amount = existing_draft.get('poster_amount')
                             old_amount = existing_draft.get('amount', 0)
+                            old_description = existing_draft.get('description', '')
 
+                            update_fields = {}
+
+                            # Check amount change
                             if old_poster_amount is None or abs(float(old_poster_amount) - amount) >= 0.01:
-                                # Poster amount changed — update draft
-                                update_fields = {'poster_amount': amount}
-
-                                # Also update draft amount if it still matches the old poster_amount
-                                # (user hasn't manually edited it on the website)
+                                update_fields['poster_amount'] = amount
+                                # Update amount if user hasn't manually changed it
                                 if old_poster_amount is not None and abs(float(old_amount) - float(old_poster_amount)) < 0.01:
                                     update_fields['amount'] = amount
-
-                                # If poster_amount was never set (old drafts), and draft amount matches old Poster amount
-                                # then update both
                                 if old_poster_amount is None:
                                     update_fields['amount'] = amount
 
+                            # Check description change
+                            if description and description != old_description:
+                                update_fields['description'] = description
+
+                            if update_fields:
                                 db.update_expense_draft(existing_draft['id'], **update_fields)
                                 updated += 1
-                                print(f"[SYNC] Updated draft #{existing_draft['id']}: poster_amount {old_poster_amount}→{amount}, amount {old_amount}→{update_fields.get('amount', old_amount)}", flush=True)
+                                print(f"[SYNC] Updated draft #{existing_draft['id']}: {update_fields}", flush=True)
                             else:
                                 skipped += 1
                             continue
