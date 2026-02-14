@@ -3893,7 +3893,7 @@ def shift_closing():
 
 @app.route('/api/shift-closing/poster-data')
 def api_shift_closing_poster_data():
-    """Get Poster data for shift closing - income by finance account (Kaspi, Halyk, Cash) from ALL business accounts"""
+    """Get Poster data for shift closing - income by finance account (Kaspi, Halyk, Cash) from PRIMARY business account only"""
     date = request.args.get('date')  # Format: YYYYMMDD
 
     try:
@@ -3904,19 +3904,22 @@ def api_shift_closing_poster_data():
         if not accounts:
             return jsonify({'error': 'No Poster accounts configured'}), 400
 
+        # Shift closing only uses primary account (PizzBurg)
+        primary_account = next((a for a in accounts if a.get('is_primary')), accounts[0])
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        async def get_poster_data_all_accounts():
+        async def get_poster_data_primary():
             if date is None:
                 date_param = datetime.now().strftime("%Y%m%d")
             else:
                 date_param = date
 
-            # Totals for reconciliation (sum from ALL business accounts)
-            kaspi_expected = 0     # Sum of income to Kaspi accounts (in kopecks/tiyins)
-            halyk_expected = 0     # Sum of income to Halyk accounts (in kopecks/tiyins)
-            cash_expected = 0      # Sum of income to Cash accounts (in kopecks/tiyins)
+            # Totals for reconciliation (primary account only)
+            kaspi_expected = 0     # Income to Kaspi accounts (in kopecks/tiyins)
+            halyk_expected = 0     # Income to Halyk accounts (in kopecks/tiyins)
+            cash_expected = 0      # Income to Cash accounts (in kopecks/tiyins)
 
             # For sales stats
             total_transactions = 0
@@ -3926,7 +3929,7 @@ def api_shift_closing_poster_data():
             # Details by business account
             details_by_account = {}
 
-            for account in accounts:
+            for account in [primary_account]:
                 client = PosterClient(
                     telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
@@ -4001,7 +4004,8 @@ def api_shift_closing_poster_data():
                 'success': True,
                 'date': date_param,
                 'transactions_count': total_transactions,
-                'accounts_count': len(accounts),
+                'accounts_count': 1,
+                'account_name': primary_account.get('account_name', ''),
                 'total_sum': total_sum,
                 'bonus': bonus_total,
                 # For shift closing calculator (all in tiyins):
@@ -4010,14 +4014,14 @@ def api_shift_closing_poster_data():
                 'poster_cash': cash_expected,          # Наличка
                 'shift_start': 0,                      # Остаток на начало (user fills manually)
                 # For reconciliation (all in tenge):
-                'kaspi_expected': kaspi_expected / 100,   # Kaspi income from all accounts
-                'halyk_expected': halyk_expected / 100,   # Halyk income from all accounts
-                'cash_expected': cash_expected / 100,     # Cash income from all accounts
+                'kaspi_expected': kaspi_expected / 100,   # Kaspi income
+                'halyk_expected': halyk_expected / 100,   # Halyk income
+                'cash_expected': cash_expected / 100,     # Cash income
                 # Details by business account (for debugging)
                 'details_by_account': details_by_account
             }
 
-        data = loop.run_until_complete(get_poster_data_all_accounts())
+        data = loop.run_until_complete(get_poster_data_primary())
         loop.close()
 
         return jsonify(data)
