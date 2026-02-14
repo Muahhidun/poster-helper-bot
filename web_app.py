@@ -1459,9 +1459,13 @@ def sync_expenses_from_poster():
                         category_name = txn.get('name', '') or txn.get('category_name', '')
                         category_lower = category_name.lower()
 
-                        # Skip transfers - they have category "Переводы" or similar
-                        if 'перевод' in category_lower:
-                            print(f"   ⏭️ Skipping transfer: category='{category_name}'")
+                        # Skip system categories that are not real expenses:
+                        # - "Переводы" — transfers between accounts (инкассация)
+                        # - "Кассовые смены" — shift closing transactions
+                        # - "Актуализация" — correcting/actualisation transactions
+                        skip_categories = ['перевод', 'кассовые смены', 'актуализац']
+                        if any(skip in category_lower for skip in skip_categories):
+                            print(f"   ⏭️ Skipping system transaction: category='{category_name}'")
                             continue
 
                         # Build unique poster_transaction_id
@@ -1608,6 +1612,15 @@ def sync_expenses_from_poster():
                 import traceback
                 traceback.print_exc()
 
+        # Clean up existing drafts with system categories that should be excluded
+        skip_categories_cleanup = ['перевод', 'кассовые смены', 'актуализац']
+        for draft in existing_drafts:
+            draft_category = (draft.get('category') or '').lower()
+            if draft_category and any(skip in draft_category for skip in skip_categories_cleanup):
+                db.delete_expense_draft(draft['id'])
+                deleted_count += 1
+                print(f"[SYNC] Deleted system category draft #{draft['id']}: category='{draft.get('category')}'")
+
         # Detect and remove drafts whose Poster transactions were deleted
         today_str = today.strftime('%Y-%m-%d')
         for draft in existing_drafts:
@@ -1617,6 +1630,10 @@ def sync_expenses_from_poster():
                 continue
             # Only check pending drafts — don't touch processed ones
             if draft.get('status') != 'pending':
+                continue
+            # Skip drafts already deleted above (system categories)
+            draft_category = (draft.get('category') or '').lower()
+            if draft_category and any(skip in draft_category for skip in skip_categories_cleanup):
                 continue
             # Only check drafts created today (older drafts won't be in today's Poster fetch)
             draft_created = draft.get('created_at', '')
@@ -2125,8 +2142,10 @@ def api_sync_expenses_from_poster():
                         txn_type = str(txn.get('type'))
                         category_name = txn.get('name', '') or txn.get('category_name', '')
 
-                        # Skip transfers
-                        if 'перевод' in category_name.lower():
+                        # Skip system categories (transfers, shift closing, actualisation)
+                        category_lower = category_name.lower()
+                        skip_categories = ['перевод', 'кассовые смены', 'актуализац']
+                        if any(skip in category_lower for skip in skip_categories):
                             continue
 
                         # Only expenses and income
@@ -2265,6 +2284,15 @@ def api_sync_expenses_from_poster():
             except Exception as e:
                 errors.append(f"{account['account_name']}: {str(e)}")
 
+        # Clean up existing drafts with system categories that should be excluded
+        skip_categories_cleanup = ['перевод', 'кассовые смены', 'актуализац']
+        for draft in existing_drafts:
+            draft_category = (draft.get('category') or '').lower()
+            if draft_category and any(skip in draft_category for skip in skip_categories_cleanup):
+                db.delete_expense_draft(draft['id'])
+                deleted += 1
+                print(f"[SYNC] Deleted system category draft #{draft['id']}: category='{draft.get('category')}'")
+
         # Detect and remove drafts whose Poster transactions were deleted
         today_str = today.strftime('%Y-%m-%d')
         for draft in existing_drafts:
@@ -2272,6 +2300,10 @@ def api_sync_expenses_from_poster():
             if not ptid or ptid.startswith('supply_'):
                 continue
             if draft.get('status') != 'pending':
+                continue
+            # Skip drafts already deleted above (system categories)
+            draft_category = (draft.get('category') or '').lower()
+            if draft_category and any(skip in draft_category for skip in skip_categories_cleanup):
                 continue
             draft_created = draft.get('created_at', '')
             if draft_created:
