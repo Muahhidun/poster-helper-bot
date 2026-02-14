@@ -214,6 +214,18 @@
     color: #8e8e93;
     margin-top: 1px;
 }
+.sc-date-btn.has-data::after {
+    content: '';
+    display: block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #34c759;
+    margin: 2px auto 0;
+}
+.sc-date-btn.active.has-data::after {
+    background: rgba(255,255,255,0.7);
+}
 
 /* Header */
 .sc-header {
@@ -945,9 +957,29 @@ function renderDateButtons(dates) {
     const bar = document.getElementById('dates-bar');
     const today = getTodayStr();
 
-    // Build unique sorted dates (today first, then history descending)
+    // Always show today + last 7 days
     const allDates = [today];
-    dates.forEach(d => { if (d !== today && allDates.indexOf(d) === -1) allDates.push(d); });
+    for (let i = 1; i <= 7; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        // Format as YYYY-MM-DD in KZ timezone
+        const kz = new Date(d.getTime() + (5 * 60 - d.getTimezoneOffset()) * 60000);
+        const ds = kz.toISOString().slice(0, 10);
+        if (allDates.indexOf(ds) === -1) allDates.push(ds);
+    }
+    // Also add any saved dates not already included
+    dates.forEach(d => { if (allDates.indexOf(d) === -1) allDates.push(d); });
+    // Sort: today first, rest descending
+    allDates.sort((a, b) => { if (a === today) return -1; if (b === today) return 1; return b.localeCompare(a); });
+
+    // Compute yesterday's date string
+    const yd = new Date();
+    yd.setDate(yd.getDate() - 1);
+    const ykz = new Date(yd.getTime() + (5 * 60 - yd.getTimezoneOffset()) * 60000);
+    const yesterday = ykz.toISOString().slice(0, 10);
+
+    // Track which dates have saved data
+    const savedSet = new Set(dates);
 
     bar.innerHTML = '';
     allDates.forEach(d => {
@@ -967,6 +999,16 @@ function renderDateButtons(dates) {
             sub.className = 'sc-date-btn-sub';
             sub.textContent = 'сегодня';
             btn.appendChild(sub);
+        } else if (d === yesterday) {
+            const sub = document.createElement('span');
+            sub.className = 'sc-date-btn-sub';
+            sub.textContent = 'вчера';
+            btn.appendChild(sub);
+        }
+
+        // Show a dot indicator if this date has saved data
+        if (savedSet.has(d)) {
+            btn.classList.add('has-data');
         }
 
         bar.appendChild(btn);
@@ -1017,10 +1059,8 @@ function copyReport() {
 document.addEventListener('DOMContentLoaded', function() {
     currentDate = getTodayStr();
     document.getElementById('current-date').textContent = fmtDateFull(currentDate);
-    document.getElementById('btn-today-label').textContent = fmtDateShort(currentDate);
-    document.getElementById('btn-today').dataset.date = currentDate;
 
-    // Load history dates then load today's data
+    // Render date buttons (always shows last 7 days) then load today's data
     loadHistoryDates();
     loadDateData(currentDate);
 });
