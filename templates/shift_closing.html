@@ -546,6 +546,8 @@ let lastCalc = null;
 let currentDate = '';
 let isReadonly = false;
 const INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
+// User-input fields only (excludes shift_start — always from Poster API)
+const USER_INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','expenses','cash_to_leave'];
 
 function fmt(n) {
     return Math.round(n).toLocaleString('ru-RU');
@@ -600,7 +602,8 @@ function lsKey(date) { return 'sc_' + date; }
 
 function saveToLS() {
     const data = {};
-    INPUT_IDS.forEach(id => { data[id] = document.getElementById(id).value; });
+    // Only save user-input fields, NOT shift_start (it comes from Poster API)
+    USER_INPUT_IDS.forEach(id => { data[id] = document.getElementById(id).value; });
     try { localStorage.setItem(lsKey(currentDate), JSON.stringify(data)); } catch(e) {}
 }
 
@@ -673,7 +676,6 @@ async function loadDateData(date) {
     document.getElementById('cash_to_leave').value = '15000';
 
     const isToday = date === getTodayStr();
-    let shiftStartSet = false;
 
     // 1. Try to load saved shift closing from backend
     try {
@@ -681,47 +683,30 @@ async function loadDateData(date) {
         const d = await r.json();
         if (d.success && d.closing) {
             const c = d.closing;
-            // Restore inputs from saved data
-            if (c.wolt) document.getElementById('wolt').value = c.wolt;
-            if (c.halyk) document.getElementById('halyk').value = c.halyk;
-            if (c.kaspi) document.getElementById('kaspi').value = c.kaspi;
-            if (c.kaspi_cafe) document.getElementById('kaspi_cafe').value = c.kaspi_cafe;
-            if (c.cash_bills) document.getElementById('cash_bills').value = c.cash_bills;
-            if (c.cash_coins) document.getElementById('cash_coins').value = c.cash_coins;
-            if (c.expenses) document.getElementById('expenses').value = c.expenses;
-            if (c.cash_to_leave) document.getElementById('cash_to_leave').value = c.cash_to_leave;
+            // Restore ONLY user-input fields from saved data
+            // shift_start is NEVER loaded from DB — always from Poster getCashShifts API
+            USER_INPUT_IDS.forEach(id => {
+                if (c[id]) document.getElementById(id).value = c[id];
+            });
             if (c.deposits) document.getElementById('deposits') && (document.getElementById('deposits').value = c.deposits);
 
-            if (!isToday) {
-                // Past date (readonly) — trust saved shift_start
-                if (c.shift_start) { document.getElementById('shift_start').value = c.shift_start; shiftStartSet = true; }
-                setReadonly(true);
-            } else {
-                // Current day — DON'T load shift_start from saved data
-                // It will be re-calculated from prev_shift_left / Poster API
-                setReadonly(false);
-            }
-
-            // Save to localStorage too
+            setReadonly(!isToday);
             saveToLS();
         } else {
-            // No saved data — try localStorage (but DON'T block server prev_shift_left)
+            // No saved data — try localStorage
             const ls = loadFromLS(date);
             if (ls) {
-                INPUT_IDS.forEach(id => {
+                USER_INPUT_IDS.forEach(id => {
                     if (ls[id]) document.getElementById(id).value = ls[id];
                 });
-                // NOTE: don't set shiftStartSet=true from localStorage
-                // because it might have stale auto-filled value from Poster cash drawer
-                // Server's prev_shift_left should override it
             }
             setReadonly(false);
         }
     } catch(e) {
-        // Network error — try localStorage
+        // Network error — try localStorage (user-input fields only)
         const ls = loadFromLS(date);
         if (ls) {
-            INPUT_IDS.forEach(id => {
+            USER_INPUT_IDS.forEach(id => {
                 if (ls[id]) document.getElementById(id).value = ls[id];
             });
         }
@@ -737,17 +722,13 @@ async function loadDateData(date) {
         if (d.success) {
             posterData = d;
 
-            // Auto-fill shift_start from Poster getCashShifts (previous day's "Фактический баланс")
-            // This is the ONLY reliable source — it's the actual shift closing balance from Poster
-            if (!shiftStartSet) {
-                if (d.poster_prev_shift_left != null && d.poster_prev_shift_left !== 0) {
-                    document.getElementById('shift_start').value = String(Math.round(d.poster_prev_shift_left / 100));
-                    shiftStartSet = true;
-                    console.log('[SHIFT] shift_start=' + Math.round(d.poster_prev_shift_left / 100) + ' (Poster getCashShifts)');
-                }
-                // If Poster has no cash shift data, field stays empty for manual input
-                saveToLS();
+            // ALWAYS set shift_start from Poster getCashShifts (previous day's "Фактический баланс")
+            // This is the ONLY source of truth — it's the actual shift closing balance from Poster
+            if (d.poster_prev_shift_left != null && d.poster_prev_shift_left !== 0) {
+                document.getElementById('shift_start').value = String(Math.round(d.poster_prev_shift_left / 100));
+                console.log('[SHIFT] shift_start=' + Math.round(d.poster_prev_shift_left / 100) + ' (Poster getCashShifts)');
             }
+            // If Poster has no cash shift data, field stays empty for manual input
 
             // Display Poster data
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
