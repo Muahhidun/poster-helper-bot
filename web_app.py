@@ -4579,7 +4579,7 @@ def api_cafe_calculate(token):
         cash_coins = float(data.get('cash_coins', 0))
         shift_start = float(data.get('shift_start', 0))
         expenses = float(data.get('expenses', 0))
-        cash_to_leave = float(data.get('cash_to_leave', 15000))
+        cash_to_leave = float(data.get('cash_to_leave', 10000))
 
         poster_trade = float(data.get('poster_trade', 0)) / 100
         poster_bonus = float(data.get('poster_bonus', 0)) / 100

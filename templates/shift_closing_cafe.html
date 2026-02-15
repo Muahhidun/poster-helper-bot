@@ -219,7 +219,7 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
         <div class="sc-card-title">Инкассация</div>
         <div class="sc-field">
             <label>Оставить на смену</label>
-            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="15000" value="15000" oninput="onInput()">
+            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="10000" value="10000" oninput="onInput()">
         </div>
         <div class="sc-info-row" id="shift_left_row" style="display:none">
             <span>Смена оставили</span>
@@ -340,7 +340,7 @@ async function loadDateData(date) {
     readonlyBanner.classList.add('hidden');
 
     INPUT_IDS.forEach(id => { document.getElementById(id).value = ''; });
-    document.getElementById('cash_to_leave').value = '15000';
+    document.getElementById('cash_to_leave').value = '10000';
     const isToday = date === getTodayStr();
 
     // 1. Load saved data
