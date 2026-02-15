@@ -3992,56 +3992,22 @@ def api_shift_closing_poster_data():
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
                       f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
 
-                # 2. Get shift_start from cash drawer account
-                # Strategy: get current balance of cash drawer, subtract today's net cash movements
-                finance_accounts = await client.get_accounts()
-                cash_drawer_balance = 0
-                cash_drawer_id = None
-
-                for acc in finance_accounts:
-                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                    if 'ящик' in acc_name or 'денежн' in acc_name:
-                        cash_drawer_balance = int(float(acc.get('balance', 0)))
-                        cash_drawer_id = str(acc.get('account_id'))
-                        print(f"[SHIFT] Cash drawer: id={cash_drawer_id}, name='{acc.get('account_name') or acc.get('name')}', balance={cash_drawer_balance/100:,.0f}₸", flush=True)
-                        break
-
-                shift_start = 0
-                if cash_drawer_id:
-                    # Get today's finance transactions to calculate net movement on cash drawer
-                    finance_txns = await client.get_transactions(date_param, date_param)
-                    net_movement = 0  # positive = money came in, negative = money went out
-
-                    for txn in finance_txns:
-                        txn_type = str(txn.get('type', ''))
-                        amount = abs(int(txn.get('amount', 0)))
-                        txn_account = str(txn.get('account_id') or txn.get('account_from_id') or txn.get('account_from', ''))
-
-                        if txn_account == cash_drawer_id:
-                            if txn_type == '1':  # income
-                                net_movement += amount
-                            elif txn_type == '0':  # expense
-                                net_movement -= amount
-
-                    # opening_balance = current_balance - net_movement
-                    shift_start = cash_drawer_balance - net_movement
-                    print(f"[SHIFT] Cash drawer: current={cash_drawer_balance/100:,.0f}₸, "
-                          f"net_movement={net_movement/100:,.0f}₸, opening={shift_start/100:,.0f}₸", flush=True)
-
-                # 3. Try to get previous day's shift closing from Poster API (getCashShifts)
+                # 2. Get shift_start from Poster getCashShifts API
+                # This is the "Фактический баланс" (actual closing balance) from the previous day's shift
                 poster_prev_shift_left = None
                 try:
                     target = datetime.strptime(date_param, '%Y%m%d')
                     prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
                     cash_shifts = await client.get_cash_shifts(prev_day, prev_day)
                     if cash_shifts:
-                        # Get the last shift of the previous day
                         last_shift = cash_shifts[-1]
                         amount_end = int(last_shift.get('amount_end', 0))
                         if amount_end > 0:
                             poster_prev_shift_left = amount_end
                             print(f"[SHIFT] Poster getCashShifts prev day ({prev_day}): "
                                   f"amount_end={amount_end/100:,.0f}₸, shifts={len(cash_shifts)}", flush=True)
+                        else:
+                            print(f"[SHIFT] getCashShifts prev day ({prev_day}): amount_end=0", flush=True)
                     else:
                         print(f"[SHIFT] No cash shifts found for {prev_day}", flush=True)
                 except Exception as e:
@@ -4053,12 +4019,11 @@ def api_shift_closing_poster_data():
                     'transactions_count': len(closed_transactions),
                     'account_name': account_name,
                     # For shift closing calculator (all in tiyins):
-                    'trade_total': total_sum,              # Оборот (с бонусами) - для формулы "Торговля - Бонусы"
+                    'trade_total': total_sum,              # Оборот (с бонусами)
                     'bonus': bonus,                        # Бонусы (онлайн-оплата)
                     'poster_card': total_card,             # Безнал картой (payed_card)
                     'poster_cash': total_cash,             # Наличка (payed_cash)
-                    'shift_start': shift_start,            # Остаток на начало (расчёт из cash drawer)
-                    'poster_prev_shift_left': poster_prev_shift_left,  # amount_end из getCashShifts (предыд. день)
+                    'poster_prev_shift_left': poster_prev_shift_left,  # amount_end предыдущего дня
                 }
             finally:
                 await client.close()
@@ -4066,33 +4031,8 @@ def api_shift_closing_poster_data():
         data = loop.run_until_complete(get_poster_data_primary())
         loop.close()
 
-        # Look up previous day's shift_left from saved history
-        try:
-            # Use the actual date that was queried (date_param from the async function)
-            query_date = data.get('date', date or '')
-            target_date = datetime.strptime(query_date, '%Y%m%d').date()
-            prev_date = (target_date - timedelta(days=1)).strftime('%Y-%m-%d')
-            print(f"[SHIFT] Looking up prev_shift_left: query_date={query_date}, target_date={target_date}, prev_date={prev_date}, user_id={g.user_id}", flush=True)
-
-            prev_closing = db.get_shift_closing(g.user_id, prev_date)
-            print(f"[SHIFT] prev_closing found: {prev_closing is not None}", flush=True)
-
-            if prev_closing:
-                sl = prev_closing.get('shift_left')
-                print(f"[SHIFT] prev_closing shift_left={sl} (type={type(sl).__name__})", flush=True)
-                if sl is not None and float(sl) != 0:
-                    # shift_left is stored in tenge, convert to tiyins for consistency with other Poster values
-                    data['prev_shift_left'] = float(sl) * 100
-                    print(f"[SHIFT] ✅ prev_shift_left set to {data['prev_shift_left']} tiyins ({sl}₸)", flush=True)
-                else:
-                    data['prev_shift_left'] = None
-                    print(f"[SHIFT] ⚠️ shift_left is {sl}, setting prev_shift_left=None", flush=True)
-            else:
-                data['prev_shift_left'] = None
-                print(f"[SHIFT] ⚠️ No shift_closing record for {prev_date}", flush=True)
-        except Exception as e:
-            print(f"[SHIFT] Error getting previous shift_left: {e}", flush=True)
-            data['prev_shift_left'] = None
+        # poster_prev_shift_left is already set from getCashShifts in the async function
+        # No need for DB lookup — Poster API is the single source of truth for shift_start
 
         return jsonify(data)
 
