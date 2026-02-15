@@ -3998,20 +3998,29 @@ def api_shift_closing_poster_data():
                 try:
                     target = datetime.strptime(date_param, '%Y%m%d')
                     prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
+                    print(f"[SHIFT] Calling getCashShifts for prev_day={prev_day}", flush=True)
                     cash_shifts = await client.get_cash_shifts(prev_day, prev_day)
+                    print(f"[SHIFT] getCashShifts raw response: {cash_shifts}", flush=True)
                     if cash_shifts:
                         last_shift = cash_shifts[-1]
-                        amount_end = int(last_shift.get('amount_end', 0))
+                        # amount_end might be string or int — handle both
+                        amount_end = int(float(last_shift.get('amount_end', 0)))
+                        print(f"[SHIFT] Last shift: id={last_shift.get('cash_shift_id')}, "
+                              f"amount_start={last_shift.get('amount_start')}, "
+                              f"amount_end={last_shift.get('amount_end')} (parsed: {amount_end}), "
+                              f"date_start={last_shift.get('date_start')}, "
+                              f"date_end={last_shift.get('date_end')}", flush=True)
                         if amount_end > 0:
                             poster_prev_shift_left = amount_end
-                            print(f"[SHIFT] Poster getCashShifts prev day ({prev_day}): "
-                                  f"amount_end={amount_end/100:,.0f}₸, shifts={len(cash_shifts)}", flush=True)
+                            print(f"[SHIFT] ✅ poster_prev_shift_left={amount_end/100:,.0f}₸", flush=True)
                         else:
-                            print(f"[SHIFT] getCashShifts prev day ({prev_day}): amount_end=0", flush=True)
+                            print(f"[SHIFT] ⚠️ amount_end=0 for prev day", flush=True)
                     else:
-                        print(f"[SHIFT] No cash shifts found for {prev_day}", flush=True)
+                        print(f"[SHIFT] ⚠️ No cash shifts found for {prev_day}", flush=True)
                 except Exception as e:
+                    import traceback
                     print(f"[SHIFT] getCashShifts error: {e}", flush=True)
+                    traceback.print_exc()
 
                 return {
                     'success': True,
