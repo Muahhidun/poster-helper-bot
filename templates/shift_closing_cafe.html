@@ -1,12 +1,107 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{{ account_name }} — Закрытие смены</title>
+    <style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;-webkit-text-size-adjust:100%}
 
-{% block title %}Закрытие смены{% endblock %}
+.sc{max-width:480px;margin:0 auto;padding:8px 10px 24px}
+.sc-title{text-align:center;font-size:15px;font-weight:700;color:#1c1c1e;padding:10px 0 4px}
+.sc-title-sub{text-align:center;font-size:12px;color:#8e8e93;margin-bottom:6px}
 
-{% block content %}
+.sc-dates{display:flex;gap:6px;overflow-x:auto;padding:6px 0 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.sc-dates::-webkit-scrollbar{display:none}
+.sc-date-btn{flex-shrink:0;padding:6px 12px;border-radius:8px;border:1.5px solid #d1d1d6;background:#fff;cursor:pointer;text-align:center;min-width:70px;transition:all .15s}
+.sc-date-btn.active{background:#007aff;border-color:#007aff;color:#fff}
+.sc-date-btn.active .sc-date-btn-sub{color:rgba(255,255,255,.7)}
+.sc-date-btn-date{display:block;font-size:13px;font-weight:600}
+.sc-date-btn-sub{display:block;font-size:10px;color:#8e8e93;margin-top:1px}
+.sc-date-btn.has-data::after{content:'';display:block;width:5px;height:5px;border-radius:50%;background:#34c759;margin:2px auto 0}
+.sc-date-btn.active.has-data::after{background:rgba(255,255,255,.7)}
+
+.sc-header{display:flex;justify-content:space-between;align-items:center;padding:6px 0;margin-bottom:4px}
+.sc-date{font-size:17px;font-weight:700;color:#1c1c1e}
+.sc-orders{font-size:13px;color:#8e8e93}
+
+.sc-banner{background:#007aff20;color:#007aff;padding:8px 12px;border-radius:8px;text-align:center;font-size:13px;font-weight:500;margin-bottom:10px}
+.sc-banner.hidden,.hidden{display:none !important}
+.sc-banner.error{background:#ff3b3020;color:#ff3b30}
+.sc-banner-readonly{background:#ff950020;color:#ff9500;display:flex;align-items:center;justify-content:center}
+.sc-save-status{text-align:center;font-size:12px;color:#30d158;padding:4px;margin-bottom:6px;transition:opacity .3s}
+
+.sc-card{background:#fff;border-radius:12px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.sc-card-title{font-size:13px;font-weight:600;color:#8e8e93;text-transform:uppercase;letter-spacing:.3px;margin-bottom:10px}
+.sc-field{margin-bottom:8px}
+.sc-field:last-child{margin-bottom:0}
+.sc-field label{display:block;font-size:13px;color:#6c6c70;margin-bottom:3px;font-weight:500}
+.sc-field input{width:100%;padding:10px 12px;border:1.5px solid #d1d1d6;border-radius:10px;font-size:17px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:#1c1c1e;background:#fff;-webkit-appearance:none;appearance:none;transition:border-color .15s}
+.sc-field input:focus{outline:none;border-color:#007aff;box-shadow:0 0 0 3px rgba(0,122,255,.12)}
+.sc-field input::placeholder{color:#c7c7cc}
+.sc-field input[readonly]{background:#f2f2f7;color:#8e8e93}
+
+.sc-plus label{color:#34c759}
+.sc-plus input{border-color:#a8e6b4;color:#34c759}
+.sc-plus input:focus{border-color:#34c759;box-shadow:0 0 0 3px rgba(52,199,89,.12)}
+
+.sc-row-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.sc-row-pair .sc-field{margin-bottom:0}
+
+.sc-subtotal{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:10px;background:#f2f2f7;margin-bottom:8px;font-size:15px;font-weight:600;color:#3a3a3c}
+.sc-subtotal.accent{background:#007aff12}
+.sc-subtotal.accent .sc-subtotal-num{color:#007aff}
+.sc-subtotal.inside{margin:8px -4px -4px;border-radius:8px}
+.sc-subtotal-num{font-variant-numeric:tabular-nums;font-size:17px;font-weight:700}
+
+.sc-card-poster{background:#f9f9fb}
+.sc-info-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:14px;color:#6c6c70}
+.sc-info-val{font-variant-numeric:tabular-nums;font-weight:600;color:#1c1c1e;font-size:15px}
+.sc-info-val.sc-red{color:#ff3b30}
+.sc-info-sep{height:1px;background:#e5e5ea;margin:6px 0}
+.sc-diff{border-radius:6px;padding:6px 8px}
+.sc-diff.positive{background:#34c75920}
+.sc-diff.positive .sc-info-val{color:#30d158}
+.sc-diff.negative{background:#ff3b3015}
+.sc-diff.negative .sc-info-val{color:#ff3b30}
+
+.sc-day-result{text-align:center;padding:20px 12px;border-radius:14px;margin-bottom:8px;background:#f2f2f7;transition:background .2s}
+.sc-day-result.positive{background:#34c75920}
+.sc-day-result.negative{background:#ff3b3018}
+.sc-day-result.zero{background:#007aff15}
+.sc-day-label{font-size:11px;color:#8e8e93;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px}
+.sc-day-value{font-size:38px;font-weight:700;font-variant-numeric:tabular-nums;color:#3a3a3c;line-height:1.1}
+.sc-day-result.positive .sc-day-value{color:#30d158}
+.sc-day-result.negative .sc-day-value{color:#ff3b30}
+.sc-day-result.zero .sc-day-value{color:#007aff}
+.sc-day-status{font-size:14px;margin-top:4px;color:#8e8e93}
+.sc-day-result.positive .sc-day-status{color:#30d158}
+.sc-day-result.negative .sc-day-status{color:#ff3b30}
+.sc-day-result.zero .sc-day-status{color:#007aff}
+
+.sc-collection{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-radius:10px;background:#1c1c1e;margin-top:10px;font-size:16px;font-weight:700;color:#fff}
+.sc-collection span:last-child{font-size:20px;font-variant-numeric:tabular-nums}
+.sc-hint{text-align:center;font-size:11px;color:#aeaeb2;margin-top:2px}
+
+.sc-actions{display:flex;gap:8px;margin-bottom:10px}
+.sc-btn{flex:1;padding:10px 0;border-radius:10px;font-size:14px;font-weight:600;border:none;cursor:pointer;background:#007aff;color:#fff;-webkit-appearance:none;transition:opacity .15s}
+.sc-btn:active{opacity:.7}
+.sc-btn-sec{background:#e5e5ea;color:#1c1c1e}
+.sc-btn-sm{padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#e5e5ea;color:#1c1c1e}
+.sc-report{background:#1c1c1e;color:#e5e5ea;padding:12px;border-radius:8px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;max-height:400px;overflow-y:auto;margin:0;font-family:'SF Mono','Menlo',monospace}
+.loading{opacity:.5;pointer-events:none}
+@media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}.sc-day-value{font-size:32px}.sc-collection span:last-child{font-size:18px}}
+    </style>
+</head>
+<body>
 <div class="sc">
+    <div class="sc-title">{{ account_name }}</div>
+    <div class="sc-title-sub">Закрытие смены</div>
+
     <!-- Date selector -->
     <div class="sc-dates" id="dates-bar">
-        <button class="sc-date-btn active" id="btn-today" onclick="selectDate(getTodayStr())">
+        <button class="sc-date-btn active" id="btn-today">
             <span class="sc-date-btn-date" id="btn-today-label"></span>
             <span class="sc-date-btn-sub">сегодня</span>
         </button>
@@ -17,12 +112,10 @@
         <span id="orders_info" class="sc-orders"></span>
     </div>
 
-    <!-- Readonly banner -->
     <div class="sc-banner sc-banner-readonly hidden" id="readonly-banner">
         Просмотр сохранённых данных
         <button type="button" class="sc-btn-sm" style="margin-left:8px" onclick="enableEdit()">Редактировать</button>
     </div>
-
     <div class="sc-banner" id="loading-banner">Загрузка...</div>
 
     <!-- Безнал -->
@@ -34,17 +127,13 @@
                 <input type="text" id="wolt" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
             <div class="sc-field">
-                <label>Halyk</label>
-                <input type="text" id="halyk" inputmode="decimal" placeholder="0" oninput="onInput()">
+                <label>Kaspi</label>
+                <input type="text" id="kaspi" inputmode="decimal" placeholder="0" oninput="onInput()">
             </div>
         </div>
-        <div class="sc-field">
-            <label>Kaspi</label>
-            <input type="text" id="kaspi" inputmode="decimal" placeholder="0" oninput="onInput()">
-        </div>
-        <div class="sc-field sc-minus">
-            <label>- Kaspi Cafe</label>
-            <input type="text" id="kaspi_cafe" inputmode="decimal" placeholder="0" oninput="onInput()">
+        <div class="sc-field sc-plus">
+            <label>+ Kaspi Pizzburg (курьеры)</label>
+            <input type="text" id="kaspi_pizzburg" inputmode="decimal" placeholder="0" oninput="onInput()">
         </div>
     </div>
 
@@ -63,13 +152,12 @@
         </div>
     </div>
 
-    <!-- Промежуточный итог -->
     <div class="sc-subtotal" id="fact_total_row" style="display:none">
         <span>Фактический</span>
         <span id="fact_total_value" class="sc-subtotal-num">0</span>
     </div>
 
-    <!-- Смена / Расходы -->
+    <!-- Корректировки -->
     <div class="sc-card">
         <div class="sc-card-title">Корректировки</div>
         <div class="sc-row-pair">
@@ -84,7 +172,6 @@
         </div>
     </div>
 
-    <!-- Итого фактический -->
     <div class="sc-subtotal accent" id="fact_adjusted_row" style="display:none">
         <span>Итого фактич.</span>
         <span id="fact_adjusted_value" class="sc-subtotal-num">0</span>
@@ -145,16 +232,13 @@
         </div>
     </div>
 
-    <!-- Действия -->
     <div class="sc-actions">
         <button type="button" class="sc-btn" onclick="loadPosterData()">Обновить Poster</button>
         <button type="button" class="sc-btn sc-btn-sec" id="report-btn" onclick="loadShiftReport()">Отчёт смены</button>
     </div>
 
-    <!-- Saving indicator -->
     <div class="sc-save-status hidden" id="save-status">Сохранено</div>
 
-    <!-- Отчёт -->
     <div id="report-container" style="display:none" class="sc-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div class="sc-card-title" style="margin:0">Отчёт закрытия смены</div>
@@ -164,394 +248,20 @@
     </div>
 </div>
 
-<style>
-/* ===== Mobile-first shift closing ===== */
-*{box-sizing:border-box}
-
-.sc {
-    max-width: 480px;
-    margin: 0 auto;
-    padding: 8px 10px 24px;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
-    -webkit-text-size-adjust: 100%;
-}
-
-/* Date selector bar */
-.sc-dates {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    padding: 6px 0 10px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-}
-.sc-dates::-webkit-scrollbar { display: none; }
-.sc-date-btn {
-    flex-shrink: 0;
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1.5px solid #d1d1d6;
-    background: #fff;
-    cursor: pointer;
-    text-align: center;
-    min-width: 70px;
-    transition: all 0.15s;
-}
-.sc-date-btn.active {
-    background: #007aff;
-    border-color: #007aff;
-    color: #fff;
-}
-.sc-date-btn.active .sc-date-btn-sub { color: rgba(255,255,255,0.7); }
-.sc-date-btn-date {
-    display: block;
-    font-size: 13px;
-    font-weight: 600;
-}
-.sc-date-btn-sub {
-    display: block;
-    font-size: 10px;
-    color: #8e8e93;
-    margin-top: 1px;
-}
-.sc-date-btn.has-data::after {
-    content: '';
-    display: block;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: #34c759;
-    margin: 2px auto 0;
-}
-.sc-date-btn.active.has-data::after {
-    background: rgba(255,255,255,0.7);
-}
-
-/* Header */
-.sc-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 0;
-    margin-bottom: 4px;
-}
-.sc-date {
-    font-size: 17px;
-    font-weight: 700;
-    color: #1c1c1e;
-}
-.sc-orders {
-    font-size: 13px;
-    color: #8e8e93;
-}
-
-/* Banner */
-.sc-banner {
-    background: #007aff20;
-    color: #007aff;
-    padding: 8px 12px;
-    border-radius: 8px;
-    text-align: center;
-    font-size: 13px;
-    font-weight: 500;
-    margin-bottom: 10px;
-}
-.sc-banner.hidden, .hidden { display: none !important; }
-.sc-banner.error { background: #ff3b3020; color: #ff3b30; }
-.sc-banner-readonly {
-    background: #ff950020;
-    color: #ff9500;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-/* Save status */
-.sc-save-status {
-    text-align: center;
-    font-size: 12px;
-    color: #30d158;
-    padding: 4px;
-    margin-bottom: 6px;
-    transition: opacity 0.3s;
-}
-
-/* Card */
-.sc-card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 8px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-.sc-card-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #8e8e93;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-    margin-bottom: 10px;
-}
-
-/* Field */
-.sc-field {
-    margin-bottom: 8px;
-}
-.sc-field:last-child { margin-bottom: 0; }
-.sc-field label {
-    display: block;
-    font-size: 13px;
-    color: #6c6c70;
-    margin-bottom: 3px;
-    font-weight: 500;
-}
-.sc-field input {
-    width: 100%;
-    padding: 10px 12px;
-    border: 1.5px solid #d1d1d6;
-    border-radius: 10px;
-    font-size: 17px;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
-    color: #1c1c1e;
-    background: #fff;
-    -webkit-appearance: none;
-    appearance: none;
-    transition: border-color 0.15s;
-}
-.sc-field input:focus {
-    outline: none;
-    border-color: #007aff;
-    box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
-}
-.sc-field input::placeholder { color: #c7c7cc; }
-.sc-field input[readonly] {
-    background: #f2f2f7;
-    color: #8e8e93;
-}
-
-/* Minus field */
-.sc-minus label { color: #ff3b30; }
-.sc-minus input {
-    border-color: #ffb4ab;
-    color: #ff3b30;
-}
-.sc-minus input:focus {
-    border-color: #ff3b30;
-    box-shadow: 0 0 0 3px rgba(255,59,48,0.12);
-}
-
-/* Two-col pair */
-.sc-row-pair {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-.sc-row-pair .sc-field { margin-bottom: 0; }
-
-/* Subtotal */
-.sc-subtotal {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: #f2f2f7;
-    margin-bottom: 8px;
-    font-size: 15px;
-    font-weight: 600;
-    color: #3a3a3c;
-}
-.sc-subtotal.accent {
-    background: #007aff12;
-}
-.sc-subtotal.accent .sc-subtotal-num {
-    color: #007aff;
-}
-.sc-subtotal.inside {
-    margin: 8px -4px -4px;
-    border-radius: 8px;
-}
-.sc-subtotal-num {
-    font-variant-numeric: tabular-nums;
-    font-size: 17px;
-    font-weight: 700;
-}
-
-/* Poster info rows */
-.sc-card-poster {
-    background: #f9f9fb;
-}
-.sc-info-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 0;
-    font-size: 14px;
-    color: #6c6c70;
-}
-.sc-info-val {
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
-    color: #1c1c1e;
-    font-size: 15px;
-}
-.sc-info-val.sc-red { color: #ff3b30; }
-.sc-info-sep {
-    height: 1px;
-    background: #e5e5ea;
-    margin: 6px 0;
-}
-
-/* Diff row */
-.sc-diff { border-radius: 6px; padding: 6px 8px; }
-.sc-diff.positive { background: #34c75920; }
-.sc-diff.positive .sc-info-val { color: #30d158; }
-.sc-diff.negative { background: #ff3b3015; }
-.sc-diff.negative .sc-info-val { color: #ff3b30; }
-
-/* Day result */
-.sc-day-result {
-    text-align: center;
-    padding: 20px 12px;
-    border-radius: 14px;
-    margin-bottom: 8px;
-    background: #f2f2f7;
-    transition: background 0.2s;
-}
-.sc-day-result.positive { background: #34c75920; }
-.sc-day-result.negative { background: #ff3b3018; }
-.sc-day-result.zero { background: #007aff15; }
-.sc-day-label {
-    font-size: 11px;
-    color: #8e8e93;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin-bottom: 4px;
-}
-.sc-day-value {
-    font-size: 38px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: #3a3a3c;
-    line-height: 1.1;
-}
-.sc-day-result.positive .sc-day-value { color: #30d158; }
-.sc-day-result.negative .sc-day-value { color: #ff3b30; }
-.sc-day-result.zero .sc-day-value { color: #007aff; }
-.sc-day-status {
-    font-size: 14px;
-    margin-top: 4px;
-    color: #8e8e93;
-}
-.sc-day-result.positive .sc-day-status { color: #30d158; }
-.sc-day-result.negative .sc-day-status { color: #ff3b30; }
-.sc-day-result.zero .sc-day-status { color: #007aff; }
-
-/* Collection */
-.sc-collection {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 14px;
-    border-radius: 10px;
-    background: #1c1c1e;
-    margin-top: 10px;
-    font-size: 16px;
-    font-weight: 700;
-    color: #fff;
-}
-.sc-collection span:last-child {
-    font-size: 20px;
-    font-variant-numeric: tabular-nums;
-}
-
-.sc-hint {
-    text-align: center;
-    font-size: 11px;
-    color: #aeaeb2;
-    margin-top: 2px;
-}
-
-/* Buttons */
-.sc-actions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 10px;
-}
-.sc-btn {
-    flex: 1;
-    padding: 10px 0;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 600;
-    border: none;
-    cursor: pointer;
-    background: #007aff;
-    color: #fff;
-    -webkit-appearance: none;
-    transition: opacity 0.15s;
-}
-.sc-btn:active { opacity: 0.7; }
-.sc-btn-sec {
-    background: #e5e5ea;
-    color: #1c1c1e;
-}
-.sc-btn-sm {
-    padding: 6px 12px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    border: none;
-    cursor: pointer;
-    background: #e5e5ea;
-    color: #1c1c1e;
-}
-
-/* Report */
-.sc-report {
-    background: #1c1c1e;
-    color: #e5e5ea;
-    padding: 12px;
-    border-radius: 8px;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    max-height: 400px;
-    overflow-y: auto;
-    margin: 0;
-    font-family: 'SF Mono', 'Menlo', monospace;
-}
-
-/* Loading */
-.loading { opacity: 0.5; pointer-events: none; }
-
-/* Tiny screens (iPhone SE) */
-@media (max-width: 374px) {
-    .sc { padding: 6px 8px 20px; }
-    .sc-field input { font-size: 16px; padding: 9px 10px; }
-    .sc-day-value { font-size: 32px; }
-    .sc-collection span:last-child { font-size: 18px; }
-}
-</style>
-
 <script>
+const TOKEN = '{{ token }}';
+const API_BASE = '/api/cafe/' + TOKEN;
+
 let posterData = null;
 let debounceTimer = null;
 let saveTimer = null;
 let lastCalc = null;
 let currentDate = '';
 let isReadonly = false;
-const INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
-// User-input fields only (excludes shift_start — always from Poster API)
-const USER_INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','expenses','cash_to_leave'];
+const INPUT_IDS = ['wolt','kaspi','kaspi_pizzburg','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
+const USER_INPUT_IDS = ['wolt','kaspi','kaspi_pizzburg','cash_bills','cash_coins','expenses','cash_to_leave'];
 
-function fmt(n) {
-    return Math.round(n).toLocaleString('ru-RU');
-}
+function fmt(n) { return Math.round(n).toLocaleString('ru-RU'); }
 
 function pi(id) {
     const el = document.getElementById(id);
@@ -559,50 +269,21 @@ function pi(id) {
     return parseFloat(el.value.replace(/\s/g, '').replace(/,/g, '.')) || 0;
 }
 
-// Get today in KZ timezone (UTC+5) as YYYY-MM-DD
 function getTodayStr() {
-    // "Business day" logic: before 6:00 AM KZ time, the business day is still yesterday
     const now = new Date();
     const kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
-    const kzHour = kz.getUTCHours();
-    if (kzHour < 6) {
-        // Before 6 AM — business day is yesterday
-        kz.setUTCDate(kz.getUTCDate() - 1);
-    }
+    if (kz.getUTCHours() < 6) kz.setUTCDate(kz.getUTCDate() - 1);
     return kz.toISOString().slice(0, 10);
 }
 
-// Get previous date string (YYYY-MM-DD) for a given date
-function getPrevDateStr(s) {
-    const p = s.split('-');
-    const d = new Date(parseInt(p[0]), parseInt(p[1]) - 1, parseInt(p[2]));
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
-}
+function fmtDateShort(s) { const p = s.split('-'); return p[2] + '.' + p[1]; }
+function fmtDateFull(s) { const p = s.split('-'); return p[2] + '.' + p[1] + '.' + p[0]; }
+function toPosterDate(s) { return s.replace(/-/g, ''); }
 
-// Format YYYY-MM-DD to DD.MM
-function fmtDateShort(s) {
-    const p = s.split('-');
-    return p[2] + '.' + p[1];
-}
-
-// Format YYYY-MM-DD to DD.MM.YYYY
-function fmtDateFull(s) {
-    const p = s.split('-');
-    return p[2] + '.' + p[1] + '.' + p[0];
-}
-
-// Format YYYY-MM-DD to YYYYMMDD for Poster API
-function toPosterDate(s) {
-    return s.replace(/-/g, '');
-}
-
-// ========= localStorage persistence =========
-function lsKey(date) { return 'sc_' + date; }
+function lsKey(date) { return 'cafe_sc_' + date; }
 
 function saveToLS() {
     const data = {};
-    // Only save user-input fields, NOT shift_start (it comes from Poster API)
     USER_INPUT_IDS.forEach(id => { data[id] = document.getElementById(id).value; });
     try { localStorage.setItem(lsKey(currentDate), JSON.stringify(data)); } catch(e) {}
 }
@@ -615,7 +296,6 @@ function loadFromLS(date) {
     return null;
 }
 
-// ========= Input handler =========
 function onInput() {
     if (isReadonly) return;
     saveToLS();
@@ -623,28 +303,17 @@ function onInput() {
     debounceTimer = setTimeout(calculate, 250);
 }
 
-// ========= Date selector =========
 function selectDate(date) {
     if (date === currentDate) return;
     currentDate = date;
-
-    // Update header
     document.getElementById('current-date').textContent = fmtDateFull(date);
-
-    // Highlight active button
     document.querySelectorAll('.sc-date-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.date === date);
     });
-
-    // Reset display
     posterData = null;
     lastCalc = null;
     resetDisplay();
-
-    // Hide report
     document.getElementById('report-container').style.display = 'none';
-
-    // Load data for this date
     loadDateData(date);
 }
 
@@ -666,34 +335,26 @@ function resetDisplay() {
 async function loadDateData(date) {
     const banner = document.getElementById('loading-banner');
     const readonlyBanner = document.getElementById('readonly-banner');
-
     banner.textContent = 'Загрузка...';
     banner.classList.remove('hidden', 'error');
     readonlyBanner.classList.add('hidden');
 
-    // Clear all inputs
     INPUT_IDS.forEach(id => { document.getElementById(id).value = ''; });
     document.getElementById('cash_to_leave').value = '15000';
-
     const isToday = date === getTodayStr();
 
-    // 1. Try to load saved shift closing from backend
+    // 1. Load saved data
     try {
-        const r = await fetch('/api/shift-closing/history?date=' + date);
+        const r = await fetch(API_BASE + '/history?date=' + date);
         const d = await r.json();
         if (d.success && d.closing) {
             const c = d.closing;
-            // Restore ONLY user-input fields from saved data
-            // shift_start is NEVER loaded from DB — always from Poster getCashShifts API
             USER_INPUT_IDS.forEach(id => {
                 if (c[id]) document.getElementById(id).value = c[id];
             });
-            if (c.deposits) document.getElementById('deposits') && (document.getElementById('deposits').value = c.deposits);
-
             setReadonly(!isToday);
             saveToLS();
         } else {
-            // No saved data — try localStorage
             const ls = loadFromLS(date);
             if (ls) {
                 USER_INPUT_IDS.forEach(id => {
@@ -703,7 +364,6 @@ async function loadDateData(date) {
             setReadonly(false);
         }
     } catch(e) {
-        // Network error — try localStorage (user-input fields only)
         const ls = loadFromLS(date);
         if (ls) {
             USER_INPUT_IDS.forEach(id => {
@@ -716,27 +376,16 @@ async function loadDateData(date) {
     // 2. Load Poster data
     try {
         document.querySelector('.sc').classList.add('loading');
-        const r = await fetch('/api/shift-closing/poster-data?date=' + toPosterDate(date));
+        const r = await fetch(API_BASE + '/poster-data?date=' + toPosterDate(date));
         const d = await r.json();
 
         if (d.success) {
             posterData = d;
 
-            // ALWAYS set shift_start from Poster getCashShifts (previous day's "Фактический баланс")
-            // This is the ONLY source of truth — it's the actual shift closing balance from Poster
             if (d.poster_prev_shift_left != null && d.poster_prev_shift_left !== 0) {
                 document.getElementById('shift_start').value = String(Math.round(d.poster_prev_shift_left / 100));
-                console.log('[SHIFT] shift_start=' + Math.round(d.poster_prev_shift_left / 100) + ' (Poster getCashShifts)');
-            }
-            // If Poster has no cash shift data, field stays empty for manual input
-
-            // Auto-fill kaspi_cafe from Cafe's saved kaspi_pizzburg (if available and field is empty)
-            if (d.cafe_kaspi_pizzburg && !pi('kaspi_cafe')) {
-                document.getElementById('kaspi_cafe').value = String(Math.round(d.cafe_kaspi_pizzburg));
-                console.log('[SHIFT] kaspi_cafe auto-filled from Cafe: ' + Math.round(d.cafe_kaspi_pizzburg));
             }
 
-            // Display Poster data
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
             document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
@@ -769,30 +418,24 @@ function setReadonly(val) {
     }
 }
 
-function enableEdit() {
-    setReadonly(false);
-}
+function enableEdit() { setReadonly(false); }
 
-// ========= Poster data reload =========
 async function loadPosterData() {
     const banner = document.getElementById('loading-banner');
     banner.textContent = 'Загрузка Poster...';
     banner.classList.remove('hidden', 'error');
-
     try {
         document.querySelector('.sc').classList.add('loading');
         const isToday = currentDate === getTodayStr();
         const dateParam = isToday ? '' : '?date=' + toPosterDate(currentDate);
-        const r = await fetch('/api/shift-closing/poster-data' + dateParam);
+        const r = await fetch(API_BASE + '/poster-data' + dateParam);
         const d = await r.json();
-
         if (d.success) {
             posterData = d;
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
             document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
             document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
-
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
             calculate();
@@ -808,14 +451,12 @@ async function loadPosterData() {
     }
 }
 
-// ========= Calculate =========
 async function calculate() {
     if (!posterData) return;
-
     try {
         const body = {
-            wolt: pi('wolt'), halyk: pi('halyk'),
-            kaspi: pi('kaspi'), kaspi_cafe: pi('kaspi_cafe'),
+            wolt: pi('wolt'), kaspi: pi('kaspi'),
+            kaspi_pizzburg: pi('kaspi_pizzburg'),
             cash_bills: pi('cash_bills'), cash_coins: pi('cash_coins'),
             shift_start: pi('shift_start'),
             expenses: pi('expenses'), cash_to_leave: pi('cash_to_leave'),
@@ -823,8 +464,7 @@ async function calculate() {
             poster_bonus: posterData.bonus,
             poster_card: posterData.poster_card,
         };
-
-        const r = await fetch('/api/shift-closing/calculate', {
+        const r = await fetch(API_BASE + '/calculate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -839,99 +479,66 @@ async function calculate() {
 }
 
 function showCalc(c) {
-    // Factual
     document.getElementById('fact_total_row').style.display = 'flex';
     document.getElementById('fact_total_value').textContent = fmt(c.fact_total);
-
     document.getElementById('fact_adjusted_row').style.display = 'flex';
     document.getElementById('fact_adjusted_value').textContent = fmt(c.fact_adjusted);
-
-    // Poster cashless
     document.getElementById('poster_cashless').textContent = fmt(c.fact_cashless);
 
-    // Cashless diff
     const cdr = document.getElementById('cashless_diff_row');
     if (Math.abs(c.cashless_diff) >= 1) {
         cdr.style.display = 'flex';
         cdr.classList.remove('positive', 'negative');
         cdr.classList.add(c.cashless_diff > 0 ? 'positive' : 'negative');
-        document.getElementById('cashless_diff_value').textContent =
-            (c.cashless_diff > 0 ? '+' : '') + fmt(c.cashless_diff);
-    } else {
-        cdr.style.display = 'none';
-    }
+        document.getElementById('cashless_diff_value').textContent = (c.cashless_diff > 0 ? '+' : '') + fmt(c.cashless_diff);
+    } else { cdr.style.display = 'none'; }
 
-    // Poster total
     document.getElementById('poster_total_row').style.display = 'flex';
     document.getElementById('poster_total_value').textContent = fmt(c.poster_total);
 
-    // Day result
     const dr = c.day_result;
     const bl = document.getElementById('day_result_block');
     const vl = document.getElementById('day_result_value');
     const st = document.getElementById('day_result_status');
     bl.classList.remove('positive', 'negative', 'zero');
+    if (dr > 0) { bl.classList.add('positive'); vl.textContent = '+' + fmt(dr); st.textContent = 'излишек'; }
+    else if (dr < 0) { bl.classList.add('negative'); vl.textContent = fmt(dr); st.textContent = 'недостача'; }
+    else { bl.classList.add('zero'); vl.textContent = '0'; st.textContent = 'идеально'; }
 
-    if (dr > 0) {
-        bl.classList.add('positive');
-        vl.textContent = '+' + fmt(dr);
-        st.textContent = 'излишек';
-    } else if (dr < 0) {
-        bl.classList.add('negative');
-        vl.textContent = fmt(dr);
-        st.textContent = 'недостача';
-    } else {
-        bl.classList.add('zero');
-        vl.textContent = '0';
-        st.textContent = 'идеально';
-    }
-
-    // Shift left
     document.getElementById('shift_left_row').style.display = 'flex';
     document.getElementById('shift_left_value').textContent = fmt(c.shift_left);
-
     const h = document.getElementById('shift_left_hint');
     h.style.display = 'block';
     h.textContent = fmt(pi('cash_to_leave')) + ' + ' + fmt(pi('cash_coins')) + ' мелочь';
 
-    // Collection
     document.getElementById('collection_block').style.display = 'flex';
     document.getElementById('collection_value').textContent = fmt(c.collection);
 }
 
-// ========= Auto-save to backend =========
 function scheduleSave(calc) {
     if (isReadonly) return;
-
-    // Only save if there's meaningful input
-    const hasInput = pi('cash_bills') > 0 || pi('wolt') > 0 || pi('kaspi') > 0 || pi('halyk') > 0;
+    const hasInput = pi('cash_bills') > 0 || pi('wolt') > 0 || pi('kaspi') > 0 || pi('kaspi_pizzburg') > 0;
     if (!hasInput) return;
-
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => doSave(calc), 1500);
 }
 
 async function doSave(calc) {
-    // Save only user-input fields + calculated results
-    // API-derived fields (shift_start, poster_*) are NOT saved — always fetched from Poster API
     const data = {
         date: currentDate,
-        // User input fields:
-        wolt: pi('wolt'), halyk: pi('halyk'),
-        kaspi: pi('kaspi'), kaspi_cafe: pi('kaspi_cafe'),
+        wolt: pi('wolt'), kaspi: pi('kaspi'),
+        kaspi_pizzburg: pi('kaspi_pizzburg'),
         cash_bills: pi('cash_bills'), cash_coins: pi('cash_coins'),
         expenses: pi('expenses'), cash_to_leave: pi('cash_to_leave'),
         deposits: 0,
-        // Calculated results (for reports/history):
         fact_cashless: calc.fact_cashless, fact_total: calc.fact_total,
         fact_adjusted: calc.fact_adjusted, poster_total: calc.poster_total,
         day_result: calc.day_result, shift_left: calc.shift_left,
         collection: calc.collection, cashless_diff: calc.cashless_diff,
         transactions_count: posterData ? posterData.transactions_count : 0,
     };
-
     try {
-        const r = await fetch('/api/shift-closing/save', {
+        const r = await fetch(API_BASE + '/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data),
@@ -941,50 +548,37 @@ async function doSave(calc) {
             const ss = document.getElementById('save-status');
             ss.classList.remove('hidden');
             setTimeout(() => ss.classList.add('hidden'), 2000);
-
-            // Refresh history dates
             loadHistoryDates();
         }
     } catch(e) {}
 }
 
-// ========= History dates =========
 async function loadHistoryDates() {
     try {
-        const r = await fetch('/api/shift-closing/dates');
+        const r = await fetch(API_BASE + '/dates');
         const d = await r.json();
-        if (d.success && d.dates) {
-            renderDateButtons(d.dates);
-        }
+        if (d.success && d.dates) renderDateButtons(d.dates);
     } catch(e) {}
 }
 
 function renderDateButtons(dates) {
     const bar = document.getElementById('dates-bar');
     const today = getTodayStr();
-
-    // Always show today + last 7 days
     const allDates = [today];
     for (let i = 1; i <= 7; i++) {
         const d = new Date();
         d.setDate(d.getDate() - i);
-        // Format as YYYY-MM-DD in KZ timezone
         const kz = new Date(d.getTime() + (5 * 60 - d.getTimezoneOffset()) * 60000);
         const ds = kz.toISOString().slice(0, 10);
         if (allDates.indexOf(ds) === -1) allDates.push(ds);
     }
-    // Also add any saved dates not already included
     dates.forEach(d => { if (allDates.indexOf(d) === -1) allDates.push(d); });
-    // Sort: today first, rest descending
     allDates.sort((a, b) => { if (a === today) return -1; if (b === today) return 1; return b.localeCompare(a); });
 
-    // Compute yesterday's date string
     const yd = new Date();
     yd.setDate(yd.getDate() - 1);
     const ykz = new Date(yd.getTime() + (5 * 60 - yd.getTimezoneOffset()) * 60000);
     const yesterday = ykz.toISOString().slice(0, 10);
-
-    // Track which dates have saved data
     const savedSet = new Set(dates);
 
     bar.innerHTML = '';
@@ -993,13 +587,10 @@ function renderDateButtons(dates) {
         btn.className = 'sc-date-btn' + (d === currentDate ? ' active' : '');
         btn.dataset.date = d;
         btn.onclick = () => selectDate(d);
-
         const dateSpan = document.createElement('span');
         dateSpan.className = 'sc-date-btn-date';
         dateSpan.textContent = fmtDateShort(d);
-
         btn.appendChild(dateSpan);
-
         if (d === today) {
             const sub = document.createElement('span');
             sub.className = 'sc-date-btn-sub';
@@ -1011,30 +602,22 @@ function renderDateButtons(dates) {
             sub.textContent = 'вчера';
             btn.appendChild(sub);
         }
-
-        // Show a dot indicator if this date has saved data
-        if (savedSet.has(d)) {
-            btn.classList.add('has-data');
-        }
-
+        if (savedSet.has(d)) btn.classList.add('has-data');
         bar.appendChild(btn);
     });
 }
 
-// ========= Shift closing report =========
 function loadShiftReport() {
-    // Generate report from current form data (no need to fetch from server)
     const fmtR = n => Math.round(n).toLocaleString('ru-RU').replace(/\u00A0/g, ' ');
     const dateDisplay = fmtDateFull(currentDate);
-
-    const wolt = pi('wolt'), halyk = pi('halyk');
-    const kaspi = pi('kaspi'), kaspi_cafe = pi('kaspi_cafe');
+    const wolt = pi('wolt'), kaspi = pi('kaspi');
+    const kaspi_pizzburg = pi('kaspi_pizzburg');
     const cash_bills = pi('cash_bills'), cash_coins = pi('cash_coins');
     const shift_start = pi('shift_start');
     const expenses = pi('expenses'), cash_to_leave = pi('cash_to_leave');
 
     const calc = lastCalc || {};
-    const fact_cashless = calc.fact_cashless || (wolt + halyk + (kaspi - kaspi_cafe));
+    const fact_cashless = calc.fact_cashless || (wolt + kaspi + kaspi_pizzburg);
     const fact_total = calc.fact_total || (fact_cashless + cash_bills + cash_coins);
     const fact_adjusted = calc.fact_adjusted || 0;
     const poster_trade = calc.poster_trade || (posterData ? posterData.trade_total / 100 : 0);
@@ -1050,18 +633,15 @@ function loadShiftReport() {
     const daySign = day_result > 0 ? '+' : '';
 
     let lines = [
-        'Закрытие смены ' + dateDisplay,
+        '{{ account_name }} — Закрытие смены ' + dateDisplay,
         '',
         'Безнал терминалы:',
         '  Wolt: ' + fmtR(wolt),
-        '  Halyk: ' + fmtR(halyk),
         '  Kaspi: ' + fmtR(kaspi),
     ];
-
-    if (kaspi_cafe > 0) {
-        lines.push('  Kaspi Cafe: -' + fmtR(kaspi_cafe));
+    if (kaspi_pizzburg > 0) {
+        lines.push('  Kaspi Pizzburg (курьеры): +' + fmtR(kaspi_pizzburg));
     }
-
     lines = lines.concat([
         'Итого безнал: ' + fmtR(fact_cashless),
         '',
@@ -1072,11 +652,7 @@ function loadShiftReport() {
         'Фактический: ' + fmtR(fact_total),
         'Смена начало: ' + fmtR(shift_start),
     ]);
-
-    if (expenses > 0) {
-        lines.push('Расходы: ' + fmtR(expenses));
-    }
-
+    if (expenses > 0) lines.push('Расходы: ' + fmtR(expenses));
     lines = lines.concat([
         'Итого фактич: ' + fmtR(fact_adjusted),
         '',
@@ -1089,14 +665,11 @@ function loadShiftReport() {
         'Смена оставили: ' + fmtR(shift_left),
         'Инкассация: ' + fmtR(collection),
     ]);
-
     if (Math.abs(cashless_diff) >= 1) {
-        const diffSign = cashless_diff > 0 ? '+' : '';
-        lines.push('Разница безнал: ' + diffSign + fmtR(cashless_diff));
+        lines.push('Разница безнал: ' + (cashless_diff > 0 ? '+' : '') + fmtR(cashless_diff));
     }
 
-    const report = lines.join('\n');
-    document.getElementById('report-text').textContent = report;
+    document.getElementById('report-text').textContent = lines.join('\n');
     document.getElementById('report-container').style.display = 'block';
 }
 
@@ -1116,14 +689,12 @@ function copyReport() {
     });
 }
 
-// ========= Init =========
 document.addEventListener('DOMContentLoaded', function() {
     currentDate = getTodayStr();
     document.getElementById('current-date').textContent = fmtDateFull(currentDate);
-
-    // Render date buttons (always shows last 7 days) then load today's data
     loadHistoryDates();
     loadDateData(currentDate);
 });
 </script>
-{% endblock %}
+</body>
+</html>

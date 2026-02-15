@@ -4041,8 +4041,24 @@ def api_shift_closing_poster_data():
         data = loop.run_until_complete(get_poster_data_primary())
         loop.close()
 
-        # poster_prev_shift_left is already set from getCashShifts in the async function
-        # No need for DB lookup — Poster API is the single source of truth for shift_start
+        # Look up Cafe's kaspi_pizzburg for auto-fill into kaspi_cafe
+        try:
+            from datetime import datetime
+            query_date = data.get('date', date or '')
+            target_date = datetime.strptime(query_date, '%Y%m%d').date()
+            date_str = target_date.strftime('%Y-%m-%d')
+
+            # Find Cafe account
+            cafe_account = next((a for a in accounts if not a.get('is_primary')), None)
+            if cafe_account:
+                cafe_closing = db.get_shift_closing(
+                    g.user_id, date_str,
+                    poster_account_id=cafe_account['id']
+                )
+                if cafe_closing and cafe_closing.get('kaspi_pizzburg'):
+                    data['cafe_kaspi_pizzburg'] = float(cafe_closing['kaspi_pizzburg'])
+        except Exception as e:
+            print(f"[SHIFT] Error looking up cafe kaspi_pizzburg: {e}", flush=True)
 
         return jsonify(data)
 
@@ -4428,6 +4444,334 @@ def serve_mini_app(path=''):
         return send_from_directory(mini_app_dir, path)
     else:
         return send_from_directory(mini_app_dir, 'index.html')
+
+
+# ========================================
+# Cafe Shift Closing (isolated for employees)
+# ========================================
+
+def resolve_cafe_token(token):
+    """Resolve cafe access token to account info, or abort 404"""
+    db = get_database()
+    info = db.get_cafe_token(token)
+    if not info:
+        from flask import abort
+        abort(404)
+    return info
+
+
+@app.route('/cafe/<token>/shift-closing')
+def cafe_shift_closing(token):
+    info = resolve_cafe_token(token)
+    return render_template('shift_closing_cafe.html',
+                           token=token,
+                           account_name=info.get('account_name', 'Cafe'))
+
+
+@app.route('/api/cafe/<token>/poster-data')
+def api_cafe_poster_data(token):
+    """Get Poster data for cafe shift closing"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_token(token)
+    date = request.args.get('date')  # YYYYMMDD
+
+    try:
+        from poster_client import PosterClient
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def get_cafe_poster_data():
+            if date is None:
+                kz_tz = timezone(timedelta(hours=5))
+                kz_now = datetime.now(kz_tz)
+                if kz_now.hour < 6:
+                    date_param = (kz_now - timedelta(days=1)).strftime("%Y%m%d")
+                else:
+                    date_param = kz_now.strftime("%Y%m%d")
+            else:
+                date_param = date
+
+            client = PosterClient(
+                telegram_user_id=info['telegram_user_id'],
+                poster_token=info['poster_token'],
+                poster_user_id=info['poster_user_id'],
+                poster_base_url=info['poster_base_url']
+            )
+
+            try:
+                # 1. Sales data from dash.getTransactions
+                result = await client._request('GET', 'dash.getTransactions', params={
+                    'dateFrom': date_param,
+                    'dateTo': date_param
+                })
+                transactions = result.get('response', [])
+                closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
+
+                total_cash = 0
+                total_card = 0
+                total_sum = 0
+
+                for tx in closed_transactions:
+                    total_cash += abs(int(tx.get('payed_cash', 0)))
+                    total_card += abs(int(tx.get('payed_card', 0)))
+                    total_sum += abs(int(tx.get('payed_sum', 0)))
+
+                bonus = total_sum - total_cash - total_card
+                if bonus < 0:
+                    bonus = 0
+
+                account_name = info.get('account_name', 'Cafe')
+                print(f"[CAFE SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
+                      f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
+                      f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
+
+                # 2. Get shift_start from getCashShifts
+                poster_prev_shift_left = None
+                try:
+                    target = datetime.strptime(date_param, '%Y%m%d')
+                    prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
+                    cash_shifts = await client.get_cash_shifts(prev_day, prev_day)
+                    if cash_shifts:
+                        last_shift = cash_shifts[-1]
+                        amount_end = int(float(last_shift.get('amount_end', 0)))
+                        if amount_end > 0:
+                            poster_prev_shift_left = amount_end
+                            print(f"[CAFE SHIFT] getCashShifts prev day ({prev_day}): "
+                                  f"amount_end={amount_end/100:,.0f}₸", flush=True)
+                except Exception as e:
+                    print(f"[CAFE SHIFT] getCashShifts error: {e}", flush=True)
+
+                return {
+                    'success': True,
+                    'date': date_param,
+                    'transactions_count': len(closed_transactions),
+                    'account_name': account_name,
+                    'trade_total': total_sum,
+                    'bonus': bonus,
+                    'poster_card': total_card,
+                    'poster_cash': total_cash,
+                    'poster_prev_shift_left': poster_prev_shift_left,
+                }
+            finally:
+                await client.close()
+
+        data = loop.run_until_complete(get_cafe_poster_data())
+        loop.close()
+        return jsonify(data)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cafe/<token>/calculate', methods=['POST'])
+def api_cafe_calculate(token):
+    """Calculate cafe shift closing totals"""
+    resolve_cafe_token(token)  # validate token
+    data = request.json
+
+    try:
+        wolt = float(data.get('wolt', 0))
+        kaspi = float(data.get('kaspi', 0))
+        kaspi_pizzburg = float(data.get('kaspi_pizzburg', 0))
+        cash_bills = float(data.get('cash_bills', 0))
+        cash_coins = float(data.get('cash_coins', 0))
+        shift_start = float(data.get('shift_start', 0))
+        expenses = float(data.get('expenses', 0))
+        cash_to_leave = float(data.get('cash_to_leave', 15000))
+
+        poster_trade = float(data.get('poster_trade', 0)) / 100
+        poster_bonus = float(data.get('poster_bonus', 0)) / 100
+        poster_card = float(data.get('poster_card', 0)) / 100
+
+        # Cafe formulas: kaspi_pizzburg ADDS to cashless (deliveries via Pizzburg couriers)
+        fact_cashless = wolt + kaspi + kaspi_pizzburg
+        fact_total = fact_cashless + cash_bills + cash_coins
+        fact_adjusted = fact_total - shift_start + expenses
+        poster_total = poster_trade - poster_bonus
+        day_result = fact_adjusted - poster_total
+        shift_left = cash_to_leave + cash_coins
+        collection = cash_bills - cash_to_leave + expenses
+        cashless_diff = fact_cashless - poster_card
+
+        return jsonify({
+            'success': True,
+            'calculations': {
+                'wolt': wolt, 'kaspi': kaspi,
+                'kaspi_pizzburg': kaspi_pizzburg,
+                'cash_bills': cash_bills, 'cash_coins': cash_coins,
+                'shift_start': shift_start,
+                'expenses': expenses, 'cash_to_leave': cash_to_leave,
+                'poster_trade': poster_trade, 'poster_bonus': poster_bonus,
+                'poster_card': poster_card,
+                'fact_cashless': fact_cashless,
+                'fact_total': fact_total,
+                'fact_adjusted': fact_adjusted,
+                'poster_total': poster_total,
+                'day_result': day_result,
+                'shift_left': shift_left,
+                'collection': collection,
+                'cashless_diff': cashless_diff,
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cafe/<token>/save', methods=['POST'])
+def api_cafe_save(token):
+    """Save cafe shift closing data"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_token(token)
+    data = request.json
+    db = get_database()
+
+    try:
+        kz_tz = timezone(timedelta(hours=5))
+        date = data.get('date') or datetime.now(kz_tz).strftime('%Y-%m-%d')
+
+        db.save_shift_closing(
+            info['telegram_user_id'], date, data,
+            poster_account_id=info['poster_account_id']
+        )
+
+        return jsonify({'success': True, 'date': date})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cafe/<token>/history')
+def api_cafe_history(token):
+    """Get cafe shift closing data for a specific date"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_token(token)
+    date = request.args.get('date')
+    db = get_database()
+
+    if not date:
+        kz_tz = timezone(timedelta(hours=5))
+        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+
+    try:
+        closing = db.get_shift_closing(
+            info['telegram_user_id'], date,
+            poster_account_id=info['poster_account_id']
+        )
+        return jsonify({'success': True, 'date': date, 'closing': closing})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cafe/<token>/dates')
+def api_cafe_dates(token):
+    """Get list of dates with cafe shift closing history"""
+    info = resolve_cafe_token(token)
+    db = get_database()
+
+    try:
+        dates = db.get_shift_closing_dates(
+            info['telegram_user_id'],
+            poster_account_id=info['poster_account_id']
+        )
+        return jsonify({'success': True, 'dates': dates})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cafe/<token>/report')
+def api_cafe_report(token):
+    """Generate text report for cafe shift closing"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_token(token)
+    db = get_database()
+    kz_tz = timezone(timedelta(hours=5))
+
+    date = request.args.get('date')
+    if not date:
+        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+
+    try:
+        closing = db.get_shift_closing(
+            info['telegram_user_id'], date,
+            poster_account_id=info['poster_account_id']
+        )
+
+        if not closing:
+            return jsonify({'success': False, 'error': 'Нет данных закрытия смены за эту дату'})
+
+        try:
+            dt = datetime.strptime(date, '%Y-%m-%d')
+            date_display = dt.strftime('%d.%m.%Y')
+        except Exception:
+            date_display = date
+
+        def fmt(val):
+            return f"{int(round(float(val or 0))):,}".replace(',', ' ')
+
+        account_name = info.get('account_name', 'Cafe')
+        day_result = float(closing.get('day_result', 0))
+        day_label = "излишек" if day_result > 0 else "недостача" if day_result < 0 else "ровно"
+        day_sign = "+" if day_result > 0 else ""
+
+        lines = [
+            f"{account_name} — Закрытие смены {date_display}",
+            "",
+            "Безнал терминалы:",
+            f"  Wolt: {fmt(closing.get('wolt'))}",
+            f"  Kaspi: {fmt(closing.get('kaspi'))}",
+        ]
+
+        kaspi_pizzburg = float(closing.get('kaspi_pizzburg', 0))
+        if kaspi_pizzburg > 0:
+            lines.append(f"  Kaspi Pizzburg (курьеры): +{fmt(kaspi_pizzburg)}")
+
+        lines += [
+            f"Итого безнал: {fmt(closing.get('fact_cashless'))}",
+            "",
+            "Наличные:",
+            f"  Бумажные: {fmt(closing.get('cash_bills'))}",
+            f"  Мелочь: {fmt(closing.get('cash_coins'))}",
+            "",
+            f"Фактический: {fmt(closing.get('fact_total'))}",
+            f"Смена начало: {fmt(closing.get('shift_start'))}",
+        ]
+
+        expenses = float(closing.get('expenses', 0))
+        if expenses > 0:
+            lines.append(f"Расходы: {fmt(expenses)}")
+
+        lines += [
+            f"Итого фактич: {fmt(closing.get('fact_adjusted'))}",
+            "",
+            f"Poster торговля: {fmt(closing.get('poster_trade'))}",
+            f"Poster бонусы: -{fmt(closing.get('poster_bonus'))}",
+            f"Итого Poster: {fmt(closing.get('poster_total'))}",
+            "",
+            f"ИТОГО ДЕНЬ: {day_sign}{fmt(day_result)} ({day_label})",
+            "",
+            f"Смена оставили: {fmt(closing.get('shift_left'))}",
+            f"Инкассация: {fmt(closing.get('collection'))}",
+        ]
+
+        cashless_diff = float(closing.get('cashless_diff', 0))
+        if abs(cashless_diff) >= 1:
+            diff_sign = "+" if cashless_diff > 0 else ""
+            lines.append(f"Разница безнал: {diff_sign}{fmt(cashless_diff)}")
+
+        report = "\n".join(lines)
+        return jsonify({'success': True, 'report': report, 'date': date})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
