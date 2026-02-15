@@ -737,44 +737,15 @@ async function loadDateData(date) {
         if (d.success) {
             posterData = d;
 
-            // Auto-fill shift_start from previous day's shift_left
-            // Priority: 1) our DB saved data → 2) Poster getCashShifts → 3) localStorage → 4) Poster cash drawer calc
+            // Auto-fill shift_start from Poster getCashShifts (previous day's "Фактический баланс")
+            // This is the ONLY reliable source — it's the actual shift closing balance from Poster
             if (!shiftStartSet) {
-                let prevShiftLeft = null;
-                let source = '';
-
-                // Priority 1: prev_shift_left from our DB (saved shift closing)
-                if (d.prev_shift_left != null && d.prev_shift_left !== 0) {
-                    prevShiftLeft = Math.round(d.prev_shift_left / 100);
-                    source = 'DB';
-                }
-
-                // Priority 2: Poster getCashShifts (amount_end of previous day's last shift)
-                if (prevShiftLeft == null && d.poster_prev_shift_left != null && d.poster_prev_shift_left !== 0) {
-                    prevShiftLeft = Math.round(d.poster_prev_shift_left / 100);
-                    source = 'Poster getCashShifts';
-                }
-
-                // Priority 3: check localStorage for previous day's saved data
-                if (prevShiftLeft == null) {
-                    const prevDate = getPrevDateStr(date);
-                    const prevLS = loadFromLS(prevDate);
-                    if (prevLS && prevLS.cash_to_leave && prevLS.cash_coins) {
-                        prevShiftLeft = (parseFloat(prevLS.cash_to_leave) || 0) + (parseFloat(prevLS.cash_coins) || 0);
-                        source = 'localStorage';
-                    }
-                }
-
-                // Apply the best available value, or fallback to Poster cash drawer
-                if (prevShiftLeft != null && prevShiftLeft !== 0) {
-                    document.getElementById('shift_start').value = String(prevShiftLeft);
+                if (d.poster_prev_shift_left != null && d.poster_prev_shift_left !== 0) {
+                    document.getElementById('shift_start').value = String(Math.round(d.poster_prev_shift_left / 100));
                     shiftStartSet = true;
-                    console.log('[SHIFT] shift_start=' + prevShiftLeft + ' (source: ' + source + ')');
-                } else if (d.shift_start && d.shift_start !== 0) {
-                    document.getElementById('shift_start').value = String(Math.round(d.shift_start / 100));
-                    shiftStartSet = true;
-                    console.log('[SHIFT] shift_start=' + Math.round(d.shift_start / 100) + ' (source: Poster cash drawer)');
+                    console.log('[SHIFT] shift_start=' + Math.round(d.poster_prev_shift_left / 100) + ' (Poster getCashShifts)');
                 }
+                // If Poster has no cash shift data, field stays empty for manual input
                 saveToLS();
             }
 
@@ -954,20 +925,22 @@ function scheduleSave(calc) {
 }
 
 async function doSave(calc) {
+    // Save only user-input fields + calculated results
+    // API-derived fields (shift_start, poster_*) are NOT saved — always fetched from Poster API
     const data = {
         date: currentDate,
+        // User input fields:
         wolt: pi('wolt'), halyk: pi('halyk'),
         kaspi: pi('kaspi'), kaspi_cafe: pi('kaspi_cafe'),
         cash_bills: pi('cash_bills'), cash_coins: pi('cash_coins'),
-        shift_start: pi('shift_start'), deposits: 0,
         expenses: pi('expenses'), cash_to_leave: pi('cash_to_leave'),
-        poster_trade: calc.poster_trade, poster_bonus: calc.poster_bonus,
-        poster_card: calc.poster_card, poster_cash: 0,
-        transactions_count: posterData ? posterData.transactions_count : 0,
+        deposits: 0,
+        // Calculated results (for reports/history):
         fact_cashless: calc.fact_cashless, fact_total: calc.fact_total,
         fact_adjusted: calc.fact_adjusted, poster_total: calc.poster_total,
         day_result: calc.day_result, shift_left: calc.shift_left,
         collection: calc.collection, cashless_diff: calc.cashless_diff,
+        transactions_count: posterData ? posterData.transactions_count : 0,
     };
 
     try {
