@@ -2391,13 +2391,39 @@ def api_process_expenses():
                 )
 
                 try:
+                    # Auto-detect finance account based on source + this Poster account
+                    finance_accounts = await client.get_accounts()
+                    account_id = None
+
+                    if draft.get('source') == 'kaspi':
+                        for acc in finance_accounts:
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                            if 'kaspi' in acc_name:
+                                account_id = int(acc['account_id'])
+                                break
+                    elif draft.get('source') == 'halyk':
+                        for acc in finance_accounts:
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                            if 'халык' in acc_name or 'halyk' in acc_name:
+                                account_id = int(acc['account_id'])
+                                break
+                    else:
+                        for acc in finance_accounts:
+                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                            if 'закуп' in acc_name or 'оставил' in acc_name:
+                                account_id = int(acc['account_id'])
+                                break
+
+                    if not account_id and finance_accounts:
+                        account_id = int(finance_accounts[0]['account_id'])
+
                     # Create transaction in Poster
                     is_income = bool(draft.get('is_income'))
                     txn_type = 1 if is_income else 0
                     new_txn_id = await client.create_transaction(
                         transaction_type=txn_type,
                         category_id=1,  # default category
-                        account_from_id=draft.get('account_id') or 1,
+                        account_from_id=account_id or 1,
                         amount=int(draft['amount']),
                         comment=draft.get('description', '')
                     )
@@ -2793,30 +2819,29 @@ def process_drafts():
                         print(f"  - id={acc.get('account_id')}, name='{acc_name}'", flush=True)
 
                     for draft in account_transactions:
-                        # Find finance account: prefer manually selected, then auto-detect by source
-                        account_id = draft.get('account_id')
+                        # Always auto-detect finance account based on source + this Poster account's finance accounts.
+                        # Don't use draft's stored account_id because finance account IDs differ between
+                        # Poster accounts (e.g., id=4 is "Оставил в кассе" in Pizzburg but "Деньги дома" in Cafe).
+                        account_id = None
 
-                        if not account_id:
-                            # Auto-detect based on source
-                            # Note: Poster API returns 'account_name' field, not 'name'
-                            if draft['source'] == 'kaspi':
-                                for acc in finance_accounts:
-                                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                                    if 'kaspi' in acc_name:
-                                        account_id = int(acc['account_id'])
-                                        break
-                            elif draft['source'] == 'halyk':
-                                for acc in finance_accounts:
-                                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                                    if 'халык' in acc_name or 'halyk' in acc_name:
-                                        account_id = int(acc['account_id'])
-                                        break
-                            else:
-                                for acc in finance_accounts:
-                                    acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                                    if 'закуп' in acc_name or 'оставил' in acc_name:
-                                        account_id = int(acc['account_id'])
-                                        break
+                        if draft['source'] == 'kaspi':
+                            for acc in finance_accounts:
+                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                if 'kaspi' in acc_name:
+                                    account_id = int(acc['account_id'])
+                                    break
+                        elif draft['source'] == 'halyk':
+                            for acc in finance_accounts:
+                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                if 'халык' in acc_name or 'halyk' in acc_name:
+                                    account_id = int(acc['account_id'])
+                                    break
+                        else:
+                            for acc in finance_accounts:
+                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
+                                if 'закуп' in acc_name or 'оставил' in acc_name:
+                                    account_id = int(acc['account_id'])
+                                    break
 
                         if not account_id and finance_accounts:
                             account_id = int(finance_accounts[0]['account_id'])

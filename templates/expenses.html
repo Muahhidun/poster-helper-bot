@@ -2620,20 +2620,18 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType, preserve
             return null;
         }
 
-        // Get account_id for this section
-        const accountId = accountTypeMap[accountType];
-
         // Get poster account id from placeholder
         const posterAccountBtn = placeholderRow.querySelector('.btn-poster-account');
         const posterAccountId = posterAccountBtn ? posterAccountBtn.dataset.posterAccountId : null;
 
-        // Create real DB entry with the data (pass both account_id AND source for proper grouping)
+        // Create real DB entry with the data
+        // Don't send account_id — backend auto-detects the correct finance account
+        // based on source + poster_account_id at process time
         const response = await fetch('/expenses/create', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                account_id: accountId,
-                source: accountType,  // Also set source field for consistent grouping
+                source: accountType,
                 amount: amount,
                 description: description,
                 category: category || undefined,
@@ -2694,13 +2692,12 @@ async function addNewRow(accountType = 'cash', focusAmount = true) {
     pendingRowCreation[accountType] = true;
 
     try {
-        // Get account_id for this section
-        const accountId = accountTypeMap[accountType];
-
+        // Don't send account_id — backend auto-detects the correct finance account
+        // based on source + poster_account_id at process time
         const response = await fetch('/expenses/create', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ account_id: accountId, source: accountType })
+            body: JSON.stringify({ source: accountType })
         });
 
         const result = await response.json();
