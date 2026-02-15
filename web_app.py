@@ -3939,6 +3939,7 @@ def api_shift_closing_poster_data():
         # Shift closing only uses primary account (PizzBurg)
         primary_account = next((a for a in accounts if a.get('is_primary')), accounts[0])
 
+        from datetime import datetime, timedelta, timezone
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
@@ -4140,6 +4141,7 @@ def api_shift_closing_calculate():
 @app.route('/api/shift-closing/save', methods=['POST'])
 def api_shift_closing_save():
     """Save shift closing data for a specific date"""
+    from datetime import datetime, timedelta, timezone
     data = request.json
     db = get_database()
 
