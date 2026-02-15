@@ -688,14 +688,17 @@ async function loadDateData(date) {
             if (c.kaspi_cafe) document.getElementById('kaspi_cafe').value = c.kaspi_cafe;
             if (c.cash_bills) document.getElementById('cash_bills').value = c.cash_bills;
             if (c.cash_coins) document.getElementById('cash_coins').value = c.cash_coins;
-            if (c.shift_start) { document.getElementById('shift_start').value = c.shift_start; shiftStartSet = true; }
             if (c.expenses) document.getElementById('expenses').value = c.expenses;
             if (c.cash_to_leave) document.getElementById('cash_to_leave').value = c.cash_to_leave;
             if (c.deposits) document.getElementById('deposits') && (document.getElementById('deposits').value = c.deposits);
 
             if (!isToday) {
+                // Past date (readonly) — trust saved shift_start
+                if (c.shift_start) { document.getElementById('shift_start').value = c.shift_start; shiftStartSet = true; }
                 setReadonly(true);
             } else {
+                // Current day — DON'T load shift_start from saved data
+                // It will be re-calculated from prev_shift_left / Poster API
                 setReadonly(false);
             }
 
