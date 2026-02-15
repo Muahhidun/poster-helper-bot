@@ -631,42 +631,53 @@ function loadShiftReport() {
 
     const dayLabel = day_result > 0 ? 'излишек' : day_result < 0 ? 'недостача' : 'ровно';
     const daySign = day_result > 0 ? '+' : '';
+    const dayEmoji = day_result > 0 ? '📈' : day_result < 0 ? '📉' : '✅';
+
+    const sep = '━━━━━━━━━━━━━━━━━━━━━━━━━━';
+    const subsep = '   ──────────────────';
 
     let lines = [
-        '{{ account_name }} — Закрытие смены ' + dateDisplay,
-        '',
-        'Безнал терминалы:',
-        '  Wolt: ' + fmtR(wolt),
-        '  Kaspi: ' + fmtR(kaspi),
+        '📋 {{ account_name }} — Закрытие смены ' + dateDisplay,
+        sep,
+        '💳 Безнал терминалы:',
+        '   Wolt: ' + fmtR(wolt) + '₸',
+        '   Kaspi: ' + fmtR(kaspi) + '₸',
     ];
     if (kaspi_pizzburg > 0) {
-        lines.push('  Kaspi Pizzburg (курьеры): +' + fmtR(kaspi_pizzburg));
+        lines.push('   Kaspi Pizzburg (курьеры): +' + fmtR(kaspi_pizzburg) + '₸');
     }
     lines = lines.concat([
-        'Итого безнал: ' + fmtR(fact_cashless),
+        subsep,
+        '   Итого безнал: ' + fmtR(fact_cashless) + '₸',
         '',
-        'Наличные:',
-        '  Бумажные: ' + fmtR(cash_bills),
-        '  Мелочь: ' + fmtR(cash_coins),
-        '',
-        'Фактический: ' + fmtR(fact_total),
-        'Смена начало: ' + fmtR(shift_start),
+        '💵 Наличные:',
+        '   Бумажные: ' + fmtR(cash_bills) + '₸',
+        '   Мелочь: ' + fmtR(cash_coins) + '₸',
+        sep,
+        '📊 Сверка:',
+        '   Фактический: ' + fmtR(fact_total) + '₸',
+        '   Смена начало: ' + fmtR(shift_start) + '₸',
     ]);
-    if (expenses > 0) lines.push('Расходы: ' + fmtR(expenses));
+    if (expenses > 0) lines.push('   Расходы: ' + fmtR(expenses) + '₸');
     lines = lines.concat([
-        'Итого фактич: ' + fmtR(fact_adjusted),
+        subsep,
+        '   Итого факт: ' + fmtR(fact_adjusted) + '₸',
         '',
-        'Poster торговля: ' + fmtR(poster_trade),
-        'Poster бонусы: -' + fmtR(poster_bonus),
-        'Итого Poster: ' + fmtR(poster_total),
+        '   Poster торговля: ' + fmtR(poster_trade) + '₸',
+        '   Poster бонусы: -' + fmtR(poster_bonus) + '₸',
+        subsep,
+        '   Итого Poster: ' + fmtR(poster_total) + '₸',
         '',
-        'ИТОГО ДЕНЬ: ' + daySign + fmtR(day_result) + ' (' + dayLabel + ')',
+        sep,
+        dayEmoji + ' ИТОГО ДЕНЬ: ' + daySign + fmtR(day_result) + '₸ (' + dayLabel + ')',
+        sep,
         '',
-        'Смена оставили: ' + fmtR(shift_left),
-        'Инкассация: ' + fmtR(collection),
+        '💰 Инкассация: ' + fmtR(collection) + '₸',
+        '🔄 Смена оставили: ' + fmtR(shift_left) + '₸',
     ]);
     if (Math.abs(cashless_diff) >= 1) {
-        lines.push('Разница безнал: ' + (cashless_diff > 0 ? '+' : '') + fmtR(cashless_diff));
+        lines.push('');
+        lines.push('⚠️ Разница безнал: ' + (cashless_diff > 0 ? '+' : '') + fmtR(cashless_diff) + '₸');
     }
 
     document.getElementById('report-text').textContent = lines.join('\n');

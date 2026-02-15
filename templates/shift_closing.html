@@ -1039,6 +1039,7 @@ function loadShiftReport() {
     const cash_bills = pi('cash_bills'), cash_coins = pi('cash_coins');
     const shift_start = pi('shift_start');
     const expenses = pi('expenses'), cash_to_leave = pi('cash_to_leave');
+    const deposits = pi('deposits') || 0;
 
     const calc = lastCalc || {};
     const fact_cashless = calc.fact_cashless || (wolt + halyk + (kaspi - kaspi_cafe));
@@ -1055,51 +1056,65 @@ function loadShiftReport() {
 
     const dayLabel = day_result > 0 ? 'излишек' : day_result < 0 ? 'недостача' : 'ровно';
     const daySign = day_result > 0 ? '+' : '';
+    const dayEmoji = day_result > 0 ? '📈' : day_result < 0 ? '📉' : '✅';
+
+    const sep = '━━━━━━━━━━━━━━━━━━━━━━━━━━';
+    const subsep = '   ──────────────────';
 
     let lines = [
-        'Закрытие смены ' + dateDisplay,
-        '',
-        'Безнал терминалы:',
-        '  Wolt: ' + fmtR(wolt),
-        '  Halyk: ' + fmtR(halyk),
-        '  Kaspi: ' + fmtR(kaspi),
+        '📋 Закрытие смены ' + dateDisplay,
+        sep,
+        '💳 Безнал терминалы:',
+        '   Wolt: ' + fmtR(wolt) + '₸',
+        '   Halyk: ' + fmtR(halyk) + '₸',
+        '   Kaspi: ' + fmtR(kaspi) + '₸',
     ];
 
     if (kaspi_cafe > 0) {
-        lines.push('  Kaspi Cafe: -' + fmtR(kaspi_cafe));
+        lines.push('   Kaspi Cafe: -' + fmtR(kaspi_cafe) + '₸');
     }
 
     lines = lines.concat([
-        'Итого безнал: ' + fmtR(fact_cashless),
+        subsep,
+        '   Итого безнал: ' + fmtR(fact_cashless) + '₸',
         '',
-        'Наличные:',
-        '  Бумажные: ' + fmtR(cash_bills),
-        '  Мелочь: ' + fmtR(cash_coins),
-        '',
-        'Фактический: ' + fmtR(fact_total),
-        'Смена начало: ' + fmtR(shift_start),
+        '💵 Наличные:',
+        '   Бумажные: ' + fmtR(cash_bills) + '₸',
+        '   Мелочь: ' + fmtR(cash_coins) + '₸',
+        sep,
+        '📊 Сверка:',
+        '   Фактический: ' + fmtR(fact_total) + '₸',
+        '   Смена начало: ' + fmtR(shift_start) + '₸',
     ]);
 
+    if (deposits > 0) {
+        lines.push('   Внесения: ' + fmtR(deposits) + '₸');
+    }
     if (expenses > 0) {
-        lines.push('Расходы: ' + fmtR(expenses));
+        lines.push('   Расходы: ' + fmtR(expenses) + '₸');
     }
 
     lines = lines.concat([
-        'Итого фактич: ' + fmtR(fact_adjusted),
+        subsep,
+        '   Итого факт: ' + fmtR(fact_adjusted) + '₸',
         '',
-        'Poster торговля: ' + fmtR(poster_trade),
-        'Poster бонусы: -' + fmtR(poster_bonus),
-        'Итого Poster: ' + fmtR(poster_total),
+        '   Poster торговля: ' + fmtR(poster_trade) + '₸',
+        '   Poster бонусы: -' + fmtR(poster_bonus) + '₸',
+        subsep,
+        '   Итого Poster: ' + fmtR(poster_total) + '₸',
         '',
-        'ИТОГО ДЕНЬ: ' + daySign + fmtR(day_result) + ' (' + dayLabel + ')',
+        sep,
+        dayEmoji + ' ИТОГО ДЕНЬ: ' + daySign + fmtR(day_result) + '₸ (' + dayLabel + ')',
+        sep,
         '',
-        'Смена оставили: ' + fmtR(shift_left),
-        'Инкассация: ' + fmtR(collection),
+        '💰 Инкассация: ' + fmtR(collection) + '₸',
+        '🔄 Смена оставили: ' + fmtR(shift_left) + '₸',
     ]);
 
     if (Math.abs(cashless_diff) >= 1) {
         const diffSign = cashless_diff > 0 ? '+' : '';
-        lines.push('Разница безнал: ' + diffSign + fmtR(cashless_diff));
+        lines.push('');
+        lines.push('⚠️ Разница безнал: ' + diffSign + fmtR(cashless_diff) + '₸');
     }
 
     const report = lines.join('\n');
