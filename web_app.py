@@ -4599,6 +4599,21 @@ def api_cafe_poster_data(token):
 
         data = loop.run_until_complete(get_cafe_poster_data())
         loop.close()
+
+        # Look up main shift closing's kaspi_cafe for auto-fill into kaspi_pizzburg
+        try:
+            db = get_database()
+            query_date = data.get('date', date or '')
+            target_date = datetime.strptime(query_date, '%Y%m%d').date()
+            date_str = target_date.strftime('%Y-%m-%d')
+
+            # Get main shift closing (poster_account_id=None)
+            main_closing = db.get_shift_closing(info['telegram_user_id'], date_str)
+            if main_closing and main_closing.get('kaspi_cafe'):
+                data['main_kaspi_cafe'] = float(main_closing['kaspi_cafe'])
+        except Exception as e:
+            print(f"[CAFE SHIFT] Error looking up main kaspi_cafe: {e}", flush=True)
+
         return jsonify(data)
 
     except Exception as e:

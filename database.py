@@ -2811,10 +2811,10 @@ class UserDatabase:
                             WHERE telegram_user_id = ? AND date = ? AND poster_account_id = ?
                         """, values + [telegram_user_id, date, poster_account_id])
                     else:
-                        all_fields = ['telegram_user_id', 'date', 'poster_account_id'] + fields + ['updated_at']
-                        placeholders = ', '.join(['?'] * (len(all_fields)))
+                        all_fields = ['telegram_user_id', 'date', 'poster_account_id'] + fields
+                        placeholders = ', '.join(['?'] * len(all_fields))
                         cursor.execute(f"""
-                            INSERT INTO shift_closings ({', '.join(all_fields)})
+                            INSERT INTO shift_closings ({', '.join(all_fields)}, updated_at)
                             VALUES ({placeholders}, CURRENT_TIMESTAMP)
                         """, [telegram_user_id, date, poster_account_id] + values)
                 else:
@@ -2831,10 +2831,10 @@ class UserDatabase:
                             WHERE telegram_user_id = %s AND date = %s AND poster_account_id = %s
                         """, values + [telegram_user_id, date, poster_account_id])
                     else:
-                        all_fields = ['telegram_user_id', 'date', 'poster_account_id'] + fields + ['updated_at']
-                        placeholders = ', '.join(['%s'] * (len(all_fields)))
+                        all_fields = ['telegram_user_id', 'date', 'poster_account_id'] + fields
+                        placeholders = ', '.join(['%s'] * len(all_fields))
                         cursor.execute(f"""
-                            INSERT INTO shift_closings ({', '.join(all_fields)})
+                            INSERT INTO shift_closings ({', '.join(all_fields)}, updated_at)
                             VALUES ({placeholders}, CURRENT_TIMESTAMP)
                         """, [telegram_user_id, date, poster_account_id] + values)
             else:

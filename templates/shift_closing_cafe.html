@@ -391,6 +391,12 @@ async function loadDateData(date) {
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
             document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
 
+            // Auto-fill kaspi_pizzburg from main shift closing's kaspi_cafe (if available and field is empty)
+            if (d.main_kaspi_cafe && !pi('kaspi_pizzburg')) {
+                document.getElementById('kaspi_pizzburg').value = String(Math.round(d.main_kaspi_cafe));
+                console.log('[CAFE SHIFT] kaspi_pizzburg auto-filled from main: ' + Math.round(d.main_kaspi_cafe));
+            }
+
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
             calculate();
@@ -436,6 +442,14 @@ async function loadPosterData() {
             document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
             document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
+
+            // Refresh kaspi_pizzburg from main's kaspi_cafe
+            if (d.main_kaspi_cafe !== undefined) {
+                const mainVal = Math.round(d.main_kaspi_cafe);
+                document.getElementById('kaspi_pizzburg').value = String(mainVal);
+                console.log('[CAFE SHIFT] kaspi_pizzburg refreshed from main: ' + mainVal);
+            }
+
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
             calculate();
