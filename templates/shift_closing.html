@@ -793,6 +793,20 @@ async function loadPosterData() {
             document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
             document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
 
+            // Refresh kaspi_cafe from Cafe's kaspi_pizzburg
+            if (d.cafe_kaspi_pizzburg !== undefined) {
+                const cafeVal = Math.round(d.cafe_kaspi_pizzburg);
+                document.getElementById('kaspi_cafe').value = String(cafeVal);
+                console.log('[SHIFT] kaspi_cafe refreshed from Cafe: ' + cafeVal);
+            }
+
+            // Refresh shift_start from API
+            if (d.shift_start !== undefined) {
+                const ssVal = Math.round(d.shift_start / 100);
+                document.getElementById('shift_start').value = String(ssVal);
+                console.log('[SHIFT] shift_start refreshed: ' + ssVal);
+            }
+
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
             calculate();
