@@ -4249,56 +4249,67 @@ def api_shift_closing_report():
         day_result = float(closing.get('day_result', 0))
         day_label = "излишек" if day_result > 0 else "недостача" if day_result < 0 else "ровно"
         day_sign = "+" if day_result > 0 else ""
+        day_emoji = "📈" if day_result > 0 else "📉" if day_result < 0 else "✅"
+
+        sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        subsep = "   ──────────────────"
 
         lines = [
-            f"Закрытие смены {date_display}",
-            "",
-            "Безнал терминалы:",
-            f"  Wolt: {fmt(closing.get('wolt'))}",
-            f"  Halyk: {fmt(closing.get('halyk'))}",
-            f"  Kaspi: {fmt(closing.get('kaspi'))}",
+            f"📋 Закрытие смены {date_display}",
+            sep,
+            "💳 Безнал терминалы:",
+            f"   Wolt: {fmt(closing.get('wolt'))}₸",
+            f"   Halyk: {fmt(closing.get('halyk'))}₸",
+            f"   Kaspi: {fmt(closing.get('kaspi'))}₸",
         ]
 
         kaspi_cafe = float(closing.get('kaspi_cafe', 0))
         if kaspi_cafe > 0:
-            lines.append(f"  Kaspi Cafe: -{fmt(kaspi_cafe)}")
+            lines.append(f"   Kaspi Cafe: -{fmt(kaspi_cafe)}₸")
 
         lines += [
-            f"Итого безнал: {fmt(closing.get('fact_cashless'))}",
+            subsep,
+            f"   Итого безнал: {fmt(closing.get('fact_cashless'))}₸",
             "",
-            "Наличные:",
-            f"  Бумажные: {fmt(closing.get('cash_bills'))}",
-            f"  Мелочь: {fmt(closing.get('cash_coins'))}",
-            "",
-            f"Фактический: {fmt(closing.get('fact_total'))}",
-            f"Смена начало: {fmt(closing.get('shift_start'))}",
+            "💵 Наличные:",
+            f"   Бумажные: {fmt(closing.get('cash_bills'))}₸",
+            f"   Мелочь: {fmt(closing.get('cash_coins'))}₸",
+            sep,
+            "📊 Сверка:",
+            f"   Фактический: {fmt(closing.get('fact_total'))}₸",
+            f"   Смена начало: {fmt(closing.get('shift_start'))}₸",
         ]
 
         deposits = float(closing.get('deposits', 0))
         if deposits > 0:
-            lines.append(f"Внесения: {fmt(deposits)}")
+            lines.append(f"   Внесения: {fmt(deposits)}₸")
 
         expenses = float(closing.get('expenses', 0))
         if expenses > 0:
-            lines.append(f"Расходы: {fmt(expenses)}")
+            lines.append(f"   Расходы: {fmt(expenses)}₸")
 
         lines += [
-            f"Итого фактич: {fmt(closing.get('fact_adjusted'))}",
+            subsep,
+            f"   Итого факт: {fmt(closing.get('fact_adjusted'))}₸",
             "",
-            f"Poster торговля: {fmt(closing.get('poster_trade'))}",
-            f"Poster бонусы: -{fmt(closing.get('poster_bonus'))}",
-            f"Итого Poster: {fmt(closing.get('poster_total'))}",
+            f"   Poster торговля: {fmt(closing.get('poster_trade'))}₸",
+            f"   Poster бонусы: -{fmt(closing.get('poster_bonus'))}₸",
+            subsep,
+            f"   Итого Poster: {fmt(closing.get('poster_total'))}₸",
             "",
-            f"ИТОГО ДЕНЬ: {day_sign}{fmt(day_result)} ({day_label})",
+            sep,
+            f"{day_emoji} ИТОГО ДЕНЬ: {day_sign}{fmt(day_result)}₸ ({day_label})",
+            sep,
             "",
-            f"Смена оставили: {fmt(closing.get('shift_left'))}",
-            f"Инкассация: {fmt(closing.get('collection'))}",
+            f"💰 Инкассация: {fmt(closing.get('collection'))}₸",
+            f"🔄 Смена оставили: {fmt(closing.get('shift_left'))}₸",
         ]
 
         cashless_diff = float(closing.get('cashless_diff', 0))
         if abs(cashless_diff) >= 1:
             diff_sign = "+" if cashless_diff > 0 else ""
-            lines.append(f"Разница безнал: {diff_sign}{fmt(cashless_diff)}")
+            lines.append("")
+            lines.append(f"⚠️ Разница безнал: {diff_sign}{fmt(cashless_diff)}₸")
 
         report = "\n".join(lines)
 
@@ -4719,51 +4730,62 @@ def api_cafe_report(token):
         day_result = float(closing.get('day_result', 0))
         day_label = "излишек" if day_result > 0 else "недостача" if day_result < 0 else "ровно"
         day_sign = "+" if day_result > 0 else ""
+        day_emoji = "📈" if day_result > 0 else "📉" if day_result < 0 else "✅"
+
+        sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        subsep = "   ──────────────────"
 
         lines = [
-            f"{account_name} — Закрытие смены {date_display}",
-            "",
-            "Безнал терминалы:",
-            f"  Wolt: {fmt(closing.get('wolt'))}",
-            f"  Kaspi: {fmt(closing.get('kaspi'))}",
+            f"📋 {account_name} — Закрытие смены {date_display}",
+            sep,
+            "💳 Безнал терминалы:",
+            f"   Wolt: {fmt(closing.get('wolt'))}₸",
+            f"   Kaspi: {fmt(closing.get('kaspi'))}₸",
         ]
 
         kaspi_pizzburg = float(closing.get('kaspi_pizzburg', 0))
         if kaspi_pizzburg > 0:
-            lines.append(f"  Kaspi Pizzburg (курьеры): +{fmt(kaspi_pizzburg)}")
+            lines.append(f"   Kaspi Pizzburg (курьеры): +{fmt(kaspi_pizzburg)}₸")
 
         lines += [
-            f"Итого безнал: {fmt(closing.get('fact_cashless'))}",
+            subsep,
+            f"   Итого безнал: {fmt(closing.get('fact_cashless'))}₸",
             "",
-            "Наличные:",
-            f"  Бумажные: {fmt(closing.get('cash_bills'))}",
-            f"  Мелочь: {fmt(closing.get('cash_coins'))}",
-            "",
-            f"Фактический: {fmt(closing.get('fact_total'))}",
-            f"Смена начало: {fmt(closing.get('shift_start'))}",
+            "💵 Наличные:",
+            f"   Бумажные: {fmt(closing.get('cash_bills'))}₸",
+            f"   Мелочь: {fmt(closing.get('cash_coins'))}₸",
+            sep,
+            "📊 Сверка:",
+            f"   Фактический: {fmt(closing.get('fact_total'))}₸",
+            f"   Смена начало: {fmt(closing.get('shift_start'))}₸",
         ]
 
         expenses = float(closing.get('expenses', 0))
         if expenses > 0:
-            lines.append(f"Расходы: {fmt(expenses)}")
+            lines.append(f"   Расходы: {fmt(expenses)}₸")
 
         lines += [
-            f"Итого фактич: {fmt(closing.get('fact_adjusted'))}",
+            subsep,
+            f"   Итого факт: {fmt(closing.get('fact_adjusted'))}₸",
             "",
-            f"Poster торговля: {fmt(closing.get('poster_trade'))}",
-            f"Poster бонусы: -{fmt(closing.get('poster_bonus'))}",
-            f"Итого Poster: {fmt(closing.get('poster_total'))}",
+            f"   Poster торговля: {fmt(closing.get('poster_trade'))}₸",
+            f"   Poster бонусы: -{fmt(closing.get('poster_bonus'))}₸",
+            subsep,
+            f"   Итого Poster: {fmt(closing.get('poster_total'))}₸",
             "",
-            f"ИТОГО ДЕНЬ: {day_sign}{fmt(day_result)} ({day_label})",
+            sep,
+            f"{day_emoji} ИТОГО ДЕНЬ: {day_sign}{fmt(day_result)}₸ ({day_label})",
+            sep,
             "",
-            f"Смена оставили: {fmt(closing.get('shift_left'))}",
-            f"Инкассация: {fmt(closing.get('collection'))}",
+            f"💰 Инкассация: {fmt(closing.get('collection'))}₸",
+            f"🔄 Смена оставили: {fmt(closing.get('shift_left'))}₸",
         ]
 
         cashless_diff = float(closing.get('cashless_diff', 0))
         if abs(cashless_diff) >= 1:
             diff_sign = "+" if cashless_diff > 0 else ""
-            lines.append(f"Разница безнал: {diff_sign}{fmt(cashless_diff)}")
+            lines.append("")
+            lines.append(f"⚠️ Разница безнал: {diff_sign}{fmt(cashless_diff)}₸")
 
         report = "\n".join(lines)
         return jsonify({'success': True, 'report': report, 'date': date})
