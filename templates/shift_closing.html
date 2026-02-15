@@ -800,13 +800,6 @@ async function loadPosterData() {
                 console.log('[SHIFT] kaspi_cafe refreshed from Cafe: ' + cafeVal);
             }
 
-            // Refresh shift_start from API
-            if (d.shift_start !== undefined) {
-                const ssVal = Math.round(d.shift_start / 100);
-                document.getElementById('shift_start').value = String(ssVal);
-                console.log('[SHIFT] shift_start refreshed: ' + ssVal);
-            }
-
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
             calculate();
