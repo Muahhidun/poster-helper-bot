@@ -1425,7 +1425,6 @@ def sync_expenses_from_poster():
         existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
         for account in poster_accounts:
-            synced_account_ids.add(str(account['id']))
             try:
                 client = PosterClient(
                     telegram_user_id=TELEGRAM_USER_ID,
@@ -1532,8 +1531,8 @@ def sync_expenses_from_poster():
                             # Look for expense draft with poster_transaction_id = "supply_12685,..."
                             supply_draft = next(
                                 (d for d in existing_drafts
-                                 if d.get('poster_transaction_id', '').startswith('supply_') and
-                                    supply_num in d['poster_transaction_id'].replace('supply_', '').split(',')),
+                                 if (d.get('poster_transaction_id') or '').startswith('supply_') and
+                                    supply_num in (d.get('poster_transaction_id') or '').replace('supply_', '').split(',')),
                                 None
                             )
                             if supply_draft:
@@ -1603,10 +1602,14 @@ def sync_expenses_from_poster():
                             txn_type_label = "income" if is_income else "expense"
                             print(f"✅ Synced {txn_type_label} #{txn_id} from {account['account_name']}: {description} - {amount}₸")
 
+                    # Mark account as successfully synced ONLY after all transactions processed
+                    synced_account_ids.add(str(account['id']))
+
                 finally:
                     await client.close()
 
             except Exception as e:
+                # Account NOT added to synced_account_ids — orphan detection will skip its drafts
                 errors.append(f"{account['account_name']}: {str(e)}")
                 print(f"Error syncing from {account['account_name']}: {e}")
                 import traceback
@@ -2113,7 +2116,6 @@ def api_sync_expenses_from_poster():
         existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
         for account in poster_accounts:
-            synced_account_ids.add(str(account['id']))
             try:
                 from poster_client import PosterClient
                 client = PosterClient(
@@ -2224,8 +2226,8 @@ def api_sync_expenses_from_poster():
                             supply_num = supply_match.group(1)
                             supply_draft = next(
                                 (d for d in existing_drafts
-                                 if d.get('poster_transaction_id', '').startswith('supply_') and
-                                    supply_num in d['poster_transaction_id'].replace('supply_', '').split(',')),
+                                 if (d.get('poster_transaction_id') or '').startswith('supply_') and
+                                    supply_num in (d.get('poster_transaction_id') or '').replace('supply_', '').split(',')),
                                 None
                             )
                             if supply_draft:
@@ -2278,10 +2280,14 @@ def api_sync_expenses_from_poster():
                         )
                         synced += 1
 
+                    # Mark account as successfully synced ONLY after all transactions processed
+                    synced_account_ids.add(str(account['id']))
+
                 finally:
                     await client.close()
 
             except Exception as e:
+                # Account NOT added to synced_account_ids — orphan detection will skip its drafts
                 errors.append(f"{account['account_name']}: {str(e)}")
 
         # Clean up existing drafts with system categories that should be excluded
