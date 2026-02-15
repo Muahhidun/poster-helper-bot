@@ -739,6 +739,68 @@ class UserDatabase:
         # Run migration to add poster_account_id to supply_draft_items
         self._migrate_supply_items_add_account()
 
+        # Run migration for cafe access tokens and shift_closings.poster_account_id
+        self._migrate_cafe_access()
+
+    def _migrate_cafe_access(self):
+        """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 1. Create cafe_access_tokens table
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cafe_access_tokens (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        token TEXT UNIQUE NOT NULL,
+                        telegram_user_id INTEGER NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        label TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cafe_access_tokens (
+                        id SERIAL PRIMARY KEY,
+                        token TEXT UNIQUE NOT NULL,
+                        telegram_user_id BIGINT NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        label TEXT,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+
+            # 2. Add poster_account_id to shift_closings (nullable, NULL = primary)
+            try:
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN poster_account_id INTEGER DEFAULT NULL")
+                else:
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN poster_account_id INTEGER DEFAULT NULL")
+                logger.info("✅ Cafe migration: added poster_account_id to shift_closings")
+            except Exception:
+                pass  # Column already exists
+
+            # 3. Add kaspi_pizzburg column to shift_closings (for Cafe: deliveries via Pizzburg couriers)
+            try:
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN kaspi_pizzburg REAL DEFAULT 0")
+                else:
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN kaspi_pizzburg REAL DEFAULT 0")
+                logger.info("✅ Cafe migration: added kaspi_pizzburg to shift_closings")
+            except Exception:
+                pass  # Column already exists
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Cafe migration: completed")
+
+        except Exception as e:
+            logger.error(f"Cafe migration error: {e}")
+
     def _migrate_to_multi_account(self):
         """
         Migrate existing users from single-account to multi-account structure.
@@ -2714,14 +2776,15 @@ class UserDatabase:
 
     # ==================== Shift Closings Methods ====================
 
-    def save_shift_closing(self, telegram_user_id: int, date: str, data: dict) -> bool:
+    def save_shift_closing(self, telegram_user_id: int, date: str, data: dict, poster_account_id: int = None) -> bool:
         """Save or update shift closing data for a specific date (upsert)"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             fields = [
-                'wolt', 'halyk', 'kaspi', 'kaspi_cafe', 'cash_bills', 'cash_coins',
+                'wolt', 'halyk', 'kaspi', 'kaspi_cafe', 'kaspi_pizzburg',
+                'cash_bills', 'cash_coins',
                 'shift_start', 'deposits', 'expenses', 'cash_to_leave',
                 'poster_trade', 'poster_bonus', 'poster_card', 'poster_cash',
                 'transactions_count',
@@ -2731,26 +2794,71 @@ class UserDatabase:
 
             values = [data.get(f, 0) for f in fields]
 
-            if DB_TYPE == "sqlite":
-                placeholders = ', '.join(['?'] * (len(fields) + 2))
-                fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
-                update_parts = ', '.join([f'{f} = excluded.{f}' for f in fields])
-                cursor.execute(f"""
-                    INSERT INTO shift_closings ({fields_str})
-                    VALUES ({placeholders}, CURRENT_TIMESTAMP)
-                    ON CONFLICT(telegram_user_id, date)
-                    DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
-                """, [telegram_user_id, date] + values)
+            if poster_account_id is not None:
+                # Cafe shift closing: unique by (user, account, date)
+                if DB_TYPE == "sqlite":
+                    # Check if exists
+                    cursor.execute("""
+                        SELECT id FROM shift_closings
+                        WHERE telegram_user_id = ? AND date = ? AND poster_account_id = ?
+                    """, (telegram_user_id, date, poster_account_id))
+                    existing = cursor.fetchone()
+
+                    if existing:
+                        update_parts = ', '.join([f'{f} = ?' for f in fields])
+                        cursor.execute(f"""
+                            UPDATE shift_closings SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                            WHERE telegram_user_id = ? AND date = ? AND poster_account_id = ?
+                        """, values + [telegram_user_id, date, poster_account_id])
+                    else:
+                        all_fields = ['telegram_user_id', 'date', 'poster_account_id'] + fields + ['updated_at']
+                        placeholders = ', '.join(['?'] * (len(all_fields)))
+                        cursor.execute(f"""
+                            INSERT INTO shift_closings ({', '.join(all_fields)})
+                            VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                        """, [telegram_user_id, date, poster_account_id] + values)
+                else:
+                    cursor.execute("""
+                        SELECT id FROM shift_closings
+                        WHERE telegram_user_id = %s AND date = %s AND poster_account_id = %s
+                    """, (telegram_user_id, date, poster_account_id))
+                    existing = cursor.fetchone()
+
+                    if existing:
+                        update_parts = ', '.join([f'{f} = %s' for f in fields])
+                        cursor.execute(f"""
+                            UPDATE shift_closings SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                            WHERE telegram_user_id = %s AND date = %s AND poster_account_id = %s
+                        """, values + [telegram_user_id, date, poster_account_id])
+                    else:
+                        all_fields = ['telegram_user_id', 'date', 'poster_account_id'] + fields + ['updated_at']
+                        placeholders = ', '.join(['%s'] * (len(all_fields)))
+                        cursor.execute(f"""
+                            INSERT INTO shift_closings ({', '.join(all_fields)})
+                            VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                        """, [telegram_user_id, date, poster_account_id] + values)
             else:
-                placeholders = ', '.join(['%s'] * (len(fields) + 2))
-                fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
-                update_parts = ', '.join([f'{f} = EXCLUDED.{f}' for f in fields])
-                cursor.execute(f"""
-                    INSERT INTO shift_closings ({fields_str})
-                    VALUES ({placeholders}, CURRENT_TIMESTAMP)
-                    ON CONFLICT(telegram_user_id, date)
-                    DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
-                """, [telegram_user_id, date] + values)
+                # Primary shift closing: unique by (user, date) where poster_account_id IS NULL
+                if DB_TYPE == "sqlite":
+                    placeholders = ', '.join(['?'] * (len(fields) + 2))
+                    fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
+                    update_parts = ', '.join([f'{f} = excluded.{f}' for f in fields])
+                    cursor.execute(f"""
+                        INSERT INTO shift_closings ({fields_str})
+                        VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                        ON CONFLICT(telegram_user_id, date)
+                        DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                    """, [telegram_user_id, date] + values)
+                else:
+                    placeholders = ', '.join(['%s'] * (len(fields) + 2))
+                    fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
+                    update_parts = ', '.join([f'{f} = EXCLUDED.{f}' for f in fields])
+                    cursor.execute(f"""
+                        INSERT INTO shift_closings ({fields_str})
+                        VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                        ON CONFLICT(telegram_user_id, date)
+                        DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                    """, [telegram_user_id, date] + values)
 
             conn.commit()
             conn.close()
@@ -2758,19 +2866,29 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Failed to save shift closing: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
-    def get_shift_closing(self, telegram_user_id: int, date: str) -> Optional[Dict]:
+    def get_shift_closing(self, telegram_user_id: int, date: str, poster_account_id: int = None) -> Optional[Dict]:
         """Get shift closing data for a specific date"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             placeholder = "?" if DB_TYPE == "sqlite" else "%s"
-            cursor.execute(f"""
-                SELECT * FROM shift_closings
-                WHERE telegram_user_id = {placeholder} AND date = {placeholder}
-            """, (telegram_user_id, date))
+            if poster_account_id is not None:
+                cursor.execute(f"""
+                    SELECT * FROM shift_closings
+                    WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                    AND poster_account_id = {placeholder}
+                """, (telegram_user_id, date, poster_account_id))
+            else:
+                cursor.execute(f"""
+                    SELECT * FROM shift_closings
+                    WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                    AND poster_account_id IS NULL
+                """, (telegram_user_id, date))
 
             columns = [desc[0] for desc in cursor.description]
             row = cursor.fetchone()
@@ -2784,7 +2902,7 @@ class UserDatabase:
             logger.error(f"Failed to get shift closing: {e}")
             return None
 
-    def get_shift_closing_dates(self, telegram_user_id: int, limit: int = 30) -> list:
+    def get_shift_closing_dates(self, telegram_user_id: int, limit: int = 30, poster_account_id: int = None) -> list:
         """Get list of dates that have shift closing data"""
         try:
             conn = self._get_connection()
@@ -2792,12 +2910,20 @@ class UserDatabase:
 
             placeholder = "?" if DB_TYPE == "sqlite" else "%s"
             limit_placeholder = "?" if DB_TYPE == "sqlite" else "%s"
-            cursor.execute(f"""
-                SELECT date FROM shift_closings
-                WHERE telegram_user_id = {placeholder}
-                ORDER BY date DESC
-                LIMIT {limit_placeholder}
-            """, (telegram_user_id, limit))
+            if poster_account_id is not None:
+                cursor.execute(f"""
+                    SELECT date FROM shift_closings
+                    WHERE telegram_user_id = {placeholder} AND poster_account_id = {placeholder}
+                    ORDER BY date DESC
+                    LIMIT {limit_placeholder}
+                """, (telegram_user_id, poster_account_id, limit))
+            else:
+                cursor.execute(f"""
+                    SELECT date FROM shift_closings
+                    WHERE telegram_user_id = {placeholder} AND poster_account_id IS NULL
+                    ORDER BY date DESC
+                    LIMIT {limit_placeholder}
+                """, (telegram_user_id, limit))
 
             rows = cursor.fetchall()
             conn.close()
@@ -2806,6 +2932,103 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to get shift closing dates: {e}")
             return []
+
+    # ==================== Cafe Access Token Methods ====================
+
+    def create_cafe_token(self, telegram_user_id: int, poster_account_id: int, label: str = None) -> str:
+        """Create a new cafe access token, returns the token string"""
+        import secrets
+        token = secrets.token_urlsafe(24)
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if DB_TYPE == "sqlite":
+            cursor.execute("""
+                INSERT INTO cafe_access_tokens (token, telegram_user_id, poster_account_id, label)
+                VALUES (?, ?, ?, ?)
+            """, (token, telegram_user_id, poster_account_id, label))
+        else:
+            cursor.execute("""
+                INSERT INTO cafe_access_tokens (token, telegram_user_id, poster_account_id, label)
+                VALUES (%s, %s, %s, %s)
+            """, (token, telegram_user_id, poster_account_id, label))
+
+        conn.commit()
+        conn.close()
+        return token
+
+    def get_cafe_token(self, token: str) -> Optional[Dict]:
+        """Resolve a cafe access token to user_id and account info"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT t.telegram_user_id, t.poster_account_id, t.label,
+                       a.account_name, a.poster_token, a.poster_user_id, a.poster_base_url
+                FROM cafe_access_tokens t
+                JOIN poster_accounts a ON a.id = t.poster_account_id
+                WHERE t.token = {placeholder}
+            """, (token,))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get cafe token: {e}")
+            return None
+
+    def list_cafe_tokens(self, telegram_user_id: int) -> list:
+        """List all cafe access tokens for a user"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT t.id, t.token, t.label, t.created_at, a.account_name
+                FROM cafe_access_tokens t
+                JOIN poster_accounts a ON a.id = t.poster_account_id
+                WHERE t.telegram_user_id = {placeholder}
+                ORDER BY t.created_at DESC
+            """, (telegram_user_id,))
+
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(zip(columns, row)) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Failed to list cafe tokens: {e}")
+            return []
+
+    def delete_cafe_token(self, token_id: int, telegram_user_id: int) -> bool:
+        """Delete a cafe access token"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                DELETE FROM cafe_access_tokens
+                WHERE id = {placeholder} AND telegram_user_id = {placeholder}
+            """, (token_id, telegram_user_id))
+
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Failed to delete cafe token: {e}")
+            return False
 
     # ==================== Supply Drafts Methods ====================
 

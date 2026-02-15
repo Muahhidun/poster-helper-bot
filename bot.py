@@ -1240,6 +1240,80 @@ async def daily_transfers_command(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(f"❌ Ошибка создания переводов: {e}")
 
 
+@admin_only
+async def cafe_token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cafe_token command - manage cafe access tokens for isolated shift closing"""
+    telegram_user_id = update.effective_user.id
+    db = get_database()
+
+    args = context.args if context.args else []
+
+    if not args or args[0] == 'list':
+        # List existing tokens
+        tokens = db.list_cafe_tokens(telegram_user_id)
+        if not tokens:
+            await update.message.reply_text(
+                "Нет токенов доступа для Cafe.\n\n"
+                "Создать: /cafe_token create [label]\n"
+                "Пример: /cafe_token create Кассир"
+            )
+            return
+
+        lines = ["Токены доступа Cafe:\n"]
+        for t in tokens:
+            lines.append(
+                f"ID {t['id']}: {t.get('account_name', '?')} — {t.get('label', 'без метки')}\n"
+                f"Создан: {t.get('created_at', '?')}"
+            )
+        lines.append(f"\nУдалить: /cafe_token delete <id>")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if args[0] == 'create':
+        label = ' '.join(args[1:]) if len(args) > 1 else 'Кассир'
+
+        # Find non-primary (Cafe) account
+        accounts = db.get_accounts(telegram_user_id)
+        cafe_account = next((a for a in accounts if not a.get('is_primary')), None)
+
+        if not cafe_account:
+            await update.message.reply_text("Нет вторичного аккаунта (Cafe). Сначала добавьте через /add_cafe")
+            return
+
+        token = db.create_cafe_token(telegram_user_id, cafe_account['id'], label)
+
+        # Get webhook URL for the link
+        import os
+        base_url = os.environ.get('WEBHOOK_URL', 'https://your-app.railway.app')
+        url = f"{base_url}/cafe/{token}/shift-closing"
+
+        await update.message.reply_text(
+            f"Токен создан для {cafe_account['account_name']} ({label})\n\n"
+            f"Ссылка для сотрудника:\n{url}\n\n"
+            f"Сотрудник может открыть эту ссылку в браузере телефона."
+        )
+        return
+
+    if args[0] == 'delete' and len(args) > 1:
+        try:
+            token_id = int(args[1])
+            success = db.delete_cafe_token(token_id, telegram_user_id)
+            if success:
+                await update.message.reply_text(f"Токен ID {token_id} удалён.")
+            else:
+                await update.message.reply_text(f"Токен ID {token_id} не найден.")
+        except ValueError:
+            await update.message.reply_text("Укажите числовой ID токена.")
+        return
+
+    await update.message.reply_text(
+        "Управление токенами Cafe:\n\n"
+        "/cafe_token list — список токенов\n"
+        "/cafe_token create [метка] — создать токен\n"
+        "/cafe_token delete <id> — удалить токен"
+    )
+
+
 @authorized_only
 async def accounts_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -6484,6 +6558,9 @@ def initialize_application():
     app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
     app.add_handler(CommandHandler("price_check", price_check_command))
     app.add_handler(CommandHandler("add_cafe", add_second_account_command))
+
+    # Cafe access token management
+    app.add_handler(CommandHandler("cafe_token", cafe_token_command))
 
     # Accounts check commands (сверка счетов двух отделов)
     app.add_handler(CommandHandler("accounts_check", accounts_check_command))
