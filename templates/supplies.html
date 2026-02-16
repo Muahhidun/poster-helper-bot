@@ -1301,22 +1301,35 @@ document.addEventListener('DOMContentLoaded', function() {
         // Keyboard navigation
         input.addEventListener('keydown', function(e) {
             const items = resultsDiv.querySelectorAll('.search-result-item[data-id]');
-            if (items.length === 0) return;
 
             if (e.key === 'ArrowDown') {
+                if (items.length === 0) return;
                 e.preventDefault();
                 selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
                 updateSelection(items);
             } else if (e.key === 'ArrowUp') {
+                if (items.length === 0) return;
                 e.preventDefault();
                 selectedIndex = Math.max(selectedIndex - 1, 0);
                 updateSelection(items);
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                if (selectedIndex >= 0 && items[selectedIndex]) {
-                    selectIngredient(items[selectedIndex], input);
-                } else if (items.length === 1) {
-                    selectIngredient(items[0], input);
+                // Enter: select ingredient, keep focus in search
+                if (resultsDiv.style.display !== 'none' && items.length > 0) {
+                    const itemToSelect = selectedIndex >= 0 ? items[selectedIndex] : items[0];
+                    selectIngredient(itemToSelect, input, 'search');
+                }
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                if (resultsDiv.style.display !== 'none' && items.length > 0) {
+                    // Tab + dropdown: select ingredient, go to new row's quantity
+                    const itemToSelect = selectedIndex >= 0 ? items[selectedIndex] : items[0];
+                    selectIngredient(itemToSelect, input, 'quantity');
+                } else {
+                    // Tab + no dropdown: go to first item row's qty in this card
+                    const card = input.closest('.supply-card');
+                    const firstQty = card.querySelector('.items-tbody .item-input.qty');
+                    if (firstQty) firstQty.focus();
                 }
             } else if (e.key === 'Escape') {
                 resultsDiv.style.display = 'none';
@@ -1342,7 +1355,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        async function selectIngredient(item, inputEl) {
+        async function selectIngredient(item, inputEl, focusMode = 'quantity') {
             const draftId = inputEl.dataset.draftId;
             const ingredientId = parseInt(item.dataset.id);
             const ingredientName = item.dataset.name;
@@ -1409,20 +1422,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 renderItems(parseInt(draftId));
                 updateTotals();
 
-                // Focus on quantity input of new item
-                setTimeout(() => {
-                    const tbody = document.querySelector(`.items-tbody[data-draft-id="${draftId}"]`);
-                    const lastRow = tbody.querySelector('tr:last-child');
-                    if (lastRow) {
-                        const qtyInput = lastRow.querySelector('.item-input.qty');
-                        if (qtyInput) qtyInput.focus();
-                    }
-                }, 50);
+                if (focusMode === 'quantity') {
+                    // Tab flow: focus on quantity input of new item
+                    setTimeout(() => {
+                        const tbody = document.querySelector(`.items-tbody[data-draft-id="${draftId}"]`);
+                        const lastRow = tbody.querySelector('tr:last-child');
+                        if (lastRow) {
+                            const qtyInput = lastRow.querySelector('.item-input.qty');
+                            if (qtyInput) qtyInput.focus();
+                        }
+                    }, 50);
+                }
+                // 'search' mode: focus stays in search (re-focused below)
             }
 
             // Clear search
             inputEl.value = '';
             resultsDiv.style.display = 'none';
+            selectedIndex = -1;
+
+            if (focusMode === 'search') {
+                // Enter flow: keep focus in search for next ingredient
+                inputEl.focus();
+            }
         }
     });
 });
@@ -1484,10 +1506,19 @@ function renderItems(draftId) {
 
     // Attach event listeners for all three fields (qty, price, sum)
     tbody.querySelectorAll('.item-input.qty, .item-input.price, .item-input.sum').forEach(input => {
-        // Focus - select all if value is 0
+        // Focus - clear zero, select non-zero digits
         input.addEventListener('focus', function() {
-            if (this.value === '0' || this.value === '') {
+            if (this.value === '0') {
+                this.value = '';
+            } else if (this.value !== '') {
                 setTimeout(() => this.select(), 10);
+            }
+        });
+
+        // Blur - restore zero if empty
+        input.addEventListener('blur', function() {
+            if (this.value === '' || this.value.trim() === '') {
+                this.value = '0';
             }
         });
 
@@ -1548,7 +1579,7 @@ function renderItems(draftId) {
             updateTotals();
         });
 
-        // Smart field navigation with Enter
+        // Smart field navigation with Enter and Tab
         input.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -1563,8 +1594,38 @@ function renderItems(draftId) {
                     if (nextRow) {
                         nextRow.querySelector('.qty').focus();
                     } else {
-                        // Focus search input
                         const card = row.closest('.supply-card');
+                        card.querySelector('.item-search-input').focus();
+                    }
+                }
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                const row = this.closest('tr');
+                const card = row.closest('.supply-card');
+
+                if (this.classList.contains('qty')) {
+                    // qty → price
+                    row.querySelector('.price').focus();
+                } else if (this.classList.contains('price')) {
+                    const priceValue = parseFloat(this.value) || 0;
+                    if (priceValue > 0) {
+                        // Price filled → next row qty or search (skip sum, it auto-calculates)
+                        const nextRow = row.nextElementSibling;
+                        if (nextRow) {
+                            nextRow.querySelector('.qty').focus();
+                        } else {
+                            card.querySelector('.item-search-input').focus();
+                        }
+                    } else {
+                        // Price empty → sum (user wants to enter total directly)
+                        row.querySelector('.sum').focus();
+                    }
+                } else if (this.classList.contains('sum')) {
+                    // sum → next row qty or search
+                    const nextRow = row.nextElementSibling;
+                    if (nextRow) {
+                        nextRow.querySelector('.qty').focus();
+                    } else {
                         card.querySelector('.item-search-input').focus();
                     }
                 }
