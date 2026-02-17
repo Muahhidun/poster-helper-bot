@@ -4091,6 +4091,24 @@ def api_shift_closing_poster_data():
         except Exception as e:
             print(f"[SHIFT] Error looking up cafe kaspi_pizzburg: {e}", flush=True)
 
+        # Look up cashier shift data for auto-fill
+        try:
+            from datetime import datetime
+            query_date = data.get('date', date or '')
+            target_date = datetime.strptime(query_date, '%Y%m%d').date()
+            date_str = target_date.strftime('%Y-%m-%d')
+
+            cashier_data = db.get_cashier_shift_data(g.user_id, date_str)
+            if cashier_data and (cashier_data.get('shift_data_submitted') or cashier_data.get('shift_data_submitted') == 1):
+                data['cashier_wolt'] = float(cashier_data.get('wolt', 0))
+                data['cashier_halyk'] = float(cashier_data.get('halyk', 0))
+                data['cashier_cash_bills'] = float(cashier_data.get('cash_bills', 0))
+                data['cashier_cash_coins'] = float(cashier_data.get('cash_coins', 0))
+                data['cashier_expenses'] = float(cashier_data.get('expenses', 0))
+                data['cashier_data_submitted'] = True
+        except Exception as e:
+            print(f"[SHIFT] Error looking up cashier shift data: {e}", flush=True)
+
         return jsonify(data)
 
     except Exception as e:
@@ -4839,6 +4857,268 @@ def api_cafe_report(token):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== Cashier Shift Closing Routes ====================
+
+def resolve_cashier_token(token):
+    """Resolve cashier access token to account info, or abort 404"""
+    db = get_database()
+    info = db.get_cashier_token(token)
+    if not info:
+        from flask import abort
+        abort(404)
+    return info
+
+
+@app.route('/cashier/<token>/shift-closing')
+def cashier_shift_closing(token):
+    info = resolve_cashier_token(token)
+    return render_template('shift_closing_cashier.html',
+                           token=token,
+                           account_name=info.get('account_name', 'Основной отдел'))
+
+
+@app.route('/api/cashier/<token>/employees/last')
+def api_cashier_employees_last(token):
+    """Get last used employee names for auto-fill"""
+    info = resolve_cashier_token(token)
+    db = get_database()
+
+    try:
+        last = db.get_cashier_last_employees(info['telegram_user_id'])
+        if last:
+            return jsonify({'success': True, **last})
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cashier/<token>/salaries/calculate', methods=['POST'])
+def api_cashier_salaries_calculate(token):
+    """Calculate salaries without creating transactions"""
+    info = resolve_cashier_token(token)
+    data = request.json
+
+    try:
+        cashier_count = int(data.get('cashier_count', 2))
+        assistant_start_time = data.get('assistant_start_time', '10:00')
+
+        from cashier_salary import CashierSalaryCalculator
+        from doner_salary import DonerSalaryCalculator
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def calc():
+            # Calculate cashier salary
+            cashier_calc = CashierSalaryCalculator(info['telegram_user_id'])
+            sales_data = await cashier_calc.get_total_sales()
+            cashier_salary = cashier_calc.calculate_salary(sales_data['total_sales'], cashier_count)
+
+            # Calculate doner salary
+            doner_calc = DonerSalaryCalculator(info['telegram_user_id'])
+            doner_data = await doner_calc.get_doner_sales_count()
+            doner_base_salary = doner_calc.calculate_salary(int(doner_data['total_count']))
+
+            # Bonus based on assistant start time
+            if assistant_start_time == "10:00":
+                doner_bonus = 0
+                assistant_salary = 9000
+            elif assistant_start_time == "12:00":
+                doner_bonus = 750
+                assistant_salary = 8000
+            elif assistant_start_time == "14:00":
+                doner_bonus = 1500
+                assistant_salary = 7000
+            else:
+                doner_bonus = 0
+                assistant_salary = 9000
+
+            doner_salary = doner_base_salary + doner_bonus
+
+            return {
+                'cashier_salary': cashier_salary,
+                'doner_salary': doner_salary,
+                'assistant_salary': assistant_salary,
+            }
+
+        result = loop.run_until_complete(calc())
+        loop.close()
+
+        return jsonify({'success': True, **result})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cashier/<token>/salaries/create', methods=['POST'])
+def api_cashier_salaries_create(token):
+    """Create salary transactions in Poster"""
+    info = resolve_cashier_token(token)
+    data = request.json
+    db = get_database()
+
+    try:
+        cashier_count = int(data.get('cashier_count', 2))
+        cashier_names = data.get('cashier_names', [])
+        assistant_start_time = data.get('assistant_start_time', '10:00')
+        doner_name = data.get('doner_name', '')
+        assistant_name = data.get('assistant_name', '')
+
+        from cashier_salary import CashierSalaryCalculator
+        from doner_salary import DonerSalaryCalculator
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def create():
+            # Create cashier salary transactions
+            cashier_calc = CashierSalaryCalculator(info['telegram_user_id'])
+            cashier_result = await cashier_calc.create_salary_transactions(
+                cashier_count=cashier_count,
+                cashier_names=cashier_names
+            )
+
+            # Create doner salary transactions
+            doner_calc = DonerSalaryCalculator(info['telegram_user_id'])
+            doner_result = await doner_calc.create_salary_transaction(
+                assistant_start_time=assistant_start_time,
+                doner_name=doner_name,
+                assistant_name=assistant_name
+            )
+
+            return cashier_result, doner_result
+
+        cashier_result, doner_result = loop.run_until_complete(create())
+        loop.close()
+
+        if not cashier_result.get('success') or not doner_result.get('success'):
+            errors = []
+            if not cashier_result.get('success'):
+                errors.append(f"Кассиры: {cashier_result.get('error', '?')}")
+            if not doner_result.get('success'):
+                errors.append(f"Донерщик: {doner_result.get('error', '?')}")
+            return jsonify({'success': False, 'error': '; '.join(errors)}), 500
+
+        # Build salaries list for response
+        salaries = []
+        for s in cashier_result.get('salaries', []):
+            salaries.append({
+                'name': s['name'],
+                'role': 'Кассир',
+                'salary': s['salary'],
+            })
+        salaries.append({
+            'name': doner_result.get('doner_name', 'Донерщик'),
+            'role': 'Донерщик',
+            'salary': doner_result.get('salary', 0),
+        })
+        salaries.append({
+            'name': doner_result.get('assistant_name', 'Помощник'),
+            'role': 'Помощник',
+            'salary': doner_result.get('assistant_salary', 0),
+        })
+
+        # Save to cashier_shift_data
+        import json
+        from datetime import datetime, timedelta, timezone
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        db.save_cashier_shift_data(info['telegram_user_id'], date_str, {
+            'cashier_count': cashier_count,
+            'cashier_names': json.dumps(cashier_names, ensure_ascii=False),
+            'assistant_start_time': assistant_start_time,
+            'doner_name': doner_name,
+            'assistant_name': assistant_name,
+            'salaries_data': json.dumps(salaries, ensure_ascii=False),
+            'salaries_created': 1,
+        })
+
+        return jsonify({
+            'success': True,
+            'salaries': salaries,
+            'total': sum(s['salary'] for s in salaries),
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cashier/<token>/shift-data/save', methods=['POST'])
+def api_cashier_shift_data_save(token):
+    """Save cashier's 5 shift values"""
+    info = resolve_cashier_token(token)
+    data = request.json
+    db = get_database()
+
+    try:
+        from datetime import datetime, timedelta, timezone
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Get existing data to preserve salary fields
+        existing = db.get_cashier_shift_data(info['telegram_user_id'], date_str)
+        save_data = {}
+        if existing:
+            # Preserve salary fields
+            for f in ('cashier_count', 'cashier_names', 'assistant_start_time',
+                      'doner_name', 'assistant_name', 'salaries_data', 'salaries_created'):
+                if existing.get(f) is not None:
+                    save_data[f] = existing[f]
+
+        # Add shift data
+        save_data['wolt'] = float(data.get('wolt', 0))
+        save_data['halyk'] = float(data.get('halyk', 0))
+        save_data['cash_bills'] = float(data.get('cash_bills', 0))
+        save_data['cash_coins'] = float(data.get('cash_coins', 0))
+        save_data['expenses'] = float(data.get('expenses', 0))
+        save_data['shift_data_submitted'] = 1
+
+        db.save_cashier_shift_data(info['telegram_user_id'], date_str, save_data)
+
+        print(f"[CASHIER] Shift data saved for {date_str}: wolt={save_data['wolt']}, "
+              f"halyk={save_data['halyk']}, cash_bills={save_data['cash_bills']}, "
+              f"cash_coins={save_data['cash_coins']}, expenses={save_data['expenses']}", flush=True)
+
+        return jsonify({'success': True, 'date': date_str})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cashier/<token>/shift-data/status')
+def api_cashier_shift_data_status(token):
+    """Check if shift data was already submitted today"""
+    info = resolve_cashier_token(token)
+    db = get_database()
+
+    try:
+        from datetime import datetime, timedelta, timezone
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        existing = db.get_cashier_shift_data(info['telegram_user_id'], date_str)
+
+        return jsonify({
+            'success': True,
+            'date': date_str,
+            'salaries_created': bool(existing and (existing.get('salaries_created') or existing.get('salaries_created') == 1)),
+            'shift_data_submitted': bool(existing and (existing.get('shift_data_submitted') or existing.get('shift_data_submitted') == 1)),
+        })
+
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

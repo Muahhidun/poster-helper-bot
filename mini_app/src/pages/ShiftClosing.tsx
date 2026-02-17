@@ -90,6 +90,8 @@ export const ShiftClosing: React.FC = () => {
 
   // Track if shift_start was auto-set (so we don't overwrite user edits)
   const shiftStartAutoSet = useRef(false)
+  const cashierDataAutoSet = useRef(false)
+  const [cashierDataSubmitted, setCashierDataSubmitted] = useState(false)
 
   // Helper to update a single input field
   const setField = useCallback((field: keyof InputState, value: string) => {
@@ -178,6 +180,24 @@ export const ShiftClosing: React.FC = () => {
       setInputs(prev => ({ ...prev, shiftStart: String(posterData.shift_start / 100) }))
     }
     shiftStartAutoSet.current = true
+  }, [posterData])
+
+  // Auto-fill cashier data (wolt, halyk, cash_bills, cash_coins, expenses) if submitted
+  useEffect(() => {
+    if (!posterData || cashierDataAutoSet.current) return
+    if ((posterData as any).cashier_data_submitted) {
+      const pd = posterData as any
+      setInputs(prev => ({
+        ...prev,
+        wolt: String(pd.cashier_wolt || prev.wolt || ''),
+        halyk: String(pd.cashier_halyk || prev.halyk || ''),
+        cashBills: String(pd.cashier_cash_bills || prev.cashBills || ''),
+        cashCoins: String(pd.cashier_cash_coins || prev.cashCoins || ''),
+        expenses: String(pd.cashier_expenses || prev.expenses || ''),
+      }))
+      setCashierDataSubmitted(true)
+      cashierDataAutoSet.current = true
+    }
   }, [posterData])
 
   // Save inputs to localStorage on every change
@@ -380,6 +400,11 @@ export const ShiftClosing: React.FC = () => {
               style={{ color: themeParams.text_color }}
             >
               Фактические данные
+              {cashierDataSubmitted && (
+                <span className="ml-2 text-xs px-2 py-0.5 rounded-full" style={{ background: '#34c75920', color: '#30d158' }}>
+                  Данные от кассира
+                </span>
+              )}
             </h3>
 
             {/* Безнал терминалы */}
