@@ -3084,6 +3084,37 @@ class UserDatabase:
             logger.error(f"Failed to get shift closing dates: {e}")
             return []
 
+    def set_transfers_created(self, telegram_user_id: int, date: str, poster_account_id: int = None) -> bool:
+        """Mark transfers as created for a shift closing"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            true_val = 1 if DB_TYPE == "sqlite" else True
+
+            if poster_account_id is not None:
+                cursor.execute(f"""
+                    UPDATE shift_closings SET transfers_created = {placeholder}
+                    WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                    AND poster_account_id = {placeholder}
+                """, (true_val, telegram_user_id, date, poster_account_id))
+            else:
+                cursor.execute(f"""
+                    UPDATE shift_closings SET transfers_created = {placeholder}
+                    WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                    AND poster_account_id IS NULL
+                """, (true_val, telegram_user_id, date))
+
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Failed to set transfers_created: {e}")
+            return False
+
     # ==================== Cafe Access Token Methods ====================
 
     def create_cafe_token(self, telegram_user_id: int, poster_account_id: int, label: str = None) -> str:

@@ -87,6 +87,8 @@ export const ShiftClosing: React.FC = () => {
   const [calculating, setCalculating] = useState(false)
   const [reportCopied, setReportCopied] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [transfersCreated, setTransfersCreated] = useState(false)
+  const [transferStatus, setTransferStatus] = useState<string>('')
 
   // Track if shift_start was auto-set (so we don't overwrite user edits)
   const shiftStartAutoSet = useRef(false)
@@ -124,6 +126,8 @@ export const ShiftClosing: React.FC = () => {
   // When date changes, load saved data or localStorage
   useEffect(() => {
     shiftStartAutoSet.current = false
+    setTransfersCreated(false)
+    setTransferStatus('')
 
     // Try to load saved closing from backend
     getApiClient().getShiftClosingHistory(selectedDate).then(res => {
@@ -144,6 +148,8 @@ export const ShiftClosing: React.FC = () => {
         }
         setInputs(restored)
         shiftStartAutoSet.current = true
+        setTransfersCreated(!!c.transfers_created)
+        setTransferStatus('')
         setViewMode(isToday ? 'edit' : 'view')
       } else {
         // No saved data found
@@ -296,19 +302,40 @@ export const ShiftClosing: React.FC = () => {
     return () => clearTimeout(saveTimer)
   }, [calculations, viewMode, selectedDate, inputs, posterData, historyDates])
 
-  // Copy report to clipboard
+  // Copy report to clipboard and create transfers
   const handleCopyReport = useCallback(async () => {
     try {
+      // 1. Copy report
       const res = await getApiClient().getShiftClosingReport(selectedDate)
       if (res.success && res.report) {
         await navigator.clipboard.writeText(res.report)
         setReportCopied(true)
         setTimeout(() => setReportCopied(false), 2000)
       }
+
+      // 2. Create transfers if not already created and in edit mode
+      if (!transfersCreated && viewMode === 'edit') {
+        try {
+          const transferRes = await getApiClient().createShiftClosingTransfers(selectedDate)
+
+          if (transferRes.success) {
+            setTransfersCreated(true)
+            if (transferRes.already_created) {
+              setTransferStatus('Переводы уже были созданы ранее')
+            } else if ((transferRes.created_count || 0) > 0) {
+              setTransferStatus(`${transferRes.created_count} перевод(а) создано`)
+            }
+          } else {
+            setTransferStatus('Ошибка: ' + (transferRes.error || ''))
+          }
+        } catch (err) {
+          console.error('Transfer error:', err)
+        }
+      }
     } catch (err) {
       console.error('Report error:', err)
     }
-  }, [selectedDate])
+  }, [selectedDate, transfersCreated, viewMode])
 
   // Setup back button
   useEffect(() => {
@@ -746,16 +773,25 @@ export const ShiftClosing: React.FC = () => {
 
           {/* Report Button */}
           {calculations && (
-            <button
-              onClick={handleCopyReport}
-              className="w-full p-4 rounded-lg text-center font-medium"
-              style={{
-                backgroundColor: reportCopied ? '#22c55e' : themeParams.secondary_bg_color || '#f3f4f6',
-                color: reportCopied ? '#ffffff' : themeParams.text_color,
-              }}
-            >
-              {reportCopied ? 'Скопировано!' : 'Скопировать отчёт закрытия смены'}
-            </button>
+            <div>
+              <button
+                onClick={handleCopyReport}
+                className="w-full p-4 rounded-lg text-center font-medium"
+                style={{
+                  backgroundColor: reportCopied ? '#22c55e' : themeParams.secondary_bg_color || '#f3f4f6',
+                  color: reportCopied ? '#ffffff' : themeParams.text_color,
+                }}
+              >
+                {reportCopied
+                  ? (transfersCreated ? 'Скопировано! (переводы ✓)' : 'Скопировано!')
+                  : (transfersCreated ? 'Скопировать отчёт (переводы ✓)' : 'Скопировать отчёт и создать переводы')}
+              </button>
+              {transferStatus && (
+                <div className="text-center text-sm mt-2" style={{ color: '#34c759' }}>
+                  {transferStatus}
+                </div>
+              )}
+            </div>
           )}
 
           {/* Transactions count info */}

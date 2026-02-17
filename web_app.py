@@ -40,7 +40,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 # ========================================
 
 # Paths that don't require authentication
-OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health')
+OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health', '/telegram-webhook', '/mini-app')
 
 
 def get_home_for_role(role):
@@ -136,7 +136,14 @@ def check_auth():
     # Check session
     web_user_id = session.get('web_user_id')
     if not web_user_id:
-        # Not logged in
+        # Not logged in — check if any web_users exist at all
+        # If no accounts created yet, allow access (backward-compatible)
+        db = get_database()
+        all_users = db.list_web_users(TELEGRAM_USER_ID)
+        if not all_users:
+            # No web_users exist — skip auth entirely (legacy mode)
+            return None
+
         if path.startswith('/api/'):
             return jsonify({'error': 'Unauthorized'}), 401
         return redirect('/login')
@@ -5036,6 +5043,247 @@ def api_cafe_report():
 
         report = "\n".join(lines)
         return jsonify({'success': True, 'report': report, 'date': date})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== Cafe Transfers ====================
+
+# Account IDs for Cafe (Pizzburg-cafe)
+CAFE_ACCOUNTS = {
+    'kaspi': 1,        # Каспи Пей
+    'inkassacia': 2,   # Инкассация (вечером)
+    'cash_left': 5,    # Оставил в кассе (на закупы)
+    'wolt': 7,         # Wolt доставка
+}
+
+
+@app.route('/api/cafe/<token>/transfers', methods=['POST'])
+def api_cafe_transfers_legacy(token):
+    return redirect('/api/cafe/transfers', code=307)
+
+
+@app.route('/api/cafe/transfers', methods=['POST'])
+def api_cafe_transfers():
+    """Create auto-transfers for cafe shift closing"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_info()
+    db = get_database()
+
+    data = request.json or {}
+    date = data.get('date')
+
+    try:
+        kz_tz = timezone(timedelta(hours=5))
+        if not date:
+            kz_now = datetime.now(kz_tz)
+            date = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Get shift closing data
+        closing = db.get_shift_closing(
+            info['telegram_user_id'], date,
+            poster_account_id=info['poster_account_id']
+        )
+
+        if not closing:
+            return jsonify({'success': False, 'error': 'Нет данных закрытия смены за эту дату'}), 400
+
+        # Check if already created
+        if closing.get('transfers_created') in (True, 1):
+            return jsonify({'success': True, 'already_created': True, 'message': 'Переводы уже созданы ранее'})
+
+        collection = float(closing.get('collection', 0))
+        wolt = float(closing.get('wolt', 0))
+
+        # Build transfer list
+        transfers = []
+        if collection > 0:
+            transfers.append({
+                'name': 'Инкассация → Оставил в кассе',
+                'from': CAFE_ACCOUNTS['inkassacia'],
+                'to': CAFE_ACCOUNTS['cash_left'],
+                'amount': int(round(collection)),
+            })
+        if wolt > 0:
+            transfers.append({
+                'name': 'Каспий → Вольт',
+                'from': CAFE_ACCOUNTS['kaspi'],
+                'to': CAFE_ACCOUNTS['wolt'],
+                'amount': int(round(wolt)),
+            })
+
+        if not transfers:
+            return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
+
+        # Create transfers in Poster
+        from poster_client import PosterClient
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def create_transfers():
+            client = PosterClient(
+                telegram_user_id=info['telegram_user_id'],
+                poster_token=info['poster_token'],
+                poster_user_id=info['poster_user_id'],
+                poster_base_url=info['poster_base_url']
+            )
+            results = []
+            try:
+                # Format date for Poster API
+                dt = datetime.strptime(date, '%Y-%m-%d')
+                tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
+
+                for t in transfers:
+                    tx_id = await client.create_transaction(
+                        transaction_type=2,
+                        category_id=0,
+                        account_from_id=t['from'],
+                        account_to_id=t['to'],
+                        amount=t['amount'],
+                        date=tx_date,
+                        comment=''
+                    )
+                    results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
+                    print(f"[CAFE TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}", flush=True)
+            finally:
+                await client.close()
+            return results
+
+        results = loop.run_until_complete(create_transfers())
+        loop.close()
+
+        # Mark as created
+        db.set_transfers_created(
+            info['telegram_user_id'], date,
+            poster_account_id=info['poster_account_id']
+        )
+
+        return jsonify({
+            'success': True,
+            'created_count': len(results),
+            'transfers': results,
+            'message': f'{len(results)} перевод(а) создано'
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== Main Dept Transfers ====================
+
+# Account IDs for Main dept (Pizzburg)
+MAIN_ACCOUNTS = {
+    'kaspi': 1,        # Каспи Пей
+    'inkassacia': 2,   # Инкассация (вечером)
+    'cash_left': 4,    # Оставил в кассе
+    'wolt': 8,         # Wolt доставка
+    'halyk': 10,       # Халык банк
+}
+
+
+@app.route('/api/shift-closing/transfers', methods=['POST'])
+def api_shift_closing_transfers():
+    """Create auto-transfers for main dept shift closing"""
+    from datetime import datetime, timedelta, timezone
+
+    db = get_database()
+    user_id = g.user_id
+
+    data = request.json or {}
+    date = data.get('date')
+
+    try:
+        kz_tz = timezone(timedelta(hours=5))
+        if not date:
+            kz_now = datetime.now(kz_tz)
+            date = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Get shift closing data (main dept: poster_account_id=NULL)
+        closing = db.get_shift_closing(user_id, date)
+
+        if not closing:
+            return jsonify({'success': False, 'error': 'Нет данных закрытия смены за эту дату'}), 400
+
+        # Check if already created
+        if closing.get('transfers_created') in (True, 1):
+            return jsonify({'success': True, 'already_created': True, 'message': 'Переводы уже созданы ранее'})
+
+        collection = float(closing.get('collection', 0))
+        wolt = float(closing.get('wolt', 0))
+        halyk = float(closing.get('halyk', 0))
+
+        # Build transfer list
+        transfers = []
+        if collection > 0:
+            transfers.append({
+                'name': 'Инкассация → Оставил в кассе',
+                'from': MAIN_ACCOUNTS['inkassacia'],
+                'to': MAIN_ACCOUNTS['cash_left'],
+                'amount': int(round(collection)),
+            })
+        if wolt > 0:
+            transfers.append({
+                'name': 'Каспий → Вольт',
+                'from': MAIN_ACCOUNTS['kaspi'],
+                'to': MAIN_ACCOUNTS['wolt'],
+                'amount': int(round(wolt)),
+            })
+        if halyk > 0:
+            transfers.append({
+                'name': 'Каспий → Халык',
+                'from': MAIN_ACCOUNTS['kaspi'],
+                'to': MAIN_ACCOUNTS['halyk'],
+                'amount': int(round(halyk)),
+            })
+
+        if not transfers:
+            return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
+
+        # Create transfers in Poster (using primary account)
+        from poster_client import PosterClient
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def create_transfers():
+            client = PosterClient(telegram_user_id=user_id)
+            results = []
+            try:
+                dt = datetime.strptime(date, '%Y-%m-%d')
+                tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
+
+                for t in transfers:
+                    tx_id = await client.create_transaction(
+                        transaction_type=2,
+                        category_id=0,
+                        account_from_id=t['from'],
+                        account_to_id=t['to'],
+                        amount=t['amount'],
+                        date=tx_date,
+                        comment=''
+                    )
+                    results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
+                    print(f"[MAIN TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}", flush=True)
+            finally:
+                await client.close()
+            return results
+
+        results = loop.run_until_complete(create_transfers())
+        loop.close()
+
+        # Mark as created
+        db.set_transfers_created(user_id, date)
+
+        return jsonify({
+            'success': True,
+            'created_count': len(results),
+            'transfers': results,
+            'message': f'{len(results)} перевод(а) создано'
+        })
 
     except Exception as e:
         import traceback
