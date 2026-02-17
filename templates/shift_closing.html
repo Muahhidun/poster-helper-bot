@@ -158,9 +158,10 @@
     <div id="report-container" style="display:none" class="sc-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div class="sc-card-title" style="margin:0">Отчёт закрытия смены</div>
-            <button type="button" class="sc-btn sc-btn-sm" onclick="copyReport()">Скопировать</button>
+            <button type="button" class="sc-btn sc-btn-sm" id="copy-btn" onclick="copyReportAndTransfer()">Скопировать</button>
         </div>
         <pre id="report-text" class="sc-report"></pre>
+        <div id="transfer-status" class="hidden" style="margin-top:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:500;text-align:center"></div>
     </div>
 </div>
 
@@ -545,6 +546,7 @@ let saveTimer = null;
 let lastCalc = null;
 let currentDate = '';
 let isReadonly = false;
+let transfersCreated = false;
 const INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
 // User-input fields only (excludes shift_start — always from Poster API)
 const USER_INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','expenses','cash_to_leave'];
@@ -671,6 +673,11 @@ async function loadDateData(date) {
     banner.classList.remove('hidden', 'error');
     readonlyBanner.classList.add('hidden');
 
+    // Reset transfers state
+    transfersCreated = false;
+    document.getElementById('transfer-status').classList.add('hidden');
+    document.getElementById('copy-btn').textContent = 'Скопировать';
+
     // Clear all inputs
     INPUT_IDS.forEach(id => { document.getElementById(id).value = ''; });
     document.getElementById('cash_to_leave').value = '15000';
@@ -689,6 +696,12 @@ async function loadDateData(date) {
                 if (c[id]) document.getElementById(id).value = c[id];
             });
             if (c.deposits) document.getElementById('deposits') && (document.getElementById('deposits').value = c.deposits);
+
+            // Check if transfers already created
+            if (c.transfers_created) {
+                transfersCreated = true;
+                updateCopyBtn();
+            }
 
             setReadonly(!isToday);
             saveToLS();
@@ -1122,20 +1135,80 @@ function loadShiftReport() {
     document.getElementById('report-container').style.display = 'block';
 }
 
-function copyReport() {
-    const t = document.getElementById('report-text').textContent;
-    navigator.clipboard.writeText(t).then(() => {
-        const btn = event.target;
-        btn.textContent = 'Готово!';
-        setTimeout(() => btn.textContent = 'Скопировать', 1500);
-    }).catch(() => {
+function copyToClipboard(text) {
+    return navigator.clipboard.writeText(text).catch(() => {
         const ta = document.createElement('textarea');
-        ta.value = t;
+        ta.value = text;
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
     });
+}
+
+function showTransferStatus(msg, isSuccess) {
+    const el = document.getElementById('transfer-status');
+    el.textContent = msg;
+    el.style.background = isSuccess ? '#34c75920' : '#ff950020';
+    el.style.color = isSuccess ? '#34c759' : '#ff9500';
+    el.classList.remove('hidden');
+}
+
+function updateCopyBtn() {
+    const btn = document.getElementById('copy-btn');
+    if (transfersCreated) {
+        btn.textContent = 'Скопировать (переводы ✓)';
+    } else {
+        btn.textContent = 'Скопировать';
+    }
+}
+
+async function copyReportAndTransfer() {
+    const btn = document.getElementById('copy-btn');
+    const text = document.getElementById('report-text').textContent;
+
+    // 1. Copy report
+    await copyToClipboard(text);
+
+    // 2. If transfers not yet created and not readonly — create them
+    if (!transfersCreated && !isReadonly) {
+        btn.textContent = 'Создаю переводы...';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/shift-closing/transfers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({date: currentDate})
+            });
+            const data = await res.json();
+            if (data.success) {
+                transfersCreated = true;
+                if (data.already_created) {
+                    showTransferStatus('Переводы уже были созданы ранее', true);
+                } else if (data.created_count > 0) {
+                    const names = data.transfers.map(t => t.name + ': ' + t.amount.toLocaleString('ru-RU') + '₸').join(', ');
+                    showTransferStatus('✅ ' + data.created_count + ' перевод(а) создано: ' + names, true);
+                } else {
+                    showTransferStatus('Нет переводов (суммы = 0)', true);
+                }
+                btn.textContent = 'Скопировано! (переводы ✓)';
+                setTimeout(() => { btn.textContent = 'Скопировать (переводы ✓)'; }, 2000);
+            } else {
+                showTransferStatus('⚠️ Ошибка: ' + (data.error || 'неизвестная'), false);
+                btn.textContent = 'Скопировано!';
+                setTimeout(() => { btn.textContent = 'Скопировать'; }, 2000);
+            }
+        } catch (e) {
+            showTransferStatus('⚠️ Ошибка сети: ' + e.message, false);
+            btn.textContent = 'Скопировано!';
+            setTimeout(() => { btn.textContent = 'Скопировать'; }, 2000);
+        }
+        btn.disabled = false;
+    } else {
+        // Just copy — transfers already done or readonly
+        btn.textContent = transfersCreated ? 'Скопировано! (переводы ✓)' : 'Скопировано!';
+        setTimeout(() => updateCopyBtn(), 1500);
+    }
 }
 
 // ========= Init =========
