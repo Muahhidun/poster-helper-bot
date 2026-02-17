@@ -402,16 +402,224 @@ ALTER TABLE shift_closings ADD COLUMN transfers_created BOOLEAN DEFAULT FALSE;
 
 ## Порядок реализации
 
-### Фаза 1A: Страница Кассира (ТЕКУЩАЯ)
-1. Таблицы `cashier_access_tokens` + `cashier_shift_data` в database.py
-2. CRUD-методы для токенов и данных кассира в database.py
-3. Команда `/cashier_token` в bot.py
-4. Flask routes в web_app.py (6 endpoints)
-5. HTML-шаблон `shift_closing_cashier.html`
-6. Интеграция: данные кассира → poster-data endpoint → ShiftClosing.tsx
+### Фаза 1A: Страница Кассира — ГОТОВО ✅
+1. ~~Таблицы `cashier_access_tokens` + `cashier_shift_data` в database.py~~
+2. ~~CRUD-методы для токенов и данных кассира в database.py~~
+3. ~~Команда `/cashier_token` в bot.py~~
+4. ~~Flask routes в web_app.py (6 endpoints)~~
+5. ~~HTML-шаблон `shift_closing_cashier.html`~~
+6. ~~Интеграция: данные кассира → poster-data endpoint → ShiftClosing.tsx~~
+
+### Фаза 1.5: Система аутентификации с ролями — ТЕКУЩАЯ
+
+> **Проблема:** Сейчас страницы сотрудников защищены только секретным токеном в URL. Если сотрудник уберёт токен и зайдёт на корневой URL — он увидит страницу владельца. Нет никакой изоляции.
+>
+> **Цель:** Заменить токены на полноценную систему логин/пароль с ролями. Каждый пользователь видит только свои страницы. Без логина — ничего не видно, только форма входа.
+
+#### Роли и доступ
+
+| Роль | Кто | Доступ | Кол-во |
+|------|-----|--------|--------|
+| `owner` | Владелец, партнёр | **Всё**: расходы, поставки, алиасы, закрытие смены, Mini App, настройки | 2 |
+| `admin` | Администратор Кафе | **Только**: закрытие смены Кафе (`/cafe/shift-closing`) | 1 |
+| `cashier` | Кассир основного отдела | **Только**: страница кассира (`/cashier/shift-closing`) | 2 (разные смены) |
+
+#### Поведение системы
+
+```
+Неавторизованный пользователь:
+  Любой URL → редирект на /login
+
+Владелец (owner):
+  / → /expenses (или /mini-app, как сейчас)
+  /expenses, /supplies, /aliases, /shift-closing, /mini-app, /api/* → доступ
+  /cafe/shift-closing, /cashier/shift-closing → доступ (может видеть всё)
+
+Администратор (admin):
+  / → /cafe/shift-closing (авторедирект на свою страницу)
+  /cafe/shift-closing → доступ
+  /api/cafe/* → доступ
+  Всё остальное → 403 или редирект на /cafe/shift-closing
+
+Кассир (cashier):
+  / → /cashier/shift-closing (авторедирект на свою страницу)
+  /cashier/shift-closing → доступ
+  /api/cashier/* → доступ
+  Всё остальное → 403 или редирект на /cashier/shift-closing
+```
+
+#### 1. Таблица `web_users` (новая)
+
+```sql
+CREATE TABLE web_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_user_id BIGINT NOT NULL,        -- владелец, к которому привязан
+    username TEXT UNIQUE NOT NULL,            -- логин (латиница)
+    password_hash TEXT NOT NULL,              -- bcrypt hash
+    role TEXT NOT NULL CHECK(role IN ('owner', 'admin', 'cashier')),
+    label TEXT,                               -- "Меруерт", "Батима", для отображения
+    poster_account_id INTEGER,               -- для admin: ID аккаунта Кафе; для cashier: ID основного
+    is_active BOOLEAN DEFAULT TRUE,          -- можно деактивировать без удаления
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP,
+    FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id)
+);
+```
+
+**Примеры записей:**
+| username | role | label | poster_account_id |
+|----------|------|-------|-------------------|
+| `boss` | owner | Владелец | NULL (полный доступ) |
+| `partner` | owner | Партнёр | NULL (полный доступ) |
+| `aisulu` | admin | Айсулу | 15 (Pizzburg-Cafe) |
+| `meruyert` | cashier | Меруерт | 10 (Pizzburg основной) |
+| `batima` | cashier | Батима | 10 (Pizzburg основной) |
+
+#### 2. Страница логина (`/login`)
+
+```
+┌─────────────────────────────────┐
+│                                 │
+│     🔒 Poster Helper           │
+│                                 │
+│  Логин:    [                 ]  │
+│  Пароль:   [                 ]  │
+│                                 │
+│         [  Войти  ]             │
+│                                 │
+│  (неправильный логин/пароль)    │
+│                                 │
+└─────────────────────────────────┘
+```
+
+- Минималистичный дизайн, mobile-friendly
+- Шаблон: `templates/login.html`
+- POST `/login` → проверка логина/пароля → создание Flask session → редирект по роли
+- GET `/logout` → очистка session → редирект на `/login`
+
+#### 3. Flask session и middleware
+
+**Сессия:**
+```python
+# При успешном логине:
+session['user_id'] = web_user['id']
+session['role'] = web_user['role']
+session['telegram_user_id'] = web_user['telegram_user_id']
+session['poster_account_id'] = web_user['poster_account_id']
+session['label'] = web_user['label']
+```
+
+**Middleware (`@app.before_request`):**
+```python
+# Открытые пути (без авторизации):
+OPEN_PATHS = ['/login', '/static', '/favicon.ico']
+
+# Путь → минимальная роль:
+ROLE_ACCESS = {
+    '/cafe/shift-closing': ['owner', 'admin'],
+    '/api/cafe/': ['owner', 'admin'],
+    '/cashier/shift-closing': ['owner', 'cashier'],
+    '/api/cashier/': ['owner', 'cashier'],
+    # Всё остальное: только owner
+}
+
+@app.before_request
+def check_auth():
+    # 1. Открытые пути — пропускаем
+    # 2. Нет session → redirect /login
+    # 3. Есть session → проверяем роль:
+    #    - owner → доступ везде
+    #    - admin → только /cafe/* и /api/cafe/*
+    #    - cashier → только /cashier/* и /api/cashier/*
+    # 4. Нет доступа → redirect на "свою" страницу
+```
+
+#### 4. Замена URL-схемы (убираем токены из URL)
+
+**Было (токен в URL):**
+```
+/cafe/{token}/shift-closing
+/api/cafe/{token}/poster-data
+/api/cafe/{token}/calculate
+...
+/cashier/{token}/shift-closing
+/api/cashier/{token}/salaries/calculate
+...
+```
+
+**Стало (session-based):**
+```
+/cafe/shift-closing
+/api/cafe/poster-data
+/api/cafe/calculate
+...
+/cashier/shift-closing
+/api/cashier/salaries/calculate
+...
+```
+
+Идентификация пользователя — через Flask session (`session['telegram_user_id']` + `session['poster_account_id']`), а не через токен в URL.
+
+**Обратная совместимость:**
+- Старые ссылки `/cafe/{token}/shift-closing` → редирект на `/login` (или на `/cafe/shift-closing` если уже залогинен)
+- Токен-таблицы (`cafe_access_tokens`, `cashier_access_tokens`) — оставляем пока, можно удалить позже
+
+#### 5. Изменения в существующих API endpoints
+
+**Для owner-only endpoints** (`/api/expenses`, `/api/supplies`, etc.):
+```python
+# Сейчас: g.user_id из Telegram init_data или TELEGRAM_USER_ID
+# После: g.user_id из session['telegram_user_id']
+# Оба варианта работают (Mini App через header, web через session)
+```
+
+**Для cafe endpoints** (`/api/cafe/*`):
+```python
+# Сейчас: resolve_cafe_token(token) → info
+# После: info из session (telegram_user_id + poster_account_id)
+# Хелпер: resolve_cafe_session() вместо resolve_cafe_token()
+```
+
+**Для cashier endpoints** (`/api/cashier/*`):
+```python
+# Аналогично cafe — session вместо token
+```
+
+#### 6. Команда бота `/staff` (замена `/cafe_token` и `/cashier_token`)
+
+```
+/staff list                              — список всех аккаунтов
+/staff create owner <логин> <пароль>     — создать владельца
+/staff create admin <логин> <пароль>     — создать админа (привязка к Кафе)
+/staff create cashier <логин> <пароль>   — создать кассира (привязка к Основному)
+/staff delete <id>                       — удалить аккаунт
+/staff reset <id> <новый_пароль>         — сбросить пароль
+```
+
+Старые команды `/cafe_token` и `/cashier_token` — оставляем для обратной совместимости или убираем.
+
+#### 7. Что меняется в файлах
+
+| Файл | Изменения |
+|------|-----------|
+| **database.py** | + таблица `web_users`, + CRUD-методы (create/get/list/delete/verify_password/update_last_login) |
+| **web_app.py** | + `/login` и `/logout` routes, + `check_auth()` middleware, + `resolve_cafe_session()` / `resolve_cashier_session()` хелперы, рефакторинг cafe/cashier routes (убрать `<token>`) |
+| **bot.py** | + команда `/staff`, (опционально) deprecate `/cafe_token` и `/cashier_token` |
+| **templates/login.html** | + Новый шаблон страницы логина |
+| **templates/shift_closing_cafe.html** | Убрать `TOKEN` из JS, API вызовы без токена в URL |
+| **templates/shift_closing_cashier.html** | Убрать `TOKEN` из JS, API вызовы без токена в URL |
+| **requirements.txt** | + `bcrypt` (для хеширования паролей) |
+
+#### 8. Безопасность
+
+- **Пароли**: bcrypt hash (не plain text)
+- **Сессии**: Flask session с `FLASK_SECRET_KEY` (уже есть)
+- **CSRF**: Flask session cookies (SameSite=Lax по умолчанию)
+- **Brute force**: Простой rate limit на `/login` (3-5 попыток, потом задержка)
+- **Деактивация**: `is_active = false` блокирует вход без удаления аккаунта
 
 ### Фаза 1B: Авто-переводы
-1. Endpoint `POST /api/shift-closing/transfers` + `POST /api/cafe/<token>/transfers`
+1. Endpoint `POST /api/shift-closing/transfers` + `POST /api/cafe/transfers`
 2. Блок переводов на странице владельца (ShiftClosing.tsx)
 3. Блок переводов на странице Кафе (shift_closing_cafe.html)
 
