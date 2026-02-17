@@ -1386,6 +1386,135 @@ async def cashier_token_command(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+@admin_only
+async def staff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /staff command - manage web user accounts (login/password auth)"""
+    telegram_user_id = update.effective_user.id
+    db = get_database()
+
+    args = context.args if context.args else []
+
+    if not args or args[0] == 'list':
+        users = db.list_web_users(telegram_user_id)
+        if not users:
+            await update.message.reply_text(
+                "Нет аккаунтов.\n\n"
+                "Создать: /staff create <роль> <логин> <пароль>\n"
+                "Роли: owner, admin, cashier\n\n"
+                "Пример: /staff create cashier meruyert 1234"
+            )
+            return
+
+        role_labels = {'owner': 'Владелец', 'admin': 'Админ', 'cashier': 'Кассир'}
+        lines = ["👥 Аккаунты:\n"]
+        for u in users:
+            active = "✅" if u.get('is_active', True) in (True, 1) else "❌"
+            role = role_labels.get(u['role'], u['role'])
+            label = u.get('label') or u['username']
+            last_login = u.get('last_login', '—') or '—'
+            lines.append(f"{active} ID {u['id']}: {label} ({role}) — логин: {u['username']}\n   Последний вход: {last_login}")
+
+        lines.append(f"\n/staff delete <id> — удалить")
+        lines.append(f"/staff reset <id> <пароль> — сменить пароль")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if args[0] == 'create' and len(args) >= 4:
+        role = args[1].lower()
+        username = args[2]
+        password = args[3]
+        label = ' '.join(args[4:]) if len(args) > 4 else None
+
+        if role not in ('owner', 'admin', 'cashier'):
+            await update.message.reply_text("Роль должна быть: owner, admin или cashier")
+            return
+
+        if len(password) < 4:
+            await update.message.reply_text("Пароль должен быть минимум 4 символа")
+            return
+
+        # Determine poster_account_id based on role
+        poster_account_id = None
+        accounts = db.get_accounts(telegram_user_id)
+
+        if role == 'admin':
+            # Admin → non-primary account (Cafe)
+            cafe_account = next((a for a in accounts if not a.get('is_primary')), None)
+            if not cafe_account:
+                await update.message.reply_text("Нет аккаунта Кафе. Сначала добавьте через /start")
+                return
+            poster_account_id = cafe_account['id']
+        elif role == 'cashier':
+            # Cashier → primary account (Main dept)
+            primary_account = next((a for a in accounts if a.get('is_primary')), None)
+            if not primary_account:
+                await update.message.reply_text("Нет основного аккаунта. Сначала добавьте через /start")
+                return
+            poster_account_id = primary_account['id']
+
+        user_id = db.create_web_user(
+            telegram_user_id=telegram_user_id,
+            username=username,
+            password=password,
+            role=role,
+            label=label or username,
+            poster_account_id=poster_account_id
+        )
+
+        if user_id:
+            role_labels = {'owner': 'Владелец', 'admin': 'Админ', 'cashier': 'Кассир'}
+            import os
+            base_url = os.environ.get('WEBHOOK_URL', 'https://your-app.railway.app')
+            await update.message.reply_text(
+                f"✅ Аккаунт создан (ID {user_id})\n\n"
+                f"Роль: {role_labels.get(role, role)}\n"
+                f"Логин: {username}\n"
+                f"Пароль: {password}\n\n"
+                f"Ссылка для входа: {base_url}/login"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка создания. Возможно, логин уже занят.")
+        return
+
+    if args[0] == 'delete' and len(args) > 1:
+        try:
+            user_id = int(args[1])
+            success = db.delete_web_user(user_id, telegram_user_id)
+            if success:
+                await update.message.reply_text(f"✅ Аккаунт ID {user_id} удалён.")
+            else:
+                await update.message.reply_text(f"Аккаунт ID {user_id} не найден.")
+        except ValueError:
+            await update.message.reply_text("Укажите числовой ID.")
+        return
+
+    if args[0] == 'reset' and len(args) >= 3:
+        try:
+            user_id = int(args[1])
+            new_password = args[2]
+            if len(new_password) < 4:
+                await update.message.reply_text("Пароль должен быть минимум 4 символа")
+                return
+            success = db.reset_web_user_password(user_id, telegram_user_id, new_password)
+            if success:
+                await update.message.reply_text(f"✅ Пароль для ID {user_id} обновлён.")
+            else:
+                await update.message.reply_text(f"Аккаунт ID {user_id} не найден.")
+        except ValueError:
+            await update.message.reply_text("Укажите числовой ID.")
+        return
+
+    await update.message.reply_text(
+        "Управление аккаунтами:\n\n"
+        "/staff list — список аккаунтов\n"
+        "/staff create <роль> <логин> <пароль> [имя]\n"
+        "  Роли: owner, admin, cashier\n"
+        "  Пример: /staff create cashier meruyert 1234 Меруерт\n"
+        "/staff delete <id> — удалить аккаунт\n"
+        "/staff reset <id> <пароль> — сменить пароль"
+    )
+
+
 @authorized_only
 async def accounts_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -6636,6 +6765,9 @@ def initialize_application():
 
     # Cashier access token management
     app.add_handler(CommandHandler("cashier_token", cashier_token_command))
+
+    # Web user management (login/password auth)
+    app.add_handler(CommandHandler("staff", staff_command))
 
     # Accounts check commands (сверка счетов двух отделов)
     app.add_handler(CommandHandler("accounts_check", accounts_check_command))

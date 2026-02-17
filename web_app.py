@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g, session
 from database import get_database
 import config
 
@@ -25,11 +25,134 @@ if not SECRET_KEY:
     print(f"⚠️  Warning: Using generated SECRET_KEY. Set FLASK_SECRET_KEY in .env for production")
 app.secret_key = SECRET_KEY
 
+from datetime import timedelta
+app.permanent_session_lifetime = timedelta(days=30)
+
 # Hardcoded user ID for demo (can be extended to multi-user with login)
 TELEGRAM_USER_ID = 167084307
 
 # Telegram Bot Token for WebApp validation
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+
+
+# ========================================
+# Authentication: Login/Logout + Middleware
+# ========================================
+
+# Paths that don't require authentication
+OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health')
+
+
+def get_home_for_role(role):
+    """Get the home page URL for a given role"""
+    if role == 'admin':
+        return '/cafe/shift-closing'
+    elif role == 'cashier':
+        return '/cashier/shift-closing'
+    return '/'
+
+
+def check_role_access(path, role):
+    """Check if the given role has access to the given path.
+    Returns True if access is allowed, False otherwise."""
+    if role == 'owner':
+        return True
+
+    if role == 'admin':
+        if path.startswith('/cafe/') or path.startswith('/api/cafe/'):
+            return True
+        if path == '/logout':
+            return True
+        return False
+
+    if role == 'cashier':
+        if path.startswith('/cashier/') or path.startswith('/api/cashier/'):
+            return True
+        if path == '/logout':
+            return True
+        return False
+
+    return False
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page and authentication"""
+    # If already logged in, redirect to home
+    if session.get('web_user_id'):
+        return redirect(get_home_for_role(session.get('role', 'owner')))
+
+    if request.method == 'GET':
+        return render_template('login.html')
+
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '')
+
+    if not username or not password:
+        return render_template('login.html', error='Введите логин и пароль', username=username)
+
+    db = get_database()
+    user = db.verify_web_user(username, password)
+
+    if not user:
+        return render_template('login.html', error='Неправильный логин или пароль', username=username)
+
+    # Set session
+    session.clear()
+    session['web_user_id'] = user['id']
+    session['role'] = user['role']
+    session['telegram_user_id'] = user['telegram_user_id']
+    session['poster_account_id'] = user.get('poster_account_id')
+    session['label'] = user.get('label', username)
+    session.permanent = True
+
+    return redirect(get_home_for_role(user['role']))
+
+
+@app.route('/logout')
+def logout():
+    """Logout and redirect to login page"""
+    session.clear()
+    return redirect('/login')
+
+
+@app.before_request
+def check_auth():
+    """Authentication middleware — check session and role for every request"""
+    path = request.path
+
+    # Open paths — no auth needed
+    for open_path in OPEN_PATHS:
+        if path.startswith(open_path):
+            return None
+
+    # Mini App API calls with Telegram init data — pass through (existing auth)
+    if path.startswith('/api/'):
+        init_data = request.headers.get('X-Telegram-Init-Data', '')
+        if init_data:
+            # This is a Mini App call — let the existing validate_api_request handle it
+            return None
+
+    # Check session
+    web_user_id = session.get('web_user_id')
+    if not web_user_id:
+        # Not logged in
+        if path.startswith('/api/'):
+            return jsonify({'error': 'Unauthorized'}), 401
+        return redirect('/login')
+
+    role = session.get('role', '')
+
+    # Check role access
+    if not check_role_access(path, role):
+        # No access — redirect to their home page
+        if path.startswith('/api/'):
+            return jsonify({'error': 'Forbidden'}), 403
+        return redirect(get_home_for_role(role))
+
+    # Set g.user_id from session for owner pages
+    if role == 'owner' and path.startswith('/api/') and not path.startswith('/api/cafe/') and not path.startswith('/api/cashier/'):
+        g.user_id = session.get('telegram_user_id', TELEGRAM_USER_ID)
 
 
 def get_date_in_kz_tz(dt_value, kz_tz) -> str:
@@ -114,7 +237,12 @@ def load_items_from_csv():
 
 @app.route('/')
 def index():
-    """Redirect to aliases list"""
+    """Redirect based on user role"""
+    role = session.get('role')
+    if role == 'admin':
+        return redirect('/cafe/shift-closing')
+    elif role == 'cashier':
+        return redirect('/cashier/shift-closing')
     return redirect(url_for('list_aliases'))
 
 
@@ -291,22 +419,25 @@ def get_user_id_from_init_data(init_data: str) -> int:
 
 @app.before_request
 def validate_api_request():
-    """Validate API requests from Mini App"""
+    """Validate API requests — from Mini App (header) or web session"""
     if request.path.startswith('/api/'):
         init_data = request.headers.get('X-Telegram-Init-Data', '')
 
-        # If no init_data provided, use default user (for web interface)
-        if not init_data:
-            g.user_id = TELEGRAM_USER_ID
-        # Validate init data if provided
-        elif not validate_telegram_web_app_data(init_data, TELEGRAM_TOKEN):
-            # In development, allow without validation
-            if not TELEGRAM_TOKEN:
-                g.user_id = TELEGRAM_USER_ID
+        if init_data:
+            # Mini App call — validate Telegram signature
+            if not validate_telegram_web_app_data(init_data, TELEGRAM_TOKEN):
+                if not TELEGRAM_TOKEN:
+                    g.user_id = TELEGRAM_USER_ID
+                else:
+                    return jsonify({'error': 'Unauthorized'}), 401
             else:
-                return jsonify({'error': 'Unauthorized'}), 401
+                g.user_id = get_user_id_from_init_data(init_data)
+        elif session.get('telegram_user_id'):
+            # Web session — use user_id from session
+            g.user_id = session['telegram_user_id']
         else:
-            g.user_id = get_user_id_from_init_data(init_data)
+            # Fallback for development
+            g.user_id = TELEGRAM_USER_ID
 
 
 @app.route('/api/dashboard')
@@ -4510,29 +4641,56 @@ def serve_mini_app(path=''):
 # Cafe Shift Closing (isolated for employees)
 # ========================================
 
-def resolve_cafe_token(token):
-    """Resolve cafe access token to account info, or abort 404"""
+def resolve_cafe_info():
+    """Resolve cafe account info from session (admin/owner) or abort."""
     db = get_database()
-    info = db.get_cafe_token(token)
-    if not info:
-        from flask import abort
-        abort(404)
-    return info
+    role = session.get('role')
+    if role == 'admin':
+        poster_account_id = session.get('poster_account_id')
+        if poster_account_id:
+            info = db.get_web_user_poster_info(session['web_user_id'])
+            if info:
+                return info
+    elif role == 'owner':
+        telegram_user_id = session.get('telegram_user_id')
+        accounts = db.get_accounts(telegram_user_id)
+        cafe_account = next((a for a in accounts if not a.get('is_primary')), None)
+        if cafe_account:
+            return {
+                'telegram_user_id': telegram_user_id,
+                'poster_account_id': cafe_account['id'],
+                'account_name': cafe_account.get('account_name', 'Cafe'),
+                'poster_token': cafe_account.get('poster_token'),
+                'poster_user_id': cafe_account.get('poster_user_id'),
+                'poster_base_url': cafe_account.get('poster_base_url'),
+            }
+    from flask import abort
+    abort(403)
 
 
+# Legacy token-based URL → redirect to session-based
 @app.route('/cafe/<token>/shift-closing')
-def cafe_shift_closing(token):
-    info = resolve_cafe_token(token)
+def cafe_shift_closing_legacy(token):
+    return redirect('/cafe/shift-closing')
+
+
+@app.route('/cafe/shift-closing')
+def cafe_shift_closing():
+    info = resolve_cafe_info()
     return render_template('shift_closing_cafe.html',
-                           token=token,
                            account_name=info.get('account_name', 'Cafe'))
 
 
 @app.route('/api/cafe/<token>/poster-data')
-def api_cafe_poster_data(token):
+def api_cafe_poster_data_legacy(token):
+    return redirect(f'/api/cafe/poster-data?{request.query_string.decode()}')
+
+
+@app.route('/api/cafe/poster-data')
+def api_cafe_poster_data():
     """Get Poster data for cafe shift closing"""
     from datetime import datetime, timedelta, timezone
-    info = resolve_cafe_token(token)
+    info = resolve_cafe_info()
     date = request.args.get('date')  # YYYYMMDD
 
     try:
@@ -4641,9 +4799,14 @@ def api_cafe_poster_data(token):
 
 
 @app.route('/api/cafe/<token>/calculate', methods=['POST'])
-def api_cafe_calculate(token):
+def api_cafe_calculate_legacy(token):
+    return redirect('/api/cafe/calculate', code=307)
+
+
+@app.route('/api/cafe/calculate', methods=['POST'])
+def api_cafe_calculate():
     """Calculate cafe shift closing totals"""
-    resolve_cafe_token(token)  # validate token
+    resolve_cafe_info()  # validate access
     data = request.json
 
     try:
@@ -4698,10 +4861,15 @@ def api_cafe_calculate(token):
 
 
 @app.route('/api/cafe/<token>/save', methods=['POST'])
-def api_cafe_save(token):
+def api_cafe_save_legacy(token):
+    return redirect('/api/cafe/save', code=307)
+
+
+@app.route('/api/cafe/save', methods=['POST'])
+def api_cafe_save():
     """Save cafe shift closing data"""
     from datetime import datetime, timedelta, timezone
-    info = resolve_cafe_token(token)
+    info = resolve_cafe_info()
     data = request.json
     db = get_database()
 
@@ -4723,10 +4891,15 @@ def api_cafe_save(token):
 
 
 @app.route('/api/cafe/<token>/history')
-def api_cafe_history(token):
+def api_cafe_history_legacy(token):
+    return redirect(f'/api/cafe/history?{request.query_string.decode()}')
+
+
+@app.route('/api/cafe/history')
+def api_cafe_history():
     """Get cafe shift closing data for a specific date"""
     from datetime import datetime, timedelta, timezone
-    info = resolve_cafe_token(token)
+    info = resolve_cafe_info()
     date = request.args.get('date')
     db = get_database()
 
@@ -4745,9 +4918,14 @@ def api_cafe_history(token):
 
 
 @app.route('/api/cafe/<token>/dates')
-def api_cafe_dates(token):
+def api_cafe_dates_legacy(token):
+    return redirect(f'/api/cafe/dates?{request.query_string.decode()}')
+
+
+@app.route('/api/cafe/dates')
+def api_cafe_dates():
     """Get list of dates with cafe shift closing history"""
-    info = resolve_cafe_token(token)
+    info = resolve_cafe_info()
     db = get_database()
 
     try:
@@ -4761,10 +4939,15 @@ def api_cafe_dates(token):
 
 
 @app.route('/api/cafe/<token>/report')
-def api_cafe_report(token):
+def api_cafe_report_legacy(token):
+    return redirect(f'/api/cafe/report?{request.query_string.decode()}')
+
+
+@app.route('/api/cafe/report')
+def api_cafe_report():
     """Generate text report for cafe shift closing"""
     from datetime import datetime, timedelta, timezone
-    info = resolve_cafe_token(token)
+    info = resolve_cafe_info()
     db = get_database()
     kz_tz = timezone(timedelta(hours=5))
 
@@ -4862,28 +5045,55 @@ def api_cafe_report(token):
 
 # ==================== Cashier Shift Closing Routes ====================
 
-def resolve_cashier_token(token):
-    """Resolve cashier access token to account info, or abort 404"""
+def resolve_cashier_info():
+    """Resolve cashier account info from session (cashier/owner) or abort."""
     db = get_database()
-    info = db.get_cashier_token(token)
-    if not info:
-        from flask import abort
-        abort(404)
-    return info
+    role = session.get('role')
+    if role == 'cashier':
+        poster_account_id = session.get('poster_account_id')
+        if poster_account_id:
+            info = db.get_web_user_poster_info(session['web_user_id'])
+            if info:
+                return info
+    elif role == 'owner':
+        telegram_user_id = session.get('telegram_user_id')
+        accounts = db.get_accounts(telegram_user_id)
+        primary_account = next((a for a in accounts if a.get('is_primary')), None)
+        if primary_account:
+            return {
+                'telegram_user_id': telegram_user_id,
+                'poster_account_id': primary_account['id'],
+                'account_name': primary_account.get('account_name', 'Основной отдел'),
+                'poster_token': primary_account.get('poster_token'),
+                'poster_user_id': primary_account.get('poster_user_id'),
+                'poster_base_url': primary_account.get('poster_base_url'),
+            }
+    from flask import abort
+    abort(403)
 
 
+# Legacy token-based URL → redirect
 @app.route('/cashier/<token>/shift-closing')
-def cashier_shift_closing(token):
-    info = resolve_cashier_token(token)
+def cashier_shift_closing_legacy(token):
+    return redirect('/cashier/shift-closing')
+
+
+@app.route('/cashier/shift-closing')
+def cashier_shift_closing():
+    info = resolve_cashier_info()
     return render_template('shift_closing_cashier.html',
-                           token=token,
                            account_name=info.get('account_name', 'Основной отдел'))
 
 
 @app.route('/api/cashier/<token>/employees/last')
-def api_cashier_employees_last(token):
+def api_cashier_employees_last_legacy(token):
+    return redirect('/api/cashier/employees/last')
+
+
+@app.route('/api/cashier/employees/last')
+def api_cashier_employees_last():
     """Get last used employee names for auto-fill"""
-    info = resolve_cashier_token(token)
+    info = resolve_cashier_info()
     db = get_database()
 
     try:
@@ -4896,9 +5106,14 @@ def api_cashier_employees_last(token):
 
 
 @app.route('/api/cashier/<token>/salaries/calculate', methods=['POST'])
-def api_cashier_salaries_calculate(token):
+def api_cashier_salaries_calculate_legacy(token):
+    return redirect('/api/cashier/salaries/calculate', code=307)
+
+
+@app.route('/api/cashier/salaries/calculate', methods=['POST'])
+def api_cashier_salaries_calculate():
     """Calculate salaries without creating transactions"""
-    info = resolve_cashier_token(token)
+    info = resolve_cashier_info()
     data = request.json
 
     try:
@@ -4956,9 +5171,14 @@ def api_cashier_salaries_calculate(token):
 
 
 @app.route('/api/cashier/<token>/salaries/create', methods=['POST'])
-def api_cashier_salaries_create(token):
+def api_cashier_salaries_create_legacy(token):
+    return redirect('/api/cashier/salaries/create', code=307)
+
+
+@app.route('/api/cashier/salaries/create', methods=['POST'])
+def api_cashier_salaries_create():
     """Create salary transactions in Poster"""
-    info = resolve_cashier_token(token)
+    info = resolve_cashier_info()
     data = request.json
     db = get_database()
 
@@ -5053,9 +5273,14 @@ def api_cashier_salaries_create(token):
 
 
 @app.route('/api/cashier/<token>/shift-data/save', methods=['POST'])
-def api_cashier_shift_data_save(token):
+def api_cashier_shift_data_save_legacy(token):
+    return redirect('/api/cashier/shift-data/save', code=307)
+
+
+@app.route('/api/cashier/shift-data/save', methods=['POST'])
+def api_cashier_shift_data_save():
     """Save cashier's 5 shift values"""
-    info = resolve_cashier_token(token)
+    info = resolve_cashier_info()
     data = request.json
     db = get_database()
 
@@ -5098,9 +5323,14 @@ def api_cashier_shift_data_save(token):
 
 
 @app.route('/api/cashier/<token>/shift-data/status')
-def api_cashier_shift_data_status(token):
+def api_cashier_shift_data_status_legacy(token):
+    return redirect('/api/cashier/shift-data/status')
+
+
+@app.route('/api/cashier/shift-data/status')
+def api_cashier_shift_data_status():
     """Check if shift data was already submitted today"""
-    info = resolve_cashier_token(token)
+    info = resolve_cashier_info()
     db = get_database()
 
     try:

@@ -745,6 +745,9 @@ class UserDatabase:
         # Run migration for cashier access tokens and cashier_shift_data
         self._migrate_cashier_access()
 
+        # Run migration for web_users (auth system)
+        self._migrate_web_users()
+
     def _migrate_cafe_access(self):
         """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
         try:
@@ -902,6 +905,52 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Cashier migration error: {e}")
+
+    def _migrate_web_users(self):
+        """Create web_users table for session-based authentication with roles"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS web_users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        role TEXT NOT NULL CHECK(role IN ('owner', 'admin', 'cashier')),
+                        label TEXT,
+                        poster_account_id INTEGER,
+                        is_active INTEGER DEFAULT 1,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_login TEXT,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS web_users (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        role TEXT NOT NULL CHECK(role IN ('owner', 'admin', 'cashier')),
+                        label TEXT,
+                        poster_account_id INTEGER,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_login TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Web users migration: completed")
+
+        except Exception as e:
+            logger.error(f"Web users migration error: {e}")
 
     def _migrate_to_multi_account(self):
         """
@@ -3328,6 +3377,211 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Failed to get cashier last employees: {e}")
+            return None
+
+    # ==================== Web Users (Auth) Methods ====================
+
+    def create_web_user(self, telegram_user_id: int, username: str, password: str, role: str,
+                        label: str = None, poster_account_id: int = None) -> Optional[int]:
+        """Create a new web user with bcrypt-hashed password. Returns user id."""
+        import bcrypt
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO web_users (telegram_user_id, username, password_hash, role, label, poster_account_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, username, password_hash, role, label, poster_account_id))
+                user_id = cursor.lastrowid
+            else:
+                cursor.execute("""
+                    INSERT INTO web_users (telegram_user_id, username, password_hash, role, label, poster_account_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (telegram_user_id, username, password_hash, role, label, poster_account_id))
+                user_id = cursor.fetchone()[0]
+
+            conn.commit()
+            conn.close()
+            return user_id
+
+        except Exception as e:
+            logger.error(f"Failed to create web user: {e}")
+            return None
+
+    def verify_web_user(self, username: str, password: str) -> Optional[Dict]:
+        """Verify username/password and return user dict if valid, None otherwise."""
+        import bcrypt
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT id, telegram_user_id, username, password_hash, role, label,
+                       poster_account_id, is_active
+                FROM web_users
+                WHERE username = {placeholder}
+            """, (username,))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+
+            if not row:
+                conn.close()
+                return None
+
+            user = dict(zip(columns, row))
+
+            # Check active
+            is_active = user.get('is_active')
+            if is_active == 0 or is_active is False:
+                conn.close()
+                return None
+
+            # Verify password
+            if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+                conn.close()
+                return None
+
+            # Update last_login
+            cursor.execute(f"""
+                UPDATE web_users SET last_login = CURRENT_TIMESTAMP
+                WHERE id = {placeholder}
+            """, (user['id'],))
+            conn.commit()
+            conn.close()
+
+            del user['password_hash']
+            return user
+
+        except Exception as e:
+            logger.error(f"Failed to verify web user: {e}")
+            return None
+
+    def get_web_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """Get web user by id (for session validation)."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT id, telegram_user_id, username, role, label,
+                       poster_account_id, is_active
+                FROM web_users
+                WHERE id = {placeholder}
+            """, (user_id,))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get web user: {e}")
+            return None
+
+    def list_web_users(self, telegram_user_id: int) -> list:
+        """List all web users for a given telegram owner."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT id, username, role, label, poster_account_id, is_active, created_at, last_login
+                FROM web_users
+                WHERE telegram_user_id = {placeholder}
+                ORDER BY role, username
+            """, (telegram_user_id,))
+
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(zip(columns, row)) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Failed to list web users: {e}")
+            return []
+
+    def delete_web_user(self, user_id: int, telegram_user_id: int) -> bool:
+        """Delete a web user by id. Only the telegram owner can delete."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                DELETE FROM web_users
+                WHERE id = {placeholder} AND telegram_user_id = {placeholder}
+            """, (user_id, telegram_user_id))
+
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Failed to delete web user: {e}")
+            return False
+
+    def reset_web_user_password(self, user_id: int, telegram_user_id: int, new_password: str) -> bool:
+        """Reset password for a web user. Only the telegram owner can reset."""
+        import bcrypt
+        password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE web_users SET password_hash = {placeholder}
+                WHERE id = {placeholder} AND telegram_user_id = {placeholder}
+            """, (password_hash, user_id, telegram_user_id))
+
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Failed to reset web user password: {e}")
+            return False
+
+    def get_web_user_poster_info(self, web_user_id: int) -> Optional[Dict]:
+        """Get poster account info for a web user (for session-based cafe/cashier routes)."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT u.id, u.telegram_user_id, u.role, u.poster_account_id, u.label,
+                       a.account_name, a.poster_token, a.poster_user_id, a.poster_base_url
+                FROM web_users u
+                LEFT JOIN poster_accounts a ON a.id = u.poster_account_id
+                WHERE u.id = {placeholder}
+            """, (web_user_id,))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get web user poster info: {e}")
             return None
 
     # ==================== Supply Drafts Methods ====================
