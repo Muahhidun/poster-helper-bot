@@ -742,6 +742,9 @@ class UserDatabase:
         # Run migration for cafe access tokens and shift_closings.poster_account_id
         self._migrate_cafe_access()
 
+        # Run migration for cashier access tokens and cashier_shift_data
+        self._migrate_cashier_access()
+
     def _migrate_cafe_access(self):
         """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
         try:
@@ -800,6 +803,105 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Cafe migration error: {e}")
+
+    def _migrate_cashier_access(self):
+        """Create cashier_access_tokens and cashier_shift_data tables, add transfers_created to shift_closings"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 1. Create cashier_access_tokens table
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cashier_access_tokens (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        token TEXT UNIQUE NOT NULL,
+                        telegram_user_id INTEGER NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        label TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cashier_access_tokens (
+                        id SERIAL PRIMARY KEY,
+                        token TEXT UNIQUE NOT NULL,
+                        telegram_user_id BIGINT NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        label TEXT,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+
+            # 2. Create cashier_shift_data table
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cashier_shift_data (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        cashier_count INTEGER,
+                        cashier_names TEXT,
+                        assistant_start_time TEXT,
+                        doner_name TEXT,
+                        assistant_name TEXT,
+                        salaries_data TEXT,
+                        salaries_created INTEGER DEFAULT 0,
+                        wolt REAL DEFAULT 0,
+                        halyk REAL DEFAULT 0,
+                        cash_bills REAL DEFAULT 0,
+                        cash_coins REAL DEFAULT 0,
+                        expenses REAL DEFAULT 0,
+                        shift_data_submitted INTEGER DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date)
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cashier_shift_data (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        date DATE NOT NULL,
+                        cashier_count INTEGER,
+                        cashier_names TEXT,
+                        assistant_start_time TEXT,
+                        doner_name TEXT,
+                        assistant_name TEXT,
+                        salaries_data TEXT,
+                        salaries_created BOOLEAN DEFAULT FALSE,
+                        wolt REAL DEFAULT 0,
+                        halyk REAL DEFAULT 0,
+                        cash_bills REAL DEFAULT 0,
+                        cash_coins REAL DEFAULT 0,
+                        expenses REAL DEFAULT 0,
+                        shift_data_submitted BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date)
+                    )
+                """)
+
+            # 3. Add transfers_created to shift_closings
+            try:
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN transfers_created INTEGER DEFAULT 0")
+                else:
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN transfers_created BOOLEAN DEFAULT FALSE")
+                logger.info("✅ Cashier migration: added transfers_created to shift_closings")
+            except Exception:
+                pass  # Column already exists
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Cashier migration: completed")
+
+        except Exception as e:
+            logger.error(f"Cashier migration error: {e}")
 
     def _migrate_to_multi_account(self):
         """
@@ -3029,6 +3131,204 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to delete cafe token: {e}")
             return False
+
+    # ==================== Cashier Access Token Methods ====================
+
+    def create_cashier_token(self, telegram_user_id: int, poster_account_id: int, label: str = None) -> str:
+        """Create a new cashier access token, returns the token string"""
+        import secrets
+        token = secrets.token_urlsafe(24)
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if DB_TYPE == "sqlite":
+            cursor.execute("""
+                INSERT INTO cashier_access_tokens (token, telegram_user_id, poster_account_id, label)
+                VALUES (?, ?, ?, ?)
+            """, (token, telegram_user_id, poster_account_id, label))
+        else:
+            cursor.execute("""
+                INSERT INTO cashier_access_tokens (token, telegram_user_id, poster_account_id, label)
+                VALUES (%s, %s, %s, %s)
+            """, (token, telegram_user_id, poster_account_id, label))
+
+        conn.commit()
+        conn.close()
+        return token
+
+    def get_cashier_token(self, token: str) -> Optional[Dict]:
+        """Resolve a cashier access token to user_id and account info"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT t.telegram_user_id, t.poster_account_id, t.label,
+                       a.account_name, a.poster_token, a.poster_user_id, a.poster_base_url
+                FROM cashier_access_tokens t
+                JOIN poster_accounts a ON a.id = t.poster_account_id
+                WHERE t.token = {placeholder}
+            """, (token,))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get cashier token: {e}")
+            return None
+
+    def list_cashier_tokens(self, telegram_user_id: int) -> list:
+        """List all cashier access tokens for a user"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT t.id, t.token, t.label, t.created_at, a.account_name
+                FROM cashier_access_tokens t
+                JOIN poster_accounts a ON a.id = t.poster_account_id
+                WHERE t.telegram_user_id = {placeholder}
+                ORDER BY t.created_at DESC
+            """, (telegram_user_id,))
+
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(zip(columns, row)) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Failed to list cashier tokens: {e}")
+            return []
+
+    def delete_cashier_token(self, token_id: int, telegram_user_id: int) -> bool:
+        """Delete a cashier access token"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                DELETE FROM cashier_access_tokens
+                WHERE id = {placeholder} AND telegram_user_id = {placeholder}
+            """, (token_id, telegram_user_id))
+
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Failed to delete cashier token: {e}")
+            return False
+
+    # ==================== Cashier Shift Data Methods ====================
+
+    def save_cashier_shift_data(self, telegram_user_id: int, date: str, data: dict) -> bool:
+        """Save or update cashier shift data for a specific date (upsert)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            fields = [
+                'cashier_count', 'cashier_names', 'assistant_start_time',
+                'doner_name', 'assistant_name', 'salaries_data', 'salaries_created',
+                'wolt', 'halyk', 'cash_bills', 'cash_coins', 'expenses',
+                'shift_data_submitted'
+            ]
+
+            values = [data.get(f, 0 if f not in ('cashier_names', 'assistant_start_time', 'doner_name', 'assistant_name', 'salaries_data') else data.get(f)) for f in fields]
+
+            if DB_TYPE == "sqlite":
+                placeholders = ', '.join(['?'] * (len(fields) + 2))
+                fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
+                update_parts = ', '.join([f'{f} = excluded.{f}' for f in fields])
+                cursor.execute(f"""
+                    INSERT INTO cashier_shift_data ({fields_str})
+                    VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date)
+                    DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                """, [telegram_user_id, date] + values)
+            else:
+                placeholders = ', '.join(['%s'] * (len(fields) + 2))
+                fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
+                update_parts = ', '.join([f'{f} = EXCLUDED.{f}' for f in fields])
+                cursor.execute(f"""
+                    INSERT INTO cashier_shift_data ({fields_str})
+                    VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date)
+                    DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                """, [telegram_user_id, date] + values)
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save cashier shift data: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def get_cashier_shift_data(self, telegram_user_id: int, date: str) -> Optional[Dict]:
+        """Get cashier shift data for a specific date"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT * FROM cashier_shift_data
+                WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+            """, (telegram_user_id, date))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get cashier shift data: {e}")
+            return None
+
+    def get_cashier_last_employees(self, telegram_user_id: int) -> Optional[Dict]:
+        """Get most recent cashier shift data (for auto-filling names)"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT cashier_count, cashier_names, assistant_start_time,
+                       doner_name, assistant_name
+                FROM cashier_shift_data
+                WHERE telegram_user_id = {placeholder}
+                  AND cashier_names IS NOT NULL
+                ORDER BY date DESC
+                LIMIT 1
+            """, (telegram_user_id,))
+
+            columns = [desc[0] for desc in cursor.description]
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(zip(columns, row))
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get cashier last employees: {e}")
+            return None
 
     # ==================== Supply Drafts Methods ====================
 

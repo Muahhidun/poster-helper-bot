@@ -1314,6 +1314,78 @@ async def cafe_token_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+@admin_only
+async def cashier_token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cashier_token command - manage cashier access tokens for main dept shift closing"""
+    telegram_user_id = update.effective_user.id
+    db = get_database()
+
+    args = context.args if context.args else []
+
+    if not args or args[0] == 'list':
+        tokens = db.list_cashier_tokens(telegram_user_id)
+        if not tokens:
+            await update.message.reply_text(
+                "Нет токенов доступа для Кассира.\n\n"
+                "Создать: /cashier_token create [label]\n"
+                "Пример: /cashier_token create Кассир"
+            )
+            return
+
+        lines = ["Токены доступа Кассира:\n"]
+        for t in tokens:
+            lines.append(
+                f"ID {t['id']}: {t.get('account_name', '?')} — {t.get('label', 'без метки')}\n"
+                f"Создан: {t.get('created_at', '?')}"
+            )
+        lines.append(f"\nУдалить: /cashier_token delete <id>")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    if args[0] == 'create':
+        label = ' '.join(args[1:]) if len(args) > 1 else 'Кассир'
+
+        # Find primary account (main dept)
+        accounts = db.get_accounts(telegram_user_id)
+        primary_account = next((a for a in accounts if a.get('is_primary')), None)
+
+        if not primary_account:
+            await update.message.reply_text("Нет основного аккаунта. Сначала добавьте через /start")
+            return
+
+        token = db.create_cashier_token(telegram_user_id, primary_account['id'], label)
+
+        import os
+        base_url = os.environ.get('WEBHOOK_URL', 'https://your-app.railway.app')
+        url = f"{base_url}/cashier/{token}/shift-closing"
+
+        await update.message.reply_text(
+            f"Токен создан для {primary_account['account_name']} ({label})\n\n"
+            f"Ссылка для кассира:\n{url}\n\n"
+            f"Кассир может открыть эту ссылку в браузере телефона."
+        )
+        return
+
+    if args[0] == 'delete' and len(args) > 1:
+        try:
+            token_id = int(args[1])
+            success = db.delete_cashier_token(token_id, telegram_user_id)
+            if success:
+                await update.message.reply_text(f"Токен ID {token_id} удалён.")
+            else:
+                await update.message.reply_text(f"Токен ID {token_id} не найден.")
+        except ValueError:
+            await update.message.reply_text("Укажите числовой ID токена.")
+        return
+
+    await update.message.reply_text(
+        "Управление токенами Кассира:\n\n"
+        "/cashier_token list — список токенов\n"
+        "/cashier_token create [метка] — создать токен\n"
+        "/cashier_token delete <id> — удалить токен"
+    )
+
+
 @authorized_only
 async def accounts_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -6561,6 +6633,9 @@ def initialize_application():
 
     # Cafe access token management
     app.add_handler(CommandHandler("cafe_token", cafe_token_command))
+
+    # Cashier access token management
+    app.add_handler(CommandHandler("cashier_token", cashier_token_command))
 
     # Accounts check commands (сверка счетов двух отделов)
     app.add_handler(CommandHandler("accounts_check", accounts_check_command))

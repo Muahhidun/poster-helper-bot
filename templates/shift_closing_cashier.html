@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{{ account_name }} — Кассир</title>
+    <style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;-webkit-text-size-adjust:100%}
+
+.sc{max-width:480px;margin:0 auto;padding:8px 10px 24px}
+.sc-title{text-align:center;font-size:15px;font-weight:700;color:#1c1c1e;padding:10px 0 4px}
+.sc-title-sub{text-align:center;font-size:12px;color:#8e8e93;margin-bottom:10px}
+
+.sc-card{background:#fff;border-radius:12px;padding:12px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.sc-card-title{font-size:13px;font-weight:600;color:#8e8e93;text-transform:uppercase;letter-spacing:.3px;margin-bottom:10px}
+.sc-field{margin-bottom:8px}
+.sc-field:last-child{margin-bottom:0}
+.sc-field label{display:block;font-size:13px;color:#6c6c70;margin-bottom:3px;font-weight:500}
+.sc-field input{width:100%;padding:10px 12px;border:1.5px solid #d1d1d6;border-radius:10px;font-size:17px;text-align:left;font-weight:600;color:#1c1c1e;background:#fff;-webkit-appearance:none;appearance:none;transition:border-color .15s}
+.sc-field input[type="number"]{text-align:right;font-variant-numeric:tabular-nums}
+.sc-field input:focus{outline:none;border-color:#007aff;box-shadow:0 0 0 3px rgba(0,122,255,.12)}
+.sc-field input::placeholder{color:#c7c7cc;font-weight:400}
+
+.sc-row-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.sc-row-pair .sc-field{margin-bottom:0}
+
+.sc-toggle-group{display:flex;gap:6px;margin-bottom:10px}
+.sc-toggle{flex:1;padding:10px 0;border-radius:10px;border:1.5px solid #d1d1d6;background:#fff;font-size:15px;font-weight:600;color:#1c1c1e;cursor:pointer;text-align:center;transition:all .15s}
+.sc-toggle.active{background:#007aff;border-color:#007aff;color:#fff}
+.sc-toggle:active{opacity:.7}
+
+.sc-btn{display:block;width:100%;padding:14px 0;border-radius:12px;font-size:16px;font-weight:600;border:none;cursor:pointer;background:#007aff;color:#fff;-webkit-appearance:none;transition:opacity .15s;margin-bottom:8px}
+.sc-btn:active{opacity:.7}
+.sc-btn:disabled{opacity:.4;cursor:default}
+.sc-btn-sec{background:#e5e5ea;color:#1c1c1e}
+.sc-btn-green{background:#34c759}
+.sc-btn-row{display:flex;gap:8px;margin-bottom:8px}
+.sc-btn-row .sc-btn{flex:1;margin-bottom:0}
+
+.sc-salary-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #e5e5ea}
+.sc-salary-item:last-child{border-bottom:none}
+.sc-salary-role{font-size:13px;color:#8e8e93}
+.sc-salary-name{font-size:15px;font-weight:600;color:#1c1c1e}
+.sc-salary-amount{font-size:17px;font-weight:700;color:#1c1c1e;font-variant-numeric:tabular-nums}
+.sc-salary-total{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-radius:10px;background:#f2f2f7;margin-top:8px;font-size:16px;font-weight:700;color:#1c1c1e}
+.sc-salary-total span:last-child{font-size:20px;font-variant-numeric:tabular-nums}
+
+.sc-banner{padding:10px 14px;border-radius:10px;text-align:center;font-size:14px;font-weight:500;margin-bottom:10px}
+.sc-banner.info{background:#007aff15;color:#007aff}
+.sc-banner.success{background:#34c75920;color:#30d158}
+.sc-banner.error{background:#ff3b3020;color:#ff3b30}
+.sc-banner.warning{background:#ff950020;color:#ff9500}
+
+.hidden{display:none !important}
+.loading{opacity:.5;pointer-events:none}
+
+.sc-step-indicator{display:flex;justify-content:center;gap:8px;margin-bottom:12px}
+.sc-step-dot{width:8px;height:8px;border-radius:50%;background:#d1d1d6;transition:background .2s}
+.sc-step-dot.active{background:#007aff}
+.sc-step-dot.done{background:#34c759}
+
+@media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}}
+    </style>
+</head>
+<body>
+<div class="sc">
+    <div class="sc-title">{{ account_name }}</div>
+    <div class="sc-title-sub">Закрытие смены — Кассир</div>
+
+    <!-- Step indicator -->
+    <div class="sc-step-indicator">
+        <div class="sc-step-dot active" id="dot1"></div>
+        <div class="sc-step-dot" id="dot2"></div>
+        <div class="sc-step-dot" id="dot3"></div>
+        <div class="sc-step-dot" id="dot4"></div>
+    </div>
+
+    <!-- Status banner -->
+    <div id="banner" class="sc-banner hidden"></div>
+
+    <!-- ==================== STEP 1: Salary Input ==================== -->
+    <div id="step1">
+        <div class="sc-card">
+            <div class="sc-card-title">Кассиры</div>
+            <div class="sc-toggle-group">
+                <button class="sc-toggle active" id="btn2" onclick="setCashierCount(2)">2 кассира</button>
+                <button class="sc-toggle" id="btn3" onclick="setCashierCount(3)">3 кассира</button>
+            </div>
+            <div class="sc-field">
+                <label>Кассир 1 (на кассе)</label>
+                <input type="text" id="cashier1" placeholder="Имя" autocomplete="off">
+            </div>
+            <div class="sc-field">
+                <label>Кассир 2</label>
+                <input type="text" id="cashier2" placeholder="Имя" autocomplete="off">
+            </div>
+            <div class="sc-field hidden" id="cashier3_field">
+                <label>Кассир 3</label>
+                <input type="text" id="cashier3" placeholder="Имя" autocomplete="off">
+            </div>
+        </div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Помощник донерщика</div>
+            <div class="sc-toggle-group">
+                <button class="sc-toggle active" id="time_10" onclick="setAssistantTime('10:00')">10:00</button>
+                <button class="sc-toggle" id="time_12" onclick="setAssistantTime('12:00')">12:00</button>
+                <button class="sc-toggle" id="time_14" onclick="setAssistantTime('14:00')">14:00</button>
+            </div>
+        </div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Донерщик и помощник</div>
+            <div class="sc-field">
+                <label>Донерщик</label>
+                <input type="text" id="doner_name" placeholder="Имя" autocomplete="off">
+            </div>
+            <div class="sc-field">
+                <label>Помощник</label>
+                <input type="text" id="assistant_name" placeholder="Имя" autocomplete="off">
+            </div>
+        </div>
+
+        <button class="sc-btn" id="btnNext1" onclick="calculateSalaries()">Далее</button>
+    </div>
+
+    <!-- ==================== STEP 2: Salary Confirmation ==================== -->
+    <div id="step2" class="hidden">
+        <div class="sc-card">
+            <div class="sc-card-title">Зарплаты</div>
+            <div id="salaryList"></div>
+            <div class="sc-salary-total">
+                <span>Итого</span>
+                <span id="salaryTotal">0 ₸</span>
+            </div>
+        </div>
+
+        <div class="sc-btn-row">
+            <button class="sc-btn sc-btn-sec" onclick="goToStep(1)">Назад</button>
+            <button class="sc-btn sc-btn-green" id="btnConfirm" onclick="createSalaries()">Подтвердить</button>
+        </div>
+    </div>
+
+    <!-- ==================== STEP 3: Shift Data Input ==================== -->
+    <div id="step3" class="hidden">
+        <div class="sc-card">
+            <div class="sc-card-title">Безнал</div>
+            <div class="sc-field">
+                <label>Wolt</label>
+                <input type="number" id="sd_wolt" inputmode="decimal" placeholder="0" value="0">
+            </div>
+            <div class="sc-field">
+                <label>Halyk</label>
+                <input type="number" id="sd_halyk" inputmode="decimal" placeholder="0" value="0">
+            </div>
+        </div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Наличные</div>
+            <div class="sc-row-pair">
+                <div class="sc-field">
+                    <label>Бумажные</label>
+                    <input type="number" id="sd_cash_bills" inputmode="decimal" placeholder="0" value="0">
+                </div>
+                <div class="sc-field">
+                    <label>Мелочь</label>
+                    <input type="number" id="sd_cash_coins" inputmode="decimal" placeholder="0" value="0">
+                </div>
+            </div>
+        </div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Расходы</div>
+            <div class="sc-field">
+                <label>Расходы с кассы</label>
+                <input type="number" id="sd_expenses" inputmode="decimal" placeholder="0" value="0">
+            </div>
+        </div>
+
+        <button class="sc-btn" id="btnSubmit" onclick="submitShiftData()">Отправить</button>
+    </div>
+
+    <!-- ==================== STEP 4: Done ==================== -->
+    <div id="step4" class="hidden">
+        <div class="sc-card" style="text-align:center;padding:30px 12px">
+            <div style="font-size:48px;margin-bottom:10px">✅</div>
+            <div style="font-size:18px;font-weight:700;color:#1c1c1e;margin-bottom:6px">Данные отправлены</div>
+            <div style="font-size:14px;color:#8e8e93">Спасибо! Данные появятся на странице закрытия смены.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+const TOKEN = '{{ token }}';
+const API_BASE = '/api/cashier/' + TOKEN;
+
+let cashierCount = 2;
+let assistantTime = '10:00';
+let calculatedSalaries = null;
+
+// ==================== Init ====================
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadLastEmployees();
+    checkStatus();
+});
+
+async function checkStatus() {
+    try {
+        const r = await fetch(API_BASE + '/shift-data/status');
+        const d = await r.json();
+        if (d.success) {
+            if (d.shift_data_submitted) {
+                goToStep(4);
+                showBanner('Данные за сегодня уже отправлены', 'success');
+            } else if (d.salaries_created) {
+                goToStep(3);
+                showBanner('Зарплаты созданы. Введите данные смены', 'info');
+            }
+        }
+    } catch(e) {
+        console.error('Status check error:', e);
+    }
+}
+
+async function loadLastEmployees() {
+    try {
+        const r = await fetch(API_BASE + '/employees/last');
+        const d = await r.json();
+        if (d.success && d.cashier_names) {
+            try {
+                const names = JSON.parse(d.cashier_names);
+                if (names[0]) document.getElementById('cashier1').value = names[0];
+                if (names[1]) document.getElementById('cashier2').value = names[1];
+                if (names[2]) {
+                    document.getElementById('cashier3').value = names[2];
+                }
+                if (d.cashier_count === 3) {
+                    setCashierCount(3);
+                }
+            } catch(e) {}
+            if (d.doner_name) document.getElementById('doner_name').value = d.doner_name;
+            if (d.assistant_name) document.getElementById('assistant_name').value = d.assistant_name;
+            if (d.assistant_start_time) setAssistantTime(d.assistant_start_time);
+        }
+    } catch(e) {
+        console.error('Load employees error:', e);
+    }
+}
+
+// ==================== Step navigation ====================
+
+function goToStep(n) {
+    for (let i = 1; i <= 4; i++) {
+        document.getElementById('step' + i).classList.toggle('hidden', i !== n);
+        const dot = document.getElementById('dot' + i);
+        dot.classList.remove('active', 'done');
+        if (i < n) dot.classList.add('done');
+        if (i === n) dot.classList.add('active');
+    }
+    window.scrollTo(0, 0);
+}
+
+// ==================== Step 1: Input ====================
+
+function setCashierCount(n) {
+    cashierCount = n;
+    document.getElementById('btn2').classList.toggle('active', n === 2);
+    document.getElementById('btn3').classList.toggle('active', n === 3);
+    document.getElementById('cashier3_field').classList.toggle('hidden', n < 3);
+}
+
+function setAssistantTime(t) {
+    assistantTime = t;
+    ['10', '12', '14'].forEach(function(v) {
+        document.getElementById('time_' + v).classList.toggle('active', t === v + ':00');
+    });
+}
+
+// ==================== Step 1 → 2: Calculate ====================
+
+async function calculateSalaries() {
+    // Validate names
+    var names = [
+        document.getElementById('cashier1').value.trim(),
+        document.getElementById('cashier2').value.trim()
+    ];
+    if (cashierCount === 3) names.push(document.getElementById('cashier3').value.trim());
+
+    var dName = document.getElementById('doner_name').value.trim();
+    var aName = document.getElementById('assistant_name').value.trim();
+
+    if (names.some(function(n) { return !n; }) || !dName || !aName) {
+        showBanner('Заполните все имена', 'error');
+        return;
+    }
+
+    hideBanner();
+    var btn = document.getElementById('btnNext1');
+    btn.disabled = true;
+    btn.textContent = 'Расчёт...';
+
+    try {
+        var r = await fetch(API_BASE + '/salaries/calculate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                cashier_count: cashierCount,
+                assistant_start_time: assistantTime
+            })
+        });
+        var d = await r.json();
+
+        if (!d.success) {
+            showBanner('Ошибка: ' + (d.error || 'Неизвестная'), 'error');
+            btn.disabled = false;
+            btn.textContent = 'Далее';
+            return;
+        }
+
+        // Build salary preview
+        calculatedSalaries = {
+            cashier_salary: d.cashier_salary,
+            doner_salary: d.doner_salary,
+            assistant_salary: d.assistant_salary,
+            names: names,
+            doner_name: dName,
+            assistant_name: aName
+        };
+
+        var list = document.getElementById('salaryList');
+        list.innerHTML = '';
+        var total = 0;
+
+        names.forEach(function(name) {
+            total += d.cashier_salary;
+            list.innerHTML += salaryRow('Кассир', name, d.cashier_salary);
+        });
+
+        total += d.assistant_salary;
+        list.innerHTML += salaryRow('Помощник', aName, d.assistant_salary);
+
+        total += d.doner_salary;
+        list.innerHTML += salaryRow('Донерщик', dName, d.doner_salary);
+
+        document.getElementById('salaryTotal').textContent = fmt(total) + ' ₸';
+
+        goToStep(2);
+    } catch(e) {
+        showBanner('Ошибка сети: ' + e.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Далее';
+}
+
+function salaryRow(role, name, amount) {
+    return '<div class="sc-salary-item">' +
+        '<div><div class="sc-salary-role">' + role + '</div>' +
+        '<div class="sc-salary-name">' + escHtml(name) + '</div></div>' +
+        '<div class="sc-salary-amount">' + fmt(amount) + ' ₸</div></div>';
+}
+
+// ==================== Step 2 → 3: Create transactions ====================
+
+async function createSalaries() {
+    var btn = document.getElementById('btnConfirm');
+    btn.disabled = true;
+    btn.textContent = 'Создание...';
+
+    try {
+        var r = await fetch(API_BASE + '/salaries/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                cashier_count: cashierCount,
+                cashier_names: calculatedSalaries.names,
+                assistant_start_time: assistantTime,
+                doner_name: calculatedSalaries.doner_name,
+                assistant_name: calculatedSalaries.assistant_name
+            })
+        });
+        var d = await r.json();
+
+        if (!d.success) {
+            showBanner('Ошибка: ' + (d.error || 'Неизвестная'), 'error');
+            btn.disabled = false;
+            btn.textContent = 'Подтвердить';
+            return;
+        }
+
+        showBanner('Транзакции созданы! Сумма: ' + fmt(d.total) + ' ₸', 'success');
+        goToStep(3);
+    } catch(e) {
+        showBanner('Ошибка сети: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Подтвердить';
+    }
+}
+
+// ==================== Step 3 → 4: Submit shift data ====================
+
+async function submitShiftData() {
+    var btn = document.getElementById('btnSubmit');
+    btn.disabled = true;
+    btn.textContent = 'Отправка...';
+
+    var data = {
+        wolt: parseFloat(document.getElementById('sd_wolt').value) || 0,
+        halyk: parseFloat(document.getElementById('sd_halyk').value) || 0,
+        cash_bills: parseFloat(document.getElementById('sd_cash_bills').value) || 0,
+        cash_coins: parseFloat(document.getElementById('sd_cash_coins').value) || 0,
+        expenses: parseFloat(document.getElementById('sd_expenses').value) || 0
+    };
+
+    try {
+        var r = await fetch(API_BASE + '/shift-data/save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        var d = await r.json();
+
+        if (!d.success) {
+            showBanner('Ошибка: ' + (d.error || 'Неизвестная'), 'error');
+            btn.disabled = false;
+            btn.textContent = 'Отправить';
+            return;
+        }
+
+        goToStep(4);
+        showBanner('Данные отправлены!', 'success');
+    } catch(e) {
+        showBanner('Ошибка сети: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Отправить';
+    }
+}
+
+// ==================== Helpers ====================
+
+function fmt(n) {
+    return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+function escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function showBanner(msg, type) {
+    var b = document.getElementById('banner');
+    b.textContent = msg;
+    b.className = 'sc-banner ' + (type || 'info');
+}
+
+function hideBanner() {
+    document.getElementById('banner').className = 'sc-banner hidden';
+}
+</script>
+</body>
+</html>
