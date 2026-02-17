@@ -4,6 +4,20 @@
 
 {% block content %}
 <div class="sc">
+    <!-- Staff links -->
+    <div class="sc-staff">
+        <a href="/cashier/shift-closing" class="sc-staff-link">
+            <span class="sc-staff-icon">👤</span>
+            <span class="sc-staff-name">Кассир</span>
+            <span class="sc-staff-badge" id="cashier-badge"></span>
+        </a>
+        <a href="/cafe/shift-closing" class="sc-staff-link">
+            <span class="sc-staff-icon">☕</span>
+            <span class="sc-staff-name">Кафе</span>
+            <span class="sc-staff-badge" id="cafe-badge"></span>
+        </a>
+    </div>
+
     <!-- Date selector -->
     <div class="sc-dates" id="dates-bar">
         <button class="sc-date-btn active" id="btn-today" onclick="selectDate(getTodayStr())">
@@ -24,6 +38,11 @@
     </div>
 
     <div class="sc-banner" id="loading-banner">Загрузка...</div>
+
+    <!-- Cashier data indicator -->
+    <div class="sc-source-banner hidden" id="cashier-source-banner">
+        Данные от кассира подставлены
+    </div>
 
     <!-- Безнал -->
     <div class="sc-card">
@@ -175,6 +194,59 @@
     padding: 8px 10px 24px;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
     -webkit-text-size-adjust: 100%;
+}
+
+/* Staff links */
+.sc-staff {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.sc-staff-link {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    text-decoration: none;
+    color: #1c1c1e;
+    transition: background 0.15s;
+}
+.sc-staff-link:hover { background: #f5f5f7; }
+.sc-staff-icon { font-size: 18px; }
+.sc-staff-name { font-size: 14px; font-weight: 600; flex: 1; }
+.sc-staff-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.sc-staff-badge.waiting { background: #ff950020; color: #ff9500; }
+.sc-staff-badge.done { background: #34c75920; color: #34c759; }
+
+/* Source banner */
+.sc-source-banner {
+    background: #34c75915;
+    color: #30a14e;
+    padding: 6px 12px;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+.sc-source-banner.hidden { display: none !important; }
+
+/* Source label on field */
+.sc-field-source {
+    font-size: 10px;
+    font-weight: 600;
+    color: #30a14e;
+    margin-left: 6px;
 }
 
 /* Date selector bar */
@@ -663,6 +735,12 @@ function resetDisplay() {
     });
     document.getElementById('poster_bonus_display').textContent = '--';
     document.getElementById('orders_info').textContent = '';
+    // Reset staff badges and cashier banner
+    document.getElementById('cashier-source-banner').classList.add('hidden');
+    document.getElementById('cashier-badge').textContent = '';
+    document.getElementById('cashier-badge').className = 'sc-staff-badge';
+    document.getElementById('cafe-badge').textContent = '';
+    document.getElementById('cafe-badge').className = 'sc-staff-badge';
 }
 
 async function loadDateData(date) {
@@ -749,6 +827,12 @@ async function loadDateData(date) {
                 console.log('[SHIFT] kaspi_cafe auto-filled from Cafe: ' + Math.round(d.cafe_kaspi_pizzburg));
             }
 
+            // Auto-fill cashier data (if submitted and fields are empty)
+            applyCashierData(d);
+
+            // Update staff badges
+            updateStaffBadges(d);
+
             // Display Poster data
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
             document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
@@ -812,6 +896,12 @@ async function loadPosterData() {
                 document.getElementById('kaspi_cafe').value = String(cafeVal);
                 console.log('[SHIFT] kaspi_cafe refreshed from Cafe: ' + cafeVal);
             }
+
+            // Refresh cashier data
+            applyCashierData(d);
+
+            // Update staff badges
+            updateStaffBadges(d);
 
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
@@ -1208,6 +1298,61 @@ async function copyReportAndTransfer() {
         // Just copy — transfers already done or readonly
         btn.textContent = transfersCreated ? 'Скопировано! (переводы ✓)' : 'Скопировано!';
         setTimeout(() => updateCopyBtn(), 1500);
+    }
+}
+
+// ========= Cashier data auto-fill =========
+function applyCashierData(d) {
+    const banner = document.getElementById('cashier-source-banner');
+    if (!d.cashier_data_submitted) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    const mapping = {
+        'wolt': 'cashier_wolt',
+        'halyk': 'cashier_halyk',
+        'cash_bills': 'cashier_cash_bills',
+        'cash_coins': 'cashier_cash_coins',
+        'expenses': 'cashier_expenses'
+    };
+
+    let filled = false;
+    for (const [fieldId, dataKey] of Object.entries(mapping)) {
+        const val = d[dataKey];
+        if (val && !pi(fieldId)) {
+            document.getElementById(fieldId).value = String(Math.round(val));
+            filled = true;
+        }
+    }
+
+    if (filled) {
+        banner.classList.remove('hidden');
+        console.log('[SHIFT] Cashier data auto-filled: wolt=' + d.cashier_wolt +
+            ', halyk=' + d.cashier_halyk + ', bills=' + d.cashier_cash_bills +
+            ', coins=' + d.cashier_cash_coins + ', expenses=' + d.cashier_expenses);
+    }
+}
+
+function updateStaffBadges(d) {
+    // Cashier badge
+    const cb = document.getElementById('cashier-badge');
+    if (d.cashier_data_submitted) {
+        cb.textContent = 'готово';
+        cb.className = 'sc-staff-badge done';
+    } else {
+        cb.textContent = 'ждём';
+        cb.className = 'sc-staff-badge waiting';
+    }
+
+    // Cafe badge
+    const cafb = document.getElementById('cafe-badge');
+    if (d.cafe_kaspi_pizzburg !== undefined && d.cafe_kaspi_pizzburg !== null) {
+        cafb.textContent = 'готово';
+        cafb.className = 'sc-staff-badge done';
+    } else {
+        cafb.textContent = 'ждём';
+        cafb.className = 'sc-staff-badge waiting';
     }
 }
 
