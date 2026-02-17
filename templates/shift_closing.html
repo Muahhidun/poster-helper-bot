@@ -4,6 +4,20 @@
 
 {% block content %}
 <div class="sc">
+    <!-- Staff links -->
+    <div class="sc-staff">
+        <a href="/cashier/shift-closing" class="sc-staff-link">
+            <span class="sc-staff-icon">👤</span>
+            <span class="sc-staff-name">Кассир</span>
+            <span class="sc-staff-badge" id="cashier-badge"></span>
+        </a>
+        <a href="/cafe/shift-closing" class="sc-staff-link">
+            <span class="sc-staff-icon">☕</span>
+            <span class="sc-staff-name">Кафе</span>
+            <span class="sc-staff-badge" id="cafe-badge"></span>
+        </a>
+    </div>
+
     <!-- Date selector -->
     <div class="sc-dates" id="dates-bar">
         <button class="sc-date-btn active" id="btn-today" onclick="selectDate(getTodayStr())">
@@ -24,6 +38,11 @@
     </div>
 
     <div class="sc-banner" id="loading-banner">Загрузка...</div>
+
+    <!-- Cashier data indicator -->
+    <div class="sc-source-banner hidden" id="cashier-source-banner">
+        Данные от кассира подставлены
+    </div>
 
     <!-- Безнал -->
     <div class="sc-card">
@@ -158,9 +177,10 @@
     <div id="report-container" style="display:none" class="sc-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div class="sc-card-title" style="margin:0">Отчёт закрытия смены</div>
-            <button type="button" class="sc-btn sc-btn-sm" onclick="copyReport()">Скопировать</button>
+            <button type="button" class="sc-btn sc-btn-sm" id="copy-btn" onclick="copyReportAndTransfer()">Скопировать</button>
         </div>
         <pre id="report-text" class="sc-report"></pre>
+        <div id="transfer-status" class="hidden" style="margin-top:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:500;text-align:center"></div>
     </div>
 </div>
 
@@ -174,6 +194,59 @@
     padding: 8px 10px 24px;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
     -webkit-text-size-adjust: 100%;
+}
+
+/* Staff links */
+.sc-staff {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.sc-staff-link {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    text-decoration: none;
+    color: #1c1c1e;
+    transition: background 0.15s;
+}
+.sc-staff-link:hover { background: #f5f5f7; }
+.sc-staff-icon { font-size: 18px; }
+.sc-staff-name { font-size: 14px; font-weight: 600; flex: 1; }
+.sc-staff-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.sc-staff-badge.waiting { background: #ff950020; color: #ff9500; }
+.sc-staff-badge.done { background: #34c75920; color: #34c759; }
+
+/* Source banner */
+.sc-source-banner {
+    background: #34c75915;
+    color: #30a14e;
+    padding: 6px 12px;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+.sc-source-banner.hidden { display: none !important; }
+
+/* Source label on field */
+.sc-field-source {
+    font-size: 10px;
+    font-weight: 600;
+    color: #30a14e;
+    margin-left: 6px;
 }
 
 /* Date selector bar */
@@ -545,6 +618,7 @@ let saveTimer = null;
 let lastCalc = null;
 let currentDate = '';
 let isReadonly = false;
+let transfersCreated = false;
 const INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
 // User-input fields only (excludes shift_start — always from Poster API)
 const USER_INPUT_IDS = ['wolt','halyk','kaspi','kaspi_cafe','cash_bills','cash_coins','expenses','cash_to_leave'];
@@ -661,6 +735,12 @@ function resetDisplay() {
     });
     document.getElementById('poster_bonus_display').textContent = '--';
     document.getElementById('orders_info').textContent = '';
+    // Reset staff badges and cashier banner
+    document.getElementById('cashier-source-banner').classList.add('hidden');
+    document.getElementById('cashier-badge').textContent = '';
+    document.getElementById('cashier-badge').className = 'sc-staff-badge';
+    document.getElementById('cafe-badge').textContent = '';
+    document.getElementById('cafe-badge').className = 'sc-staff-badge';
 }
 
 async function loadDateData(date) {
@@ -670,6 +750,11 @@ async function loadDateData(date) {
     banner.textContent = 'Загрузка...';
     banner.classList.remove('hidden', 'error');
     readonlyBanner.classList.add('hidden');
+
+    // Reset transfers state
+    transfersCreated = false;
+    document.getElementById('transfer-status').classList.add('hidden');
+    document.getElementById('copy-btn').textContent = 'Скопировать';
 
     // Clear all inputs
     INPUT_IDS.forEach(id => { document.getElementById(id).value = ''; });
@@ -689,6 +774,12 @@ async function loadDateData(date) {
                 if (c[id]) document.getElementById(id).value = c[id];
             });
             if (c.deposits) document.getElementById('deposits') && (document.getElementById('deposits').value = c.deposits);
+
+            // Check if transfers already created
+            if (c.transfers_created) {
+                transfersCreated = true;
+                updateCopyBtn();
+            }
 
             setReadonly(!isToday);
             saveToLS();
@@ -735,6 +826,12 @@ async function loadDateData(date) {
                 document.getElementById('kaspi_cafe').value = String(Math.round(d.cafe_kaspi_pizzburg));
                 console.log('[SHIFT] kaspi_cafe auto-filled from Cafe: ' + Math.round(d.cafe_kaspi_pizzburg));
             }
+
+            // Auto-fill cashier data (if submitted and fields are empty)
+            applyCashierData(d);
+
+            // Update staff badges
+            updateStaffBadges(d);
 
             // Display Poster data
             document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
@@ -799,6 +896,12 @@ async function loadPosterData() {
                 document.getElementById('kaspi_cafe').value = String(cafeVal);
                 console.log('[SHIFT] kaspi_cafe refreshed from Cafe: ' + cafeVal);
             }
+
+            // Refresh cashier data
+            applyCashierData(d);
+
+            // Update staff badges
+            updateStaffBadges(d);
 
             banner.textContent = 'Готово';
             setTimeout(() => banner.classList.add('hidden'), 1200);
@@ -1122,20 +1225,135 @@ function loadShiftReport() {
     document.getElementById('report-container').style.display = 'block';
 }
 
-function copyReport() {
-    const t = document.getElementById('report-text').textContent;
-    navigator.clipboard.writeText(t).then(() => {
-        const btn = event.target;
-        btn.textContent = 'Готово!';
-        setTimeout(() => btn.textContent = 'Скопировать', 1500);
-    }).catch(() => {
+function copyToClipboard(text) {
+    return navigator.clipboard.writeText(text).catch(() => {
         const ta = document.createElement('textarea');
-        ta.value = t;
+        ta.value = text;
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
     });
+}
+
+function showTransferStatus(msg, isSuccess) {
+    const el = document.getElementById('transfer-status');
+    el.textContent = msg;
+    el.style.background = isSuccess ? '#34c75920' : '#ff950020';
+    el.style.color = isSuccess ? '#34c759' : '#ff9500';
+    el.classList.remove('hidden');
+}
+
+function updateCopyBtn() {
+    const btn = document.getElementById('copy-btn');
+    if (transfersCreated) {
+        btn.textContent = 'Скопировать (переводы ✓)';
+    } else {
+        btn.textContent = 'Скопировать';
+    }
+}
+
+async function copyReportAndTransfer() {
+    const btn = document.getElementById('copy-btn');
+    const text = document.getElementById('report-text').textContent;
+
+    // 1. Copy report
+    await copyToClipboard(text);
+
+    // 2. If transfers not yet created and not readonly — create them
+    if (!transfersCreated && !isReadonly) {
+        btn.textContent = 'Создаю переводы...';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/shift-closing/transfers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({date: currentDate})
+            });
+            const data = await res.json();
+            if (data.success) {
+                transfersCreated = true;
+                if (data.already_created) {
+                    showTransferStatus('Переводы уже были созданы ранее', true);
+                } else if (data.created_count > 0) {
+                    const names = data.transfers.map(t => t.name + ': ' + t.amount.toLocaleString('ru-RU') + '₸').join(', ');
+                    showTransferStatus('✅ ' + data.created_count + ' перевод(а) создано: ' + names, true);
+                } else {
+                    showTransferStatus('Нет переводов (суммы = 0)', true);
+                }
+                btn.textContent = 'Скопировано! (переводы ✓)';
+                setTimeout(() => { btn.textContent = 'Скопировать (переводы ✓)'; }, 2000);
+            } else {
+                showTransferStatus('⚠️ Ошибка: ' + (data.error || 'неизвестная'), false);
+                btn.textContent = 'Скопировано!';
+                setTimeout(() => { btn.textContent = 'Скопировать'; }, 2000);
+            }
+        } catch (e) {
+            showTransferStatus('⚠️ Ошибка сети: ' + e.message, false);
+            btn.textContent = 'Скопировано!';
+            setTimeout(() => { btn.textContent = 'Скопировать'; }, 2000);
+        }
+        btn.disabled = false;
+    } else {
+        // Just copy — transfers already done or readonly
+        btn.textContent = transfersCreated ? 'Скопировано! (переводы ✓)' : 'Скопировано!';
+        setTimeout(() => updateCopyBtn(), 1500);
+    }
+}
+
+// ========= Cashier data auto-fill =========
+function applyCashierData(d) {
+    const banner = document.getElementById('cashier-source-banner');
+    if (!d.cashier_data_submitted) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    const mapping = {
+        'wolt': 'cashier_wolt',
+        'halyk': 'cashier_halyk',
+        'cash_bills': 'cashier_cash_bills',
+        'cash_coins': 'cashier_cash_coins',
+        'expenses': 'cashier_expenses'
+    };
+
+    let filled = false;
+    for (const [fieldId, dataKey] of Object.entries(mapping)) {
+        const val = d[dataKey];
+        if (val && !pi(fieldId)) {
+            document.getElementById(fieldId).value = String(Math.round(val));
+            filled = true;
+        }
+    }
+
+    if (filled) {
+        banner.classList.remove('hidden');
+        console.log('[SHIFT] Cashier data auto-filled: wolt=' + d.cashier_wolt +
+            ', halyk=' + d.cashier_halyk + ', bills=' + d.cashier_cash_bills +
+            ', coins=' + d.cashier_cash_coins + ', expenses=' + d.cashier_expenses);
+    }
+}
+
+function updateStaffBadges(d) {
+    // Cashier badge
+    const cb = document.getElementById('cashier-badge');
+    if (d.cashier_data_submitted) {
+        cb.textContent = 'готово';
+        cb.className = 'sc-staff-badge done';
+    } else {
+        cb.textContent = 'ждём';
+        cb.className = 'sc-staff-badge waiting';
+    }
+
+    // Cafe badge
+    const cafb = document.getElementById('cafe-badge');
+    if (d.cafe_kaspi_pizzburg !== undefined && d.cafe_kaspi_pizzburg !== null) {
+        cafb.textContent = 'готово';
+        cafb.className = 'sc-staff-badge done';
+    } else {
+        cafb.textContent = 'ждём';
+        cafb.className = 'sc-staff-badge waiting';
+    }
 }
 
 // ========= Init =========

@@ -748,6 +748,69 @@ class UserDatabase:
         # Run migration for web_users (auth system)
         self._migrate_web_users()
 
+        # Run migration to fix shift_closings UNIQUE constraint (cafe + main same date)
+        self._migrate_shift_closings_fix_unique()
+
+    def _migrate_shift_closings_fix_unique(self):
+        """Fix UNIQUE constraint on shift_closings to include poster_account_id.
+
+        Old constraint UNIQUE(telegram_user_id, date) prevents having both
+        a cafe and main shift closing for the same date. Replace with partial
+        unique indexes that properly handle poster_account_id.
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                # SQLite: can't ALTER DROP constraint, but we can create partial indexes.
+                # The old inline UNIQUE stays but we change code to not use ON CONFLICT on it.
+                try:
+                    cursor.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS shift_closings_user_date_main_idx
+                        ON shift_closings (telegram_user_id, date)
+                        WHERE poster_account_id IS NULL
+                    """)
+                    cursor.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS shift_closings_user_date_cafe_idx
+                        ON shift_closings (telegram_user_id, date, poster_account_id)
+                        WHERE poster_account_id IS NOT NULL
+                    """)
+                    logger.info("✅ shift_closings: created partial unique indexes (SQLite)")
+                except Exception:
+                    pass  # Indexes already exist
+            else:
+                # PostgreSQL: drop old constraint and create partial unique indexes
+                try:
+                    cursor.execute("""
+                        ALTER TABLE shift_closings
+                        DROP CONSTRAINT IF EXISTS shift_closings_telegram_user_id_date_key
+                    """)
+                    logger.info("✅ shift_closings: dropped old UNIQUE(telegram_user_id, date)")
+                except Exception:
+                    pass  # Constraint already dropped
+
+                try:
+                    cursor.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS shift_closings_user_date_main_idx
+                        ON shift_closings (telegram_user_id, date)
+                        WHERE poster_account_id IS NULL
+                    """)
+                    cursor.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS shift_closings_user_date_cafe_idx
+                        ON shift_closings (telegram_user_id, date, poster_account_id)
+                        WHERE poster_account_id IS NOT NULL
+                    """)
+                    logger.info("✅ shift_closings: created partial unique indexes (PostgreSQL)")
+                except Exception:
+                    pass  # Indexes already exist
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            logger.error(f"shift_closings unique fix migration error: {e}")
+
     def _migrate_cafe_access(self):
         """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
         try:
@@ -2990,26 +3053,47 @@ class UserDatabase:
                         """, [telegram_user_id, date, poster_account_id] + values)
             else:
                 # Primary shift closing: unique by (user, date) where poster_account_id IS NULL
+                # Use SELECT+INSERT/UPDATE to avoid conflict with cafe rows for the same date
                 if DB_TYPE == "sqlite":
-                    placeholders = ', '.join(['?'] * (len(fields) + 2))
-                    fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
-                    update_parts = ', '.join([f'{f} = excluded.{f}' for f in fields])
-                    cursor.execute(f"""
-                        INSERT INTO shift_closings ({fields_str})
-                        VALUES ({placeholders}, CURRENT_TIMESTAMP)
-                        ON CONFLICT(telegram_user_id, date)
-                        DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
-                    """, [telegram_user_id, date] + values)
+                    cursor.execute("""
+                        SELECT id FROM shift_closings
+                        WHERE telegram_user_id = ? AND date = ? AND poster_account_id IS NULL
+                    """, (telegram_user_id, date))
+                    existing = cursor.fetchone()
+
+                    if existing:
+                        update_parts = ', '.join([f'{f} = ?' for f in fields])
+                        cursor.execute(f"""
+                            UPDATE shift_closings SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                            WHERE telegram_user_id = ? AND date = ? AND poster_account_id IS NULL
+                        """, values + [telegram_user_id, date])
+                    else:
+                        all_fields = ['telegram_user_id', 'date'] + fields
+                        placeholders = ', '.join(['?'] * len(all_fields))
+                        cursor.execute(f"""
+                            INSERT INTO shift_closings ({', '.join(all_fields)}, updated_at)
+                            VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                        """, [telegram_user_id, date] + values)
                 else:
-                    placeholders = ', '.join(['%s'] * (len(fields) + 2))
-                    fields_str = ', '.join(['telegram_user_id', 'date'] + fields + ['updated_at'])
-                    update_parts = ', '.join([f'{f} = EXCLUDED.{f}' for f in fields])
-                    cursor.execute(f"""
-                        INSERT INTO shift_closings ({fields_str})
-                        VALUES ({placeholders}, CURRENT_TIMESTAMP)
-                        ON CONFLICT(telegram_user_id, date)
-                        DO UPDATE SET {update_parts}, updated_at = CURRENT_TIMESTAMP
-                    """, [telegram_user_id, date] + values)
+                    cursor.execute("""
+                        SELECT id FROM shift_closings
+                        WHERE telegram_user_id = %s AND date = %s AND poster_account_id IS NULL
+                    """, (telegram_user_id, date))
+                    existing = cursor.fetchone()
+
+                    if existing:
+                        update_parts = ', '.join([f'{f} = %s' for f in fields])
+                        cursor.execute(f"""
+                            UPDATE shift_closings SET {update_parts}, updated_at = CURRENT_TIMESTAMP
+                            WHERE telegram_user_id = %s AND date = %s AND poster_account_id IS NULL
+                        """, values + [telegram_user_id, date])
+                    else:
+                        all_fields = ['telegram_user_id', 'date'] + fields
+                        placeholders = ', '.join(['%s'] * len(all_fields))
+                        cursor.execute(f"""
+                            INSERT INTO shift_closings ({', '.join(all_fields)}, updated_at)
+                            VALUES ({placeholders}, CURRENT_TIMESTAMP)
+                        """, [telegram_user_id, date] + values)
 
             conn.commit()
             conn.close()
