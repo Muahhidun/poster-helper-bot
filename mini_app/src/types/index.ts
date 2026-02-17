@@ -402,6 +402,7 @@ export interface ShiftClosingData {
   shift_left: number
   collection: number
   cashless_diff: number
+  transfers_created?: boolean | number
 }
 
 export interface ShiftClosingHistoryResponse {

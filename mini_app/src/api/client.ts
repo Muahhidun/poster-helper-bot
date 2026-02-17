@@ -231,6 +231,13 @@ class ApiClient {
     return this.request<ShiftClosingReportResponse>(endpoint)
   }
 
+  async createShiftClosingTransfers(date?: string): Promise<{ success: boolean; already_created?: boolean; created_count?: number; message?: string; transfers?: Array<{ name: string; amount: number; tx_id: number }> ; error?: string }> {
+    return this.request('/api/shift-closing/transfers', {
+      method: 'POST',
+      body: JSON.stringify({ date }),
+    })
+  }
+
   // Expenses
   async getExpenses(date?: string): Promise<ExpensesResponse> {
     const params = new URLSearchParams()
