@@ -40,7 +40,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 # ========================================
 
 # Paths that don't require authentication
-OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health')
+OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health', '/telegram-webhook', '/mini-app')
 
 
 def get_home_for_role(role):
@@ -136,7 +136,14 @@ def check_auth():
     # Check session
     web_user_id = session.get('web_user_id')
     if not web_user_id:
-        # Not logged in
+        # Not logged in — check if any web_users exist at all
+        # If no accounts created yet, allow access (backward-compatible)
+        db = get_database()
+        all_users = db.list_web_users(TELEGRAM_USER_ID)
+        if not all_users:
+            # No web_users exist — skip auth entirely (legacy mode)
+            return None
+
         if path.startswith('/api/'):
             return jsonify({'error': 'Unauthorized'}), 401
         return redirect('/login')
