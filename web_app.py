@@ -5097,6 +5097,7 @@ def api_cafe_transfers():
 
         collection = float(closing.get('collection', 0))
         wolt = float(closing.get('wolt', 0))
+        cashless_diff = float(closing.get('cashless_diff', 0))
 
         # Build transfer list
         transfers = []
@@ -5113,6 +5114,23 @@ def api_cafe_transfers():
                 'from': CAFE_ACCOUNTS['kaspi'],
                 'to': CAFE_ACCOUNTS['wolt'],
                 'amount': int(round(wolt)),
+            })
+        # Корректировка безнала: выравнивание счетов Каспий и Наличные
+        if cashless_diff < -0.5:
+            # Poster думает безнала больше чем факт → переводим с Каспий на Наличные
+            transfers.append({
+                'name': 'Корректировка безнала: Каспий → Наличные',
+                'from': CAFE_ACCOUNTS['kaspi'],
+                'to': CAFE_ACCOUNTS['cash_left'],
+                'amount': int(round(abs(cashless_diff))),
+            })
+        elif cashless_diff > 0.5:
+            # Poster думает безнала меньше чем факт → переводим с Наличных на Каспий
+            transfers.append({
+                'name': 'Корректировка безнала: Наличные → Каспий',
+                'from': CAFE_ACCOUNTS['cash_left'],
+                'to': CAFE_ACCOUNTS['kaspi'],
+                'amount': int(round(cashless_diff)),
             })
 
         if not transfers:
@@ -5216,6 +5234,7 @@ def api_shift_closing_transfers():
         collection = float(closing.get('collection', 0))
         wolt = float(closing.get('wolt', 0))
         halyk = float(closing.get('halyk', 0))
+        cashless_diff = float(closing.get('cashless_diff', 0))
 
         # Build transfer list
         transfers = []
@@ -5239,6 +5258,23 @@ def api_shift_closing_transfers():
                 'from': MAIN_ACCOUNTS['kaspi'],
                 'to': MAIN_ACCOUNTS['halyk'],
                 'amount': int(round(halyk)),
+            })
+        # Корректировка безнала: выравнивание счетов Каспий и Наличные
+        if cashless_diff < -0.5:
+            # Poster думает безнала больше чем факт → переводим с Каспий на Наличные
+            transfers.append({
+                'name': 'Корректировка безнала: Каспий → Наличные',
+                'from': MAIN_ACCOUNTS['kaspi'],
+                'to': MAIN_ACCOUNTS['cash_left'],
+                'amount': int(round(abs(cashless_diff))),
+            })
+        elif cashless_diff > 0.5:
+            # Poster думает безнала меньше чем факт → переводим с Наличных на Каспий
+            transfers.append({
+                'name': 'Корректировка безнала: Наличные → Каспий',
+                'from': MAIN_ACCOUNTS['cash_left'],
+                'to': MAIN_ACCOUNTS['kaspi'],
+                'amount': int(round(cashless_diff)),
             })
 
         if not transfers:
@@ -5598,6 +5634,225 @@ def api_cashier_shift_data_status():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ========================================
+# Background Expense Sync (every 5 min)
+# ========================================
+
+def _background_expense_sync():
+    """Background job: sync expenses from Poster for all users with accounts"""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from poster_client import PosterClient
+
+        db = get_database()
+        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        if not poster_accounts:
+            return
+
+        kz_tz = timezone(timedelta(hours=5))
+        today = datetime.now(kz_tz)
+        date_str = today.strftime("%Y%m%d")
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        synced = 0
+        updated = 0
+        deleted = 0
+
+        async def _sync():
+            nonlocal synced, updated, deleted
+            seen_poster_ids = set()
+            synced_account_ids = set()
+            existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+
+            for account in poster_accounts:
+                try:
+                    client = PosterClient(
+                        telegram_user_id=TELEGRAM_USER_ID,
+                        poster_token=account['poster_token'],
+                        poster_user_id=account['poster_user_id'],
+                        poster_base_url=account['poster_base_url']
+                    )
+                    try:
+                        transactions = await client.get_transactions(date_str, date_str)
+                        finance_accounts = await client.get_accounts()
+                        account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+
+                        for txn in transactions:
+                            txn_type = str(txn.get('type'))
+                            category_name = txn.get('name', '') or txn.get('category_name', '')
+                            category_lower = category_name.lower()
+
+                            skip_categories = ['перевод', 'кассовые смены', 'актуализац']
+                            if any(skip in category_lower for skip in skip_categories):
+                                continue
+                            if txn_type not in ('0', '1'):
+                                continue
+
+                            txn_id = txn.get('transaction_id')
+                            amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
+                            amount = abs(float(amount_raw)) / 100
+                            comment = txn.get('comment', '') or ''
+                            description = comment if comment else category_name
+
+                            account_from_id = (
+                                txn.get('account_from_id') or txn.get('account_from') or
+                                txn.get('account_id') or txn.get('account')
+                            )
+                            txn_account_name = txn.get('account_name', '') or ''
+                            finance_acc = account_map.get(str(account_from_id), {})
+                            finance_acc_name_raw = (finance_acc.get('account_name') or finance_acc.get('name')) or txn_account_name
+
+                            composite_txn_id = f"{account['id']}_{txn_id}"
+                            seen_poster_ids.add(composite_txn_id)
+                            seen_poster_ids.add(str(txn_id))
+
+                            existing_draft = next(
+                                (d for d in existing_drafts
+                                 if d.get('poster_transaction_id') == composite_txn_id
+                                 or (d.get('poster_transaction_id') == str(txn_id) and
+                                     d.get('poster_account_id') == account['id'])),
+                                None
+                            )
+
+                            if existing_draft:
+                                old_poster_amount = existing_draft.get('poster_amount')
+                                old_amount = existing_draft.get('amount', 0)
+                                update_fields = {}
+                                if old_poster_amount is None or abs(float(old_poster_amount) - amount) >= 0.01:
+                                    update_fields['poster_amount'] = amount
+                                    if old_poster_amount is not None and abs(float(old_amount) - float(old_poster_amount)) < 0.01:
+                                        update_fields['amount'] = amount
+                                    if old_poster_amount is None:
+                                        update_fields['amount'] = amount
+                                old_description = existing_draft.get('description', '')
+                                if description and description != old_description:
+                                    update_fields['description'] = description
+                                if update_fields:
+                                    db.update_expense_draft(existing_draft['id'], **update_fields)
+                                    updated += 1
+                                continue
+
+                            # Skip supply transactions
+                            import re
+                            supply_match = re.search(r'Поставка\s*[№N#]\s*(\d+)', description)
+                            if supply_match:
+                                supply_num = supply_match.group(1)
+                                supply_draft = next(
+                                    (d for d in existing_drafts
+                                     if (d.get('poster_transaction_id') or '').startswith('supply_') and
+                                        supply_num in (d.get('poster_transaction_id') or '').replace('supply_', '').split(',')),
+                                    None
+                                )
+                                if supply_draft:
+                                    continue
+                                supply_amount_draft = next(
+                                    (d for d in existing_drafts
+                                     if d.get('expense_type') == 'supply' and
+                                        d.get('status') == 'pending' and
+                                        abs(float(d.get('amount', 0)) - amount) < 1),
+                                    None
+                                )
+                                if supply_amount_draft:
+                                    db.update_expense_draft(supply_amount_draft['id'], poster_transaction_id=f"supply_{supply_num}")
+                                    continue
+
+                            finance_acc_name = finance_acc_name_raw.lower() if finance_acc_name_raw else ''
+                            source = 'cash'
+                            if 'kaspi' in finance_acc_name:
+                                source = 'kaspi'
+                            elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
+                                source = 'halyk'
+
+                            db.create_expense_draft(
+                                telegram_user_id=TELEGRAM_USER_ID,
+                                amount=amount,
+                                description=description,
+                                expense_type='transaction',
+                                category=category_name,
+                                source=source,
+                                account_id=finance_acc.get('account_id'),
+                                poster_account_id=account['id'],
+                                poster_transaction_id=composite_txn_id,
+                                is_income=(txn_type == '1'),
+                                completion_status='completed',
+                                poster_amount=amount
+                            )
+                            synced += 1
+
+                        synced_account_ids.add(str(account['id']))
+                    finally:
+                        await client.close()
+                except Exception as e:
+                    logger.warning(f"[BG SYNC] Error syncing {account.get('account_name', '?')}: {e}")
+
+            # Clean up system category drafts
+            skip_cleanup = ['перевод', 'кассовые смены', 'актуализац']
+            for draft in existing_drafts:
+                draft_category = (draft.get('category') or '').lower()
+                if draft_category and any(skip in draft_category for skip in skip_cleanup):
+                    db.delete_expense_draft(draft['id'])
+                    deleted += 1
+
+            # Delete orphaned drafts (from today only)
+            today_str = today.strftime('%Y-%m-%d')
+            for draft in existing_drafts:
+                ptid = draft.get('poster_transaction_id', '') or ''
+                if not ptid or ptid.startswith('supply_'):
+                    continue
+                if draft.get('status') != 'pending':
+                    continue
+                draft_category = (draft.get('category') or '').lower()
+                if draft_category and any(skip in draft_category for skip in skip_cleanup):
+                    continue
+                draft_created = draft.get('created_at', '')
+                if not draft_created or str(draft_created)[:10] != today_str:
+                    continue
+                if ptid not in seen_poster_ids:
+                    if '_' in ptid:
+                        account_part = ptid.split('_')[0]
+                        if account_part not in synced_account_ids:
+                            continue
+                    db.delete_expense_draft(draft['id'])
+                    deleted += 1
+
+        try:
+            loop.run_until_complete(_sync())
+        finally:
+            loop.close()
+
+        if synced > 0 or updated > 0 or deleted > 0:
+            logger.info(f"[BG SYNC] Expenses: +{synced} new, ~{updated} updated, -{deleted} deleted")
+
+    except Exception as e:
+        logger.error(f"[BG SYNC] Expense sync error: {e}")
+
+
+def start_background_sync():
+    """Start background expense sync scheduler"""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        bg_scheduler = BackgroundScheduler()
+        bg_scheduler.add_job(
+            _background_expense_sync,
+            'interval',
+            minutes=5,
+            id='bg_expense_sync',
+            name='Background expense sync from Poster',
+            replace_existing=True
+        )
+        bg_scheduler.start()
+        logger.info("✅ Background expense sync started (every 5 min)")
+    except Exception as e:
+        logger.error(f"Failed to start background sync: {e}")
+
+
+# Auto-start background sync when module is imported (production)
+if os.getenv('USE_WEBHOOK') == 'true' or os.getenv('RAILWAY_ENVIRONMENT'):
+    start_background_sync()
 
 
 if __name__ == '__main__':
