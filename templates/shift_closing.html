@@ -4,18 +4,10 @@
 
 {% block content %}
 <div class="sc">
-    <!-- Staff links -->
-    <div class="sc-staff">
-        <a href="/cashier/shift-closing" class="sc-staff-link">
-            <span class="sc-staff-icon">👤</span>
-            <span class="sc-staff-name">Кассир</span>
-            <span class="sc-staff-badge" id="cashier-badge"></span>
-        </a>
-        <a href="/cafe/shift-closing" class="sc-staff-link">
-            <span class="sc-staff-icon">☕</span>
-            <span class="sc-staff-name">Кафе</span>
-            <span class="sc-staff-badge" id="cafe-badge"></span>
-        </a>
+    <!-- Staff status badges (shown between header and cards) -->
+    <div class="sc-staff-bar hidden" id="staff-status-bar">
+        <span class="sc-staff-badge" id="cashier-badge"></span>
+        <span class="sc-staff-badge" id="cafe-badge"></span>
     </div>
 
     <!-- Date selector -->
@@ -196,32 +188,17 @@
     -webkit-text-size-adjust: 100%;
 }
 
-/* Staff links */
-.sc-staff {
+/* Staff status bar */
+.sc-staff-bar {
     display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-.sc-staff-link {
-    flex: 1;
-    display: flex;
-    align-items: center;
     gap: 6px;
-    padding: 10px 12px;
-    background: #fff;
-    border-radius: 10px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    text-decoration: none;
-    color: #1c1c1e;
-    transition: background 0.15s;
+    margin-bottom: 8px;
+    justify-content: flex-end;
 }
-.sc-staff-link:hover { background: #f5f5f7; }
-.sc-staff-icon { font-size: 18px; }
-.sc-staff-name { font-size: 14px; font-weight: 600; flex: 1; }
 .sc-staff-badge {
     font-size: 11px;
     font-weight: 600;
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 10px;
     white-space: nowrap;
 }
@@ -737,6 +714,7 @@ function resetDisplay() {
     document.getElementById('orders_info').textContent = '';
     // Reset staff badges and cashier banner
     document.getElementById('cashier-source-banner').classList.add('hidden');
+    document.getElementById('staff-status-bar').classList.add('hidden');
     document.getElementById('cashier-badge').textContent = '';
     document.getElementById('cashier-badge').className = 'sc-staff-badge';
     document.getElementById('cafe-badge').textContent = '';
@@ -1335,23 +1313,26 @@ function applyCashierData(d) {
 }
 
 function updateStaffBadges(d) {
+    const bar = document.getElementById('staff-status-bar');
+    bar.classList.remove('hidden');
+
     // Cashier badge
     const cb = document.getElementById('cashier-badge');
     if (d.cashier_data_submitted) {
-        cb.textContent = 'готово';
+        cb.textContent = 'Кассир \u2713';
         cb.className = 'sc-staff-badge done';
     } else {
-        cb.textContent = 'ждём';
+        cb.textContent = 'Кассир \u2026';
         cb.className = 'sc-staff-badge waiting';
     }
 
     // Cafe badge
     const cafb = document.getElementById('cafe-badge');
     if (d.cafe_kaspi_pizzburg !== undefined && d.cafe_kaspi_pizzburg !== null) {
-        cafb.textContent = 'готово';
+        cafb.textContent = 'Кафе \u2713';
         cafb.className = 'sc-staff-badge done';
     } else {
-        cafb.textContent = 'ждём';
+        cafb.textContent = 'Кафе \u2026';
         cafb.className = 'sc-staff-badge waiting';
     }
 }

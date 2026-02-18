@@ -103,6 +103,12 @@
                 <li>
                     <a href="{{ url_for('shift_closing') }}" {% if request.endpoint == 'shift_closing' %}class="active"{% endif %}>Смена</a>
                 </li>
+                <li>
+                    <a href="{{ url_for('cashier_shift_closing') }}" {% if request.endpoint == 'cashier_shift_closing' %}class="active"{% endif %}>Кассир</a>
+                </li>
+                <li>
+                    <a href="{{ url_for('cafe_shift_closing') }}" {% if request.endpoint == 'cafe_shift_closing' %}class="active"{% endif %}>Кафе</a>
+                </li>
             </ul>
         </div>
     </nav>
