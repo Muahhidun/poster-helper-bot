@@ -3408,7 +3408,24 @@ class UserDatabase:
                 'shift_data_submitted'
             ]
 
-            values = [data.get(f, 0 if f not in ('cashier_names', 'assistant_start_time', 'doner_name', 'assistant_name', 'salaries_data') else data.get(f)) for f in fields]
+            # Fields that should be text (NULL default) vs numeric (0 default)
+            text_fields = ('cashier_names', 'assistant_start_time', 'doner_name', 'assistant_name', 'salaries_data')
+            # Boolean fields need special handling for PostgreSQL (BOOLEAN type vs SQLite INTEGER)
+            bool_fields = ('salaries_created', 'shift_data_submitted')
+
+            values = []
+            for f in fields:
+                val = data.get(f)
+                if f in bool_fields:
+                    # Convert to proper bool for PostgreSQL, int for SQLite
+                    if DB_TYPE == "sqlite":
+                        values.append(1 if val else 0)
+                    else:
+                        values.append(bool(val))
+                elif f in text_fields:
+                    values.append(val)  # None if not provided
+                else:
+                    values.append(val if val is not None else 0)
 
             if DB_TYPE == "sqlite":
                 placeholders = ', '.join(['?'] * (len(fields) + 2))

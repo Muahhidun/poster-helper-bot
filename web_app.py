@@ -5115,23 +5115,11 @@ def api_cafe_transfers():
                 'to': CAFE_ACCOUNTS['wolt'],
                 'amount': int(round(wolt)),
             })
-        # Корректировка безнала: выравнивание счетов Каспий и Наличные
-        if cashless_diff < -0.5:
-            # Poster думает безнала больше чем факт → переводим с Каспий на Наличные
-            transfers.append({
-                'name': 'Корректировка безнала: Каспий → Наличные',
-                'from': CAFE_ACCOUNTS['kaspi'],
-                'to': CAFE_ACCOUNTS['cash_left'],
-                'amount': int(round(abs(cashless_diff))),
-            })
-        elif cashless_diff > 0.5:
-            # Poster думает безнала меньше чем факт → переводим с Наличных на Каспий
-            transfers.append({
-                'name': 'Корректировка безнала: Наличные → Каспий',
-                'from': CAFE_ACCOUNTS['cash_left'],
-                'to': CAFE_ACCOUNTS['kaspi'],
-                'amount': int(round(cashless_diff)),
-            })
+        # Корректировка безнала НЕ создаётся автоматически — разница безнала
+        # должна решаться через редактирование метода оплаты в чеках Poster.
+        if abs(cashless_diff) >= 1:
+            print(f"[CAFE TRANSFER] ⚠️ Разница безнала: {cashless_diff:,.0f}₸ — корректировка НЕ создаётся, "
+                  f"исправьте метод оплаты в чеках Poster", flush=True)
 
         if not transfers:
             return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
@@ -5259,23 +5247,13 @@ def api_shift_closing_transfers():
                 'to': MAIN_ACCOUNTS['halyk'],
                 'amount': int(round(halyk)),
             })
-        # Корректировка безнала: выравнивание счетов Каспий и Наличные
-        if cashless_diff < -0.5:
-            # Poster думает безнала больше чем факт → переводим с Каспий на Наличные
-            transfers.append({
-                'name': 'Корректировка безнала: Каспий → Наличные',
-                'from': MAIN_ACCOUNTS['kaspi'],
-                'to': MAIN_ACCOUNTS['cash_left'],
-                'amount': int(round(abs(cashless_diff))),
-            })
-        elif cashless_diff > 0.5:
-            # Poster думает безнала меньше чем факт → переводим с Наличных на Каспий
-            transfers.append({
-                'name': 'Корректировка безнала: Наличные → Каспий',
-                'from': MAIN_ACCOUNTS['cash_left'],
-                'to': MAIN_ACCOUNTS['kaspi'],
-                'amount': int(round(cashless_diff)),
-            })
+        # Корректировка безнала НЕ создаётся автоматически — разница безнала
+        # должна решаться через редактирование метода оплаты в чеках Poster.
+        # Автоматический перевод создавал двойную ошибку при совместной работе
+        # с инкассацией и другими переводами.
+        if abs(cashless_diff) >= 1:
+            print(f"[MAIN TRANSFER] ⚠️ Разница безнала: {cashless_diff:,.0f}₸ — корректировка НЕ создаётся, "
+                  f"исправьте метод оплаты в чеках Poster", flush=True)
 
         if not transfers:
             return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
@@ -5401,6 +5379,16 @@ def api_cashier_salaries_calculate():
     data = request.json
 
     try:
+        # Block salary calculation before 21:30 KZ time
+        from datetime import datetime, timedelta, timezone
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
+            return jsonify({
+                'success': False,
+                'error': f'Расчёт зарплат доступен после 21:30. Сейчас {kz_now.strftime("%H:%M")}'
+            }), 400
+
         cashier_count = int(data.get('cashier_count', 2))
         assistant_start_time = data.get('assistant_start_time', '10:00')
 
@@ -5467,6 +5455,25 @@ def api_cashier_salaries_create():
     db = get_database()
 
     try:
+        # Block salary creation before 21:30 KZ time
+        from datetime import datetime, timedelta, timezone
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
+            return jsonify({
+                'success': False,
+                'error': f'Создание зарплат доступно после 21:30. Сейчас {kz_now.strftime("%H:%M")}'
+            }), 400
+
+        # Duplicate protection: check if salaries already created today
+        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+        existing = db.get_cashier_shift_data(info['telegram_user_id'], date_str)
+        if existing and existing.get('salaries_created') in (True, 1):
+            return jsonify({
+                'success': False,
+                'error': 'Зарплаты за сегодня уже созданы. Повторное создание заблокировано.'
+            }), 400
+
         cashier_count = int(data.get('cashier_count', 2))
         cashier_names = data.get('cashier_names', [])
         assistant_start_time = data.get('assistant_start_time', '10:00')
@@ -5541,7 +5548,7 @@ def api_cashier_salaries_create():
             'doner_name': doner_name,
             'assistant_name': assistant_name,
             'salaries_data': json.dumps(salaries, ensure_ascii=False),
-            'salaries_created': 1,
+            'salaries_created': True,
         })
 
         return jsonify({
@@ -5590,7 +5597,7 @@ def api_cashier_shift_data_save():
         save_data['cash_bills'] = float(data.get('cash_bills', 0))
         save_data['cash_coins'] = float(data.get('cash_coins', 0))
         save_data['expenses'] = float(data.get('expenses', 0))
-        save_data['shift_data_submitted'] = 1
+        save_data['shift_data_submitted'] = True
 
         db.save_cashier_shift_data(info['telegram_user_id'], date_str, save_data)
 
