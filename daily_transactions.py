@@ -1,10 +1,13 @@
 """Автоматические ежедневные транзакции"""
 import logging
 from typing import List, Dict
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from poster_client import PosterClient
 
 logger = logging.getLogger(__name__)
+
+# Almaty timezone (UTC+5)
+KZ_TZ = timezone(timedelta(hours=5))
 
 
 class DailyTransactionScheduler:
@@ -21,8 +24,8 @@ class DailyTransactionScheduler:
         try:
             poster_client = PosterClient(self.telegram_user_id)
 
-            # Получить сегодняшнюю дату
-            today = datetime.now().strftime("%Y-%m-%d")
+            # Получить сегодняшнюю дату по Алматы
+            today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
 
             # Получить транзакции за сегодня
             result = await poster_client._request('GET', 'finance.getTransactions', params={
@@ -66,6 +69,17 @@ class DailyTransactionScheduler:
         Создает транзакции для всех аккаунтов пользователя (Pizzburg и Pizzburg-cafe)
         """
         try:
+            # Защита от дублей: проверить, созданы ли уже транзакции сегодня
+            already_exists = await self.check_transactions_created_today()
+            if already_exists:
+                logger.info(f"⏭️ Ежедневные транзакции уже существуют для пользователя {self.telegram_user_id}, пропускаю создание")
+                return {
+                    'success': True,
+                    'count': 0,
+                    'transactions': [],
+                    'already_exists': True
+                }
+
             from database import get_database
 
             db = get_database()
@@ -293,73 +307,6 @@ class DailyTransactionScheduler:
             comment="Забрал - Имя"
         )
         transactions_created.append(f"Перевод Оставил в кассе → Деньги дома: {tx_id}")
-
-        return transactions_created
-
-    async def _create_transactions_account_2(self, poster_client: PosterClient, current_time: str) -> List[str]:
-        """Транзакции для второго аккаунта (8010984368)"""
-        transactions_created = []
-
-        # === СЧЕТ "Оставил в кассе" (ID=5) ===
-
-        # 1× Сушист (ID=17) - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,  # expense
-            category_id=17,  # Сушист
-            account_from_id=5,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Сушист: {tx_id}")
-
-        # 1× Кассир (ID=16) - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,
-            category_id=16,  # Кассир
-            account_from_id=5,
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Кассир: {tx_id}")
-
-        # 1× Повар Сандей (ID=28) - 10000₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,
-            category_id=28,  # Повар Сандей
-            account_from_id=5,
-            amount=10000,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Повар Сандей: {tx_id}")
-
-        # === ПЕРЕВОДЫ ===
-
-        # 1× Kaspi Pay → Wolt доставка - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=7,  # Wolt доставка
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi → Wolt: {tx_id}")
-
-        # 2× Инкассация (вечером) → Оставил в кассе (на закупы) - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=2,  # Инкассация (вечером)
-            account_to_id=5,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
 
         return transactions_created
 

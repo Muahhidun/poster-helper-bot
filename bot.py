@@ -5213,7 +5213,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             scheduler = DailyTransactionScheduler(telegram_user_id)
             result = await scheduler.create_daily_transactions()
 
-            if result['success']:
+            if result.get('already_exists'):
+                await query.edit_message_text(
+                    "✅ Транзакции уже были созданы ранее. Дубли не созданы.",
+                    parse_mode='Markdown'
+                )
+            elif result['success']:
                 await query.edit_message_text(
                     f"✅ *Транзакции успешно созданы*\n\n"
                     f"Создано транзакций: {result['count']}\n\n"
@@ -6403,9 +6408,18 @@ async def run_weekly_price_check_for_user(telegram_user_id: int, bot_application
 async def check_and_notify_missed_transactions(app: Application):
     """
     Проверить, были ли созданы ежедневные транзакции сегодня
-    Если нет - отправить сообщение пользователю с подтверждением
+    Если нет и уже после 12:00 - отправить сообщение пользователю с подтверждением
     """
     try:
+        from datetime import timezone, timedelta
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+
+        # Не проверять до 12:30 — cron запускается в 12:00, дадим ему время отработать
+        if kz_now.hour < 12 or (kz_now.hour == 12 and kz_now.minute < 30):
+            logger.info(f"⏭️ Проверка пропущенных транзакций пропущена: сейчас {kz_now.strftime('%H:%M')} (до 12:30)")
+            return
+
         db = get_database()
 
         for telegram_user_id in ALLOWED_USER_IDS:
