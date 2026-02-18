@@ -279,7 +279,21 @@ function setAssistantTime(t) {
 
 // ==================== Step 1 → 2: Calculate ====================
 
+function getKZTime() {
+    var now = new Date();
+    var kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
+    return { hour: kz.getUTCHours(), minute: kz.getUTCMinutes() };
+}
+
 async function calculateSalaries() {
+    // Block before 21:30 KZ time
+    var kzTime = getKZTime();
+    if (kzTime.hour < 21 || (kzTime.hour === 21 && kzTime.minute < 30)) {
+        var timeStr = String(kzTime.hour).padStart(2, '0') + ':' + String(kzTime.minute).padStart(2, '0');
+        showBanner('Расчёт зарплат доступен после 21:30. Сейчас ' + timeStr, 'error');
+        return;
+    }
+
     // Validate names
     var names = [
         document.getElementById('cashier1').value.trim(),

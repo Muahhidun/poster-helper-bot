@@ -695,8 +695,14 @@ function selectDate(date) {
     // Hide report
     document.getElementById('report-container').style.display = 'none';
 
-    // Load data for this date
-    loadDateData(date);
+    // Reset polling state when switching dates
+    stopPolling();
+    userHasEdited = false;
+
+    // Load data for this date, then start polling if today
+    loadDateData(date).then(function() {
+        if (date === getTodayStr()) startPolling();
+    });
 }
 
 function resetDisplay() {
@@ -1337,14 +1343,96 @@ function updateStaffBadges(d) {
     }
 }
 
+// ========= Auto-polling for cashier data (every 30s) =========
+let pollInterval = null;
+let userHasEdited = false;
+
+function startPolling() {
+    stopPolling();
+    // Only poll for today's date
+    if (currentDate !== getTodayStr()) return;
+    pollInterval = setInterval(pollCashierData, 30000);
+    console.log('[POLL] Started polling every 30s');
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+        console.log('[POLL] Stopped polling');
+    }
+}
+
+async function pollCashierData() {
+    // Don't poll if user has started editing or we're on a past date
+    if (userHasEdited || currentDate !== getTodayStr()) {
+        stopPolling();
+        return;
+    }
+
+    try {
+        const r = await fetch('/api/shift-closing/poster-data?date=' + toPosterDate(currentDate));
+        const d = await r.json();
+        if (!d.success) return;
+
+        // Update Poster data (always fresh)
+        posterData = d;
+        document.getElementById('poster_trade_display').textContent = fmt(d.trade_total / 100);
+        document.getElementById('poster_bonus_display').textContent = '-' + fmt(d.bonus / 100);
+        document.getElementById('poster_card_display').textContent = fmt(d.poster_card / 100);
+        document.getElementById('orders_info').textContent = d.transactions_count + ' заказов';
+
+        // Auto-fill cashier data if newly available
+        if (d.cashier_data_submitted) {
+            applyCashierData(d);
+        }
+
+        // Auto-fill cafe kaspi
+        if (d.cafe_kaspi_pizzburg !== undefined && !pi('kaspi_cafe')) {
+            document.getElementById('kaspi_cafe').value = String(Math.round(d.cafe_kaspi_pizzburg));
+        }
+
+        // Update badges
+        updateStaffBadges(d);
+
+        // Recalculate
+        calculate();
+
+        console.log('[POLL] Updated: orders=' + d.transactions_count +
+            ', cashier=' + (d.cashier_data_submitted ? 'yes' : 'no'));
+    } catch(e) {
+        console.log('[POLL] Error: ' + e.message);
+    }
+}
+
+// Track user edits to stop polling
+function markUserEdited() {
+    if (!userHasEdited) {
+        userHasEdited = true;
+        stopPolling();
+        console.log('[POLL] User started editing, polling stopped');
+    }
+}
+
 // ========= Init =========
 document.addEventListener('DOMContentLoaded', function() {
     currentDate = getTodayStr();
     document.getElementById('current-date').textContent = fmtDateFull(currentDate);
 
+    // Track user input to stop polling
+    INPUT_IDS.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('focus', markUserEdited);
+        }
+    });
+
     // Render date buttons (always shows last 7 days) then load today's data
     loadHistoryDates();
-    loadDateData(currentDate);
+    loadDateData(currentDate).then(function() {
+        // Start polling after initial load
+        startPolling();
+    });
 });
 </script>
 {% endblock %}
