@@ -5097,6 +5097,7 @@ def api_cafe_transfers():
 
         collection = float(closing.get('collection', 0))
         wolt = float(closing.get('wolt', 0))
+        cashless_diff = float(closing.get('cashless_diff', 0))
 
         # Build transfer list
         transfers = []
@@ -5113,6 +5114,23 @@ def api_cafe_transfers():
                 'from': CAFE_ACCOUNTS['kaspi'],
                 'to': CAFE_ACCOUNTS['wolt'],
                 'amount': int(round(wolt)),
+            })
+        # Корректировка безнала: выравнивание счетов Каспий и Наличные
+        if cashless_diff < -0.5:
+            # Poster думает безнала больше чем факт → переводим с Каспий на Наличные
+            transfers.append({
+                'name': 'Корректировка безнала: Каспий → Наличные',
+                'from': CAFE_ACCOUNTS['kaspi'],
+                'to': CAFE_ACCOUNTS['cash_left'],
+                'amount': int(round(abs(cashless_diff))),
+            })
+        elif cashless_diff > 0.5:
+            # Poster думает безнала меньше чем факт → переводим с Наличных на Каспий
+            transfers.append({
+                'name': 'Корректировка безнала: Наличные → Каспий',
+                'from': CAFE_ACCOUNTS['cash_left'],
+                'to': CAFE_ACCOUNTS['kaspi'],
+                'amount': int(round(cashless_diff)),
             })
 
         if not transfers:
@@ -5216,6 +5234,7 @@ def api_shift_closing_transfers():
         collection = float(closing.get('collection', 0))
         wolt = float(closing.get('wolt', 0))
         halyk = float(closing.get('halyk', 0))
+        cashless_diff = float(closing.get('cashless_diff', 0))
 
         # Build transfer list
         transfers = []
@@ -5239,6 +5258,23 @@ def api_shift_closing_transfers():
                 'from': MAIN_ACCOUNTS['kaspi'],
                 'to': MAIN_ACCOUNTS['halyk'],
                 'amount': int(round(halyk)),
+            })
+        # Корректировка безнала: выравнивание счетов Каспий и Наличные
+        if cashless_diff < -0.5:
+            # Poster думает безнала больше чем факт → переводим с Каспий на Наличные
+            transfers.append({
+                'name': 'Корректировка безнала: Каспий → Наличные',
+                'from': MAIN_ACCOUNTS['kaspi'],
+                'to': MAIN_ACCOUNTS['cash_left'],
+                'amount': int(round(abs(cashless_diff))),
+            })
+        elif cashless_diff > 0.5:
+            # Poster думает безнала меньше чем факт → переводим с Наличных на Каспий
+            transfers.append({
+                'name': 'Корректировка безнала: Наличные → Каспий',
+                'from': MAIN_ACCOUNTS['cash_left'],
+                'to': MAIN_ACCOUNTS['kaspi'],
+                'amount': int(round(cashless_diff)),
             })
 
         if not transfers:
