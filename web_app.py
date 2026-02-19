@@ -7,6 +7,7 @@ import hashlib
 import json
 import asyncio
 import logging
+import time as _time
 import pytz
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -17,10 +18,21 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Kazakhstan timezone — use pytz (not datetime.timezone(timedelta(hours=5)))
-# because the Railway server may have TZ=Asia/Almaty set, causing stdlib
-# timezone to double-apply the +5h offset
+# Kazakhstan timezone
 KZ_TZ = pytz.timezone('Asia/Almaty')
+
+
+def _kz_now():
+    """Get current Kazakhstan time reliably using raw UTC epoch.
+
+    Avoids any issues with server TZ settings by using time.time()
+    (always UTC epoch) + manual offset. This is immune to TZ env var
+    or datetime library timezone handling quirks.
+    """
+    utc_epoch = _time.time()
+    kz_struct = _time.gmtime(utc_epoch + 5 * 3600)
+    return datetime(kz_struct.tm_year, kz_struct.tm_mon, kz_struct.tm_mday,
+                    kz_struct.tm_hour, kz_struct.tm_min, kz_struct.tm_sec)
 
 app = Flask(__name__)
 
@@ -928,7 +940,7 @@ def api_create_supply():
         if not supply_date:
             from datetime import timedelta
             kz_tz = KZ_TZ
-            supply_date = datetime.now(kz_tz).strftime('%Y-%m-%d %H:%M:%S')
+            supply_date = _kz_now().strftime('%Y-%m-%d %H:%M:%S')
 
         # Create supplies for each account
         created_supplies = []
@@ -1187,7 +1199,7 @@ def list_expenses():
 
     # Get date from query param or use today (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
+    today = _kz_now().strftime("%Y-%m-%d")
     selected_date = request.args.get('date', today)
 
     # Validate date format
@@ -1557,7 +1569,7 @@ def sync_expenses_from_poster():
 
     # Get today's date in Kazakhstan timezone (UTC+5)
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz)
+    today = _kz_now()
     date_str = today.strftime('%Y%m%d')
 
     loop = asyncio.new_event_loop()
@@ -1852,7 +1864,7 @@ def api_poster_transactions():
 
     # Kazakhstan time UTC+5
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz)
+    today = _kz_now()
     date_str = today.strftime("%Y%m%d")
 
     loop = asyncio.new_event_loop()
@@ -1951,7 +1963,7 @@ def api_get_expenses():
     kz_tz = KZ_TZ
     filter_date = request.args.get('date')
     if not filter_date:
-        filter_date = datetime.now(kz_tz).strftime("%Y-%m-%d")
+        filter_date = _kz_now().strftime("%Y-%m-%d")
     drafts = [d for d in drafts if d.get('created_at') and str(d['created_at'])[:10] == filter_date]
 
     # Load categories, accounts, poster_accounts, and transactions
@@ -2180,7 +2192,7 @@ def api_get_shift_reconciliation():
     kz_tz = KZ_TZ
     date = request.args.get('date')
     if not date:
-        date = datetime.now(kz_tz).strftime("%Y-%m-%d")
+        date = _kz_now().strftime("%Y-%m-%d")
 
     rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, date)
 
@@ -2213,7 +2225,7 @@ def api_save_shift_reconciliation():
     kz_tz = KZ_TZ
     date = data.get('date')
     if not date:
-        date = datetime.now(kz_tz).strftime("%Y-%m-%d")
+        date = _kz_now().strftime("%Y-%m-%d")
 
     source = data.get('source')
     if not source:
@@ -2250,7 +2262,7 @@ def api_sync_expenses_from_poster():
 
     # Kazakhstan time UTC+5
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz)
+    today = _kz_now()
     date_str = today.strftime("%Y%m%d")
 
     loop = asyncio.new_event_loop()
@@ -2636,7 +2648,7 @@ def api_get_supply_drafts():
 
     # Filter to only today's drafts (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
+    today = _kz_now().strftime("%Y-%m-%d")
 
     # Load items for each draft and linked expense amount
     drafts = []
@@ -3141,7 +3153,7 @@ def list_supplies():
 
     # Filter to only today's drafts (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz).strftime("%Y-%m-%d")
+    today = _kz_now().strftime("%Y-%m-%d")
 
     # Load items for each draft and linked expense amount
     drafts = []
@@ -4155,7 +4167,7 @@ def api_shift_closing_poster_data():
             if date is None:
                 # Business day logic: before 6 AM KZ time, use yesterday
                 kz_tz = KZ_TZ
-                kz_now = datetime.now(kz_tz)
+                kz_now = _kz_now()
                 if kz_now.hour < 6:
                     date_param = (kz_now - timedelta(days=1)).strftime("%Y%m%d")
                 else:
@@ -4391,7 +4403,7 @@ def api_shift_closing_save():
 
     try:
         kz_tz = KZ_TZ
-        date = data.get('date') or datetime.now(kz_tz).strftime('%Y-%m-%d')
+        date = data.get('date') or _kz_now().strftime('%Y-%m-%d')
 
         db.save_shift_closing(g.user_id, date, data)
 
@@ -4411,7 +4423,7 @@ def api_shift_closing_history():
 
     if not date:
         kz_tz = KZ_TZ
-        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+        date = _kz_now().strftime('%Y-%m-%d')
 
     try:
         closing = db.get_shift_closing(g.user_id, date)
@@ -4455,7 +4467,7 @@ def api_shift_closing_report():
 
     date = request.args.get('date')
     if not date:
-        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+        date = _kz_now().strftime('%Y-%m-%d')
 
     try:
         closing = db.get_shift_closing(g.user_id, date)
@@ -4562,7 +4574,7 @@ def api_expense_report():
 
     # Get today's pending drafts (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
-    today = datetime.now(kz_tz)
+    today = _kz_now()
     today_str = today.strftime("%Y-%m-%d")
     date_display = today.strftime("%d.%m")
 
@@ -4751,7 +4763,7 @@ def api_cafe_poster_data():
         async def get_cafe_poster_data():
             if date is None:
                 kz_tz = KZ_TZ
-                kz_now = datetime.now(kz_tz)
+                kz_now = _kz_now()
                 if kz_now.hour < 6:
                     date_param = (kz_now - timedelta(days=1)).strftime("%Y%m%d")
                 else:
@@ -4927,7 +4939,7 @@ def api_cafe_save():
 
     try:
         kz_tz = KZ_TZ
-        date = data.get('date') or datetime.now(kz_tz).strftime('%Y-%m-%d')
+        date = data.get('date') or _kz_now().strftime('%Y-%m-%d')
 
         db.save_shift_closing(
             info['telegram_user_id'], date, data,
@@ -4957,7 +4969,7 @@ def api_cafe_history():
 
     if not date:
         kz_tz = KZ_TZ
-        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+        date = _kz_now().strftime('%Y-%m-%d')
 
     try:
         closing = db.get_shift_closing(
@@ -5005,7 +5017,7 @@ def api_cafe_report():
 
     date = request.args.get('date')
     if not date:
-        date = datetime.now(kz_tz).strftime('%Y-%m-%d')
+        date = _kz_now().strftime('%Y-%m-%d')
 
     try:
         closing = db.get_shift_closing(
@@ -5115,7 +5127,7 @@ def api_cafe_salaries_status():
 
     try:
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         closing = db.get_shift_closing(
@@ -5156,7 +5168,7 @@ def api_cafe_employees_last():
     try:
         # Find last shift closing with salaries_data
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
 
         from database import DB_TYPE
         conn = db._get_connection()
@@ -5201,7 +5213,7 @@ def api_cafe_salaries_create():
 
     try:
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         # Duplicate protection
@@ -5340,7 +5352,7 @@ def api_cafe_transfers():
     try:
         kz_tz = KZ_TZ
         if not date:
-            kz_now = datetime.now(kz_tz)
+            kz_now = _kz_now()
             date = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         # Get shift closing data
@@ -5486,7 +5498,7 @@ def api_shift_closing_transfers():
     try:
         kz_tz = KZ_TZ
         if not date:
-            kz_now = datetime.now(kz_tz)
+            kz_now = _kz_now()
             date = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         # Get shift closing data (main dept: poster_account_id=NULL)
@@ -5687,7 +5699,7 @@ def api_cashier_salaries_calculate():
         # Block salary calculation before 21:30 KZ time
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
             return jsonify({
                 'success': False,
@@ -5765,7 +5777,7 @@ def api_cashier_salaries_create():
         # Block salary creation before 21:30 KZ time
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
             return jsonify({
                 'success': False,
@@ -5847,7 +5859,7 @@ def api_cashier_salaries_create():
         import json
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         db.save_cashier_shift_data(info['telegram_user_id'], date_str, {
@@ -5887,7 +5899,7 @@ def api_cashier_shift_data_save():
     try:
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         # Get existing data to preserve salary fields
@@ -5936,7 +5948,7 @@ def api_cashier_shift_data_status():
     try:
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
-        kz_now = datetime.now(kz_tz)
+        kz_now = _kz_now()
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         existing = db.get_cashier_shift_data(info['telegram_user_id'], date_str)
@@ -5986,7 +5998,7 @@ def _background_expense_sync():
             return
 
         kz_tz = KZ_TZ
-        today = datetime.now(kz_tz)
+        today = _kz_now()
         date_str = today.strftime("%Y%m%d")
 
         loop = asyncio.new_event_loop()
