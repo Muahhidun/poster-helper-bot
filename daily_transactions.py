@@ -59,7 +59,7 @@ class DailyTransactionScheduler:
                 # Ищем транзакции с комментариями "Мадира Т" или "Нургуль Т"
                 for tx in transactions:
                     comment = tx.get('comment', '')
-                    if comment in ['Мадира Т', 'Нургуль Т', 'Заготовка']:
+                    if comment in ['Мадира Т', 'Нургуль Т', 'Заготовка', 'Мадина админ']:
                         logger.info(f"✅ Найдены ежедневные транзакции для пользователя {self.telegram_user_id}")
                         return True
             elif self.telegram_user_id == 8010984368:
