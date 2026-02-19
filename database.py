@@ -751,6 +751,9 @@ class UserDatabase:
         # Run migration to fix shift_closings UNIQUE constraint (cafe + main same date)
         self._migrate_shift_closings_fix_unique()
 
+        # Run migration to add salaries columns to shift_closings (cafe salaries)
+        self._migrate_cafe_salaries()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -810,6 +813,34 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"shift_closings unique fix migration error: {e}")
+
+    def _migrate_cafe_salaries(self):
+        """Add salaries_created and salaries_data columns to shift_closings for cafe salary tracking"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN salaries_created INTEGER DEFAULT 0")
+                else:
+                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN salaries_created BOOLEAN DEFAULT FALSE")
+                logger.info("✅ Cafe salaries migration: added salaries_created to shift_closings")
+            except Exception:
+                pass  # Column already exists
+
+            try:
+                cursor.execute("ALTER TABLE shift_closings ADD COLUMN salaries_data TEXT DEFAULT NULL")
+                logger.info("✅ Cafe salaries migration: added salaries_data to shift_closings")
+            except Exception:
+                pass  # Column already exists
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Cafe salaries migration: completed")
+
+        except Exception as e:
+            logger.error(f"Cafe salaries migration error: {e}")
 
     def _migrate_cafe_access(self):
         """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
@@ -3197,6 +3228,50 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Failed to set transfers_created: {e}")
+            return False
+
+    def set_cafe_salaries(self, telegram_user_id: int, date: str, poster_account_id: int, salaries_data: str) -> bool:
+        """Mark cafe salaries as created and save salary data JSON"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            true_val = 1 if DB_TYPE == "sqlite" else True
+
+            # Check if row exists
+            cursor.execute(f"""
+                SELECT id FROM shift_closings
+                WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                AND poster_account_id = {placeholder}
+            """, (telegram_user_id, date, poster_account_id))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute(f"""
+                    UPDATE shift_closings
+                    SET salaries_created = {placeholder}, salaries_data = {placeholder},
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+                    AND poster_account_id = {placeholder}
+                """, (true_val, salaries_data, telegram_user_id, date, poster_account_id))
+            else:
+                # Create a minimal row
+                cursor.execute(f"""
+                    INSERT INTO shift_closings (telegram_user_id, date, poster_account_id,
+                        salaries_created, salaries_data, updated_at)
+                    VALUES ({placeholder}, {placeholder}, {placeholder},
+                        {placeholder}, {placeholder}, CURRENT_TIMESTAMP)
+                """, (telegram_user_id, date, poster_account_id, true_val, salaries_data))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to set cafe salaries: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     # ==================== Cafe Access Token Methods ====================

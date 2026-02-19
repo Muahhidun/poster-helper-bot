@@ -5061,6 +5061,220 @@ CAFE_ACCOUNTS = {
 }
 
 
+@app.route('/api/cafe/salaries/status')
+def api_cafe_salaries_status():
+    """Check if cafe salaries were already created today"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_info()
+    db = get_database()
+
+    try:
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        closing = db.get_shift_closing(
+            info['telegram_user_id'], date_str,
+            poster_account_id=info['poster_account_id']
+        )
+
+        salaries_created = False
+        salaries_data = None
+        if closing:
+            salaries_created = closing.get('salaries_created') in (True, 1)
+            if salaries_created and closing.get('salaries_data'):
+                import json
+                try:
+                    salaries_data = json.loads(closing['salaries_data'])
+                except Exception:
+                    pass
+
+        return jsonify({
+            'success': True,
+            'salaries_created': salaries_created,
+            'salaries_data': salaries_data,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cafe/employees/last')
+def api_cafe_employees_last():
+    """Get last used cafe employee names for auto-fill"""
+    from datetime import datetime, timedelta, timezone
+    info = resolve_cafe_info()
+    db = get_database()
+
+    try:
+        # Find last shift closing with salaries_data
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+
+        from database import DB_TYPE
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+
+        cursor.execute(f"""
+            SELECT salaries_data FROM shift_closings
+            WHERE telegram_user_id = {placeholder}
+            AND poster_account_id = {placeholder}
+            AND salaries_data IS NOT NULL
+            ORDER BY date DESC LIMIT 1
+        """, (info['telegram_user_id'], info['poster_account_id']))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            import json
+            try:
+                salaries = json.loads(row[0])
+                return jsonify({'success': True, 'salaries': salaries})
+            except Exception:
+                pass
+
+        return jsonify({'success': True, 'salaries': None})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cafe/salaries/create', methods=['POST'])
+def api_cafe_salaries_create():
+    """Create cafe salary transactions in Poster (Кассир, Сушист, Повар Сандей)"""
+    from datetime import datetime, timedelta, timezone
+    from poster_client import PosterClient
+    info = resolve_cafe_info()
+    db = get_database()
+    data = request.json
+
+    try:
+        kz_tz = timezone(timedelta(hours=5))
+        kz_now = datetime.now(kz_tz)
+        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Duplicate protection
+        closing = db.get_shift_closing(
+            info['telegram_user_id'], date_str,
+            poster_account_id=info['poster_account_id']
+        )
+        if closing and closing.get('salaries_created') in (True, 1):
+            return jsonify({
+                'success': False,
+                'error': 'Зарплаты за сегодня уже созданы'
+            }), 400
+
+        salaries = data.get('salaries', [])
+        if not salaries:
+            return jsonify({'success': False, 'error': 'Нет данных о зарплатах'}), 400
+
+        # Category mapping for cafe
+        CAFE_SALARY_CATEGORIES = {
+            'Кассир': 16,
+            'Сушист': 17,
+            'Повар Сандей': None,  # Auto-detect from API
+        }
+        CAFE_ACCOUNT_FROM = 5  # Оставил в кассе (на закупы)
+
+        current_time = kz_now.strftime("%Y-%m-%d %H:%M:%S")
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def create():
+            poster_client = PosterClient(
+                telegram_user_id=info['telegram_user_id'],
+                poster_token=info['poster_token'],
+                poster_user_id=info['poster_user_id'],
+                poster_base_url=info['poster_base_url']
+            )
+
+            created = []
+            povar_sandey_id = None
+
+            try:
+                for s in salaries:
+                    role = s.get('role', '')
+                    name = s.get('name', '')
+                    amount = int(s.get('amount', 0))
+
+                    if amount <= 0:
+                        continue
+
+                    cat_id = CAFE_SALARY_CATEGORIES.get(role)
+
+                    # Auto-detect Повар Сандей category
+                    if cat_id is None and 'повар' in role.lower():
+                        if povar_sandey_id is None:
+                            categories = await poster_client.get_categories()
+                            for cat in categories:
+                                cat_name = cat.get('finance_category_name', '').lower()
+                                if 'повар' in cat_name and 'санд' in cat_name:
+                                    povar_sandey_id = int(cat.get('finance_category_id'))
+                                    break
+                        cat_id = povar_sandey_id
+
+                    if cat_id is None:
+                        logger.warning(f"⚠️ Категория не найдена для роли '{role}', пропускаю")
+                        continue
+
+                    tx_id = await poster_client.create_transaction(
+                        transaction_type=0,  # expense
+                        category_id=cat_id,
+                        account_from_id=CAFE_ACCOUNT_FROM,
+                        amount=amount,
+                        date=current_time,
+                        comment=name
+                    )
+                    created.append({
+                        'role': role,
+                        'name': name,
+                        'amount': amount,
+                        'tx_id': tx_id,
+                    })
+                    logger.info(f"✅ Cafe salary: {role} {name} = {amount}₸, tx_id={tx_id}")
+
+            finally:
+                await poster_client.close()
+
+            return created
+
+        created = loop.run_until_complete(create())
+        loop.close()
+
+        if not created:
+            return jsonify({'success': False, 'error': 'Не удалось создать транзакции'}), 500
+
+        # Save to shift_closings
+        import json
+        salaries_json = json.dumps(
+            [{'role': c['role'], 'name': c['name'], 'amount': c['amount']} for c in created],
+            ensure_ascii=False
+        )
+        db.set_cafe_salaries(
+            info['telegram_user_id'], date_str,
+            info['poster_account_id'], salaries_json
+        )
+
+        total = sum(c['amount'] for c in created)
+        return jsonify({
+            'success': True,
+            'salaries': created,
+            'total': total,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/cafe/<token>/transfers', methods=['POST'])
 def api_cafe_transfers_legacy(token):
     return redirect('/api/cafe/transfers', code=307)
