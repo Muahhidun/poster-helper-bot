@@ -5696,15 +5696,9 @@ def api_cashier_salaries_calculate():
     data = request.json
 
     try:
-        # Block salary calculation before 21:30 KZ time
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
         kz_now = _kz_now()
-        if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
-            return jsonify({
-                'success': False,
-                'error': f'Расчёт зарплат доступен после 21:30. Сейчас {kz_now.strftime("%H:%M")}'
-            }), 400
 
         cashier_count = int(data.get('cashier_count', 2))
         assistant_start_time = data.get('assistant_start_time', '10:00')
@@ -5774,15 +5768,9 @@ def api_cashier_salaries_create():
     db = get_database()
 
     try:
-        # Block salary creation before 21:30 KZ time
         from datetime import datetime, timedelta
         kz_tz = KZ_TZ
         kz_now = _kz_now()
-        if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
-            return jsonify({
-                'success': False,
-                'error': f'Создание зарплат доступно после 21:30. Сейчас {kz_now.strftime("%H:%M")}'
-            }), 400
 
         # Duplicate protection: check if salaries already created today
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
