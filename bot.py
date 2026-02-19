@@ -6411,8 +6411,7 @@ async def check_and_notify_missed_transactions(app: Application):
     Если нет и уже после 12:00 - отправить сообщение пользователю с подтверждением
     """
     try:
-        from datetime import timezone, timedelta
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = pytz.timezone('Asia/Almaty')
         kz_now = datetime.now(kz_tz)
 
         # Не проверять до 12:30 — cron запускается в 12:00, дадим ему время отработать
