@@ -344,6 +344,8 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
 
 <script>
 const API_BASE = '/api/cafe';
+const USER_ROLE = '{{ user_role }}';
+const IS_OWNER = USER_ROLE === 'owner';
 
 let posterData = null;
 let debounceTimer = null;
@@ -426,6 +428,49 @@ async function checkSalaryStatus() {
     } catch(e) {
         console.error('Salary status check error:', e);
     }
+}
+
+async function loadSalaryStatusForOwner() {
+    try {
+        var r = await fetch(API_BASE + '/salaries/status');
+        var d = await r.json();
+        if (d.success && d.salaries_created) {
+            salariesCreated = true;
+            // Show created salaries in the salary card
+            if (d.salaries_data) {
+                showCreatedSalaries(d.salaries_data);
+            }
+        }
+    } catch(e) {
+        console.error('Salary status check error:', e);
+    }
+}
+
+function showCreatedSalaries(salaries) {
+    var btn = document.getElementById('btnSalaryNext');
+    btn.textContent = 'Зарплаты созданы';
+    btn.disabled = true;
+    btn.style.background = '#34c759';
+
+    // Fill in the values from saved data
+    salaries.forEach(function(s) {
+        if (s.role === 'Кассир') {
+            document.getElementById('sal_cashier_name').value = s.name || '';
+            document.getElementById('sal_cashier_amount').value = s.amount || '';
+        } else if (s.role === 'Сушист') {
+            document.getElementById('sal_sushi_name').value = s.name || '';
+            document.getElementById('sal_sushi_amount').value = s.amount || '';
+        } else if (s.role === 'Повар Сандей') {
+            document.getElementById('sal_povar_name').value = s.name || '';
+            document.getElementById('sal_povar_amount').value = s.amount || '';
+        }
+    });
+    updateSalaryTotal();
+
+    // Make inputs readonly for owner view
+    ['sal_cashier_name','sal_cashier_amount','sal_sushi_name','sal_sushi_amount','sal_povar_name','sal_povar_amount'].forEach(function(id) {
+        document.getElementById(id).setAttribute('readonly', '');
+    });
 }
 
 async function createCafeSalaries() {
@@ -1004,9 +1049,21 @@ document.addEventListener('DOMContentLoaded', function() {
     currentDate = getTodayStr();
     document.getElementById('current-date').textContent = fmtDateFull(currentDate);
 
-    // Salary step: load last names and check if already created today
-    loadLastEmployees();
-    checkSalaryStatus();
+    if (IS_OWNER) {
+        // Owner: show both steps, no blocking
+        document.getElementById('salary-step').classList.remove('hidden');
+        document.getElementById('shift-closing-step').classList.remove('hidden');
+        document.querySelector('.sc-step-indicator').classList.add('hidden');
+        document.getElementById('btnSalaryNext').textContent = 'Создать зарплаты';
+        loadLastEmployees();
+        loadSalaryStatusForOwner();
+        loadHistoryDates();
+        loadDateData(currentDate);
+    } else {
+        // Admin: strict step-by-step flow
+        loadLastEmployees();
+        checkSalaryStatus();
+    }
 });
 </script>
 </body>

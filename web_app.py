@@ -4684,8 +4684,10 @@ def cafe_shift_closing_legacy(token):
 @app.route('/cafe/shift-closing')
 def cafe_shift_closing():
     info = resolve_cafe_info()
+    role = session.get('role', 'admin')
     return render_template('shift_closing_cafe.html',
-                           account_name=info.get('account_name', 'Cafe'))
+                           account_name=info.get('account_name', 'Cafe'),
+                           user_role=role)
 
 
 @app.route('/api/cafe/<token>/poster-data')
@@ -5595,8 +5597,10 @@ def cashier_shift_closing_legacy(token):
 @app.route('/cashier/shift-closing')
 def cashier_shift_closing():
     info = resolve_cashier_info()
+    role = session.get('role', 'cashier')
     return render_template('shift_closing_cashier.html',
-                           account_name=info.get('account_name', 'Основной отдел'))
+                           account_name=info.get('account_name', 'Основной отдел'),
+                           user_role=role)
 
 
 @app.route('/api/cashier/<token>/employees/last')
@@ -5884,12 +5888,30 @@ def api_cashier_shift_data_status():
 
         existing = db.get_cashier_shift_data(info['telegram_user_id'], date_str)
 
-        return jsonify({
+        salaries_created = bool(existing and (existing.get('salaries_created') or existing.get('salaries_created') == 1))
+        shift_data_submitted = bool(existing and (existing.get('shift_data_submitted') or existing.get('shift_data_submitted') == 1))
+
+        result = {
             'success': True,
             'date': date_str,
-            'salaries_created': bool(existing and (existing.get('salaries_created') or existing.get('salaries_created') == 1)),
-            'shift_data_submitted': bool(existing and (existing.get('shift_data_submitted') or existing.get('shift_data_submitted') == 1)),
-        })
+            'salaries_created': salaries_created,
+            'shift_data_submitted': shift_data_submitted,
+        }
+
+        # Include details for owner view
+        role = session.get('role')
+        if role == 'owner' and existing:
+            result['salaries_data'] = existing.get('salaries_data')
+            if shift_data_submitted:
+                result['shift_data'] = {
+                    'wolt': existing.get('wolt', 0),
+                    'halyk': existing.get('halyk', 0),
+                    'cash_bills': existing.get('cash_bills', 0),
+                    'cash_coins': existing.get('cash_coins', 0),
+                    'expenses': existing.get('expenses', 0),
+                }
+
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
