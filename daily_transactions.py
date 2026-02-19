@@ -260,43 +260,10 @@ class DailyTransactionScheduler:
 
         # === ПЕРЕВОДЫ ===
 
-        # 1× Kaspi Pay → Wolt доставка - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=8,  # Wolt доставка
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi → Wolt: {tx_id}")
+        # Переводы Kaspi→Wolt, Kaspi→Халык, Инкассация→Оставил в кассе
+        # убраны — теперь создаются при закрытии смены с реальными суммами
 
-        # 2× Kaspi Pay → Халык банк - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=10,  # Халык банк
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi → Халык: {tx_id}")
-
-        # 3× Инкассация (вечером) → Оставил в кассе (на закупы) - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=2,  # Инкассация (вечером)
-            account_to_id=4,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
-
-        # 4× Оставил в кассе (на закупы) → Деньги дома (отложенные) - 1₸, комментарий "Забрал - Имя"
+        # Оставил в кассе (на закупы) → Деньги дома (отложенные) - 1₸, комментарий "Забрал - Имя"
         tx_id = await poster_client.create_transaction(
             transaction_type=2,  # transfer
             category_id=0,  # не используется для переводов
@@ -352,31 +319,8 @@ class DailyTransactionScheduler:
         # )
         # transactions_created.append(f"Повар Сандей: {tx_id}")
 
-        # === ПЕРЕВОДЫ ===
-
-        # 4. Инкассация → Оставил в кассе - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=2,  # Инкассация (вечером)
-            account_to_id=5,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
-
-        # 5. Kaspi Pay → Wolt доставка - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=7,  # Wolt доставка
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi Pay → Wolt: {tx_id}")
+        # Переводы Инкассация→Оставил в кассе и Kaspi→Wolt
+        # убраны — теперь создаются при закрытии смены с реальными суммами
 
         return transactions_created
 
