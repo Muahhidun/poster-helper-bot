@@ -142,6 +142,7 @@ def check_auth():
         all_users = db.list_web_users(TELEGRAM_USER_ID)
         if not all_users:
             # No web_users exist — skip auth entirely (legacy mode)
+            logger.warning("Auth bypassed: no web_users configured (legacy mode). Create users via /staff command.")
             return None
 
         if path.startswith('/api/'):
@@ -696,6 +697,10 @@ def search_items():
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
                     print(f"Error loading from account {acc['account_name']}: {e}")
                     continue
     except Exception as e:
@@ -1283,8 +1288,10 @@ def list_expenses():
 
                 return all_categories, all_accounts, all_transactions
 
-            categories, accounts, poster_transactions = loop.run_until_complete(load_data())
-            loop.close()
+            try:
+                categories, accounts, poster_transactions = loop.run_until_complete(load_data())
+            finally:
+                loop.close()
     except Exception as e:
         print(f"Error loading categories/accounts: {e}")
         import traceback
@@ -1439,8 +1446,10 @@ def search_categories():
             finally:
                 await client.close()
 
-        categories = loop.run_until_complete(get_categories())
-        loop.close()
+        try:
+            categories = loop.run_until_complete(get_categories())
+        finally:
+            loop.close()
 
         # Filter by query
         matches = [
@@ -1797,8 +1806,10 @@ def sync_expenses_from_poster():
 
         return synced_count, updated_count, skipped_count, deleted_count, errors
 
-    synced, updated, skipped, deleted, errors = loop.run_until_complete(fetch_and_sync())
-    loop.close()
+    try:
+        synced, updated, skipped, deleted, errors = loop.run_until_complete(fetch_and_sync())
+    finally:
+        loop.close()
 
     msg_parts = []
     if synced > 0:
@@ -1903,7 +1914,6 @@ def api_poster_transactions():
 
     try:
         transactions = loop.run_until_complete(fetch_all_transactions())
-        loop.close()
 
         return jsonify({
             'success': True,
@@ -1913,10 +1923,11 @@ def api_poster_transactions():
         })
 
     except Exception as e:
-        loop.close()
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        loop.close()
 
 
 # ==================== EXPENSES API ====================
@@ -2007,8 +2018,10 @@ def api_get_expenses():
 
                 return all_categories, all_accounts, all_transactions
 
-            categories, accounts, poster_transactions = loop.run_until_complete(load_data())
-            loop.close()
+            try:
+                categories, accounts, poster_transactions = loop.run_until_complete(load_data())
+            finally:
+                loop.close()
     except Exception as e:
         print(f"Error loading expenses data: {e}")
         import traceback
@@ -2467,10 +2480,10 @@ def api_sync_expenses_from_poster():
 
     try:
         loop.run_until_complete(sync_from_all_accounts())
-        loop.close()
     except Exception as e:
-        loop.close()
         return jsonify({'success': False, 'error': str(e), 'synced': synced, 'updated': updated, 'deleted': deleted, 'skipped': skipped, 'errors': errors})
+    finally:
+        loop.close()
 
     msg_parts = []
     if synced > 0:
@@ -2592,10 +2605,10 @@ def api_process_expenses():
 
     try:
         loop.run_until_complete(process_drafts())
-        loop.close()
     except Exception as e:
-        loop.close()
         return jsonify({'success': False, 'error': str(e), 'created': created, 'errors': errors})
+    finally:
+        loop.close()
 
     return jsonify({
         'success': True,
@@ -2850,8 +2863,10 @@ def api_create_supply_in_poster(draft_id):
             finally:
                 await client.close()
 
-        result = loop.run_until_complete(create_supply())
-        loop.close()
+        try:
+            result = loop.run_until_complete(create_supply())
+        finally:
+            loop.close()
 
         if result.get('success'):
             # Mark draft as processed
@@ -3087,8 +3102,10 @@ def process_drafts():
 
             return total_success, all_processed_ids
 
-        success, processed_ids = loop.run_until_complete(create_all_transactions())
-        loop.close()
+        try:
+            success, processed_ids = loop.run_until_complete(create_all_transactions())
+        finally:
+            loop.close()
 
         # Mark as in Poster (stay visible with green status)
         if processed_ids:
@@ -3243,6 +3260,10 @@ def list_supplies():
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
                     logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
@@ -3323,6 +3344,10 @@ def view_all_supplies():
                     loop.run_until_complete(poster_client.close())
                     loop.close()
                 except Exception as e:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
                     print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
@@ -3557,8 +3582,10 @@ def process_all_supplies():
                     finally:
                         await client.close()
 
-                supply_id = loop.run_until_complete(create_supply_in_poster())
-                loop.close()
+                try:
+                    supply_id = loop.run_until_complete(create_supply_in_poster())
+                finally:
+                    loop.close()
 
                 if supply_id:
                     results.append({
@@ -3638,6 +3665,10 @@ def view_supply(draft_id):
 
                     loop.close()
                 except Exception as e:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
                     print(f"Error loading from account {acc['account_name']}: {e}")
                     continue
     except Exception as e:
@@ -3947,8 +3978,10 @@ def process_supply(draft_id):
 
             return created_supplies
 
-        created_supplies = loop.run_until_complete(create_supplies_in_poster())
-        loop.close()
+        try:
+            created_supplies = loop.run_until_complete(create_supplies_in_poster())
+        finally:
+            loop.close()
 
         if created_supplies:
             # Mark draft as processed
@@ -4207,8 +4240,10 @@ def api_shift_closing_poster_data():
             finally:
                 await client.close()
 
-        data = loop.run_until_complete(get_poster_data_primary())
-        loop.close()
+        try:
+            data = loop.run_until_complete(get_poster_data_primary())
+        finally:
+            loop.close()
 
         # Look up Cafe's kaspi_pizzburg for auto-fill into kaspi_cafe
         try:
@@ -4782,8 +4817,10 @@ def api_cafe_poster_data():
             finally:
                 await client.close()
 
-        data = loop.run_until_complete(get_cafe_poster_data())
-        loop.close()
+        try:
+            data = loop.run_until_complete(get_cafe_poster_data())
+        finally:
+            loop.close()
 
         # Look up main shift closing's kaspi_cafe for auto-fill into kaspi_pizzburg
         try:
@@ -5247,8 +5284,10 @@ def api_cafe_salaries_create():
 
             return created
 
-        created = loop.run_until_complete(create())
-        loop.close()
+        try:
+            created = loop.run_until_complete(create())
+        finally:
+            loop.close()
 
         if not created:
             return jsonify({'success': False, 'error': 'Не удалось создать транзакции'}), 500
@@ -5391,8 +5430,10 @@ def api_cafe_transfers():
                 await client.close()
             return results
 
-        results = loop.run_until_complete(create_transfers())
-        loop.close()
+        try:
+            results = loop.run_until_complete(create_transfers())
+        finally:
+            loop.close()
 
         # Mark as created
         db.set_transfers_created(
@@ -5540,8 +5581,10 @@ def api_shift_closing_transfers():
                 await client.close()
             return results
 
-        results = loop.run_until_complete(create_transfers())
-        loop.close()
+        try:
+            results = loop.run_until_complete(create_transfers())
+        finally:
+            loop.close()
 
         # Mark as created
         db.set_transfers_created(user_id, date)
@@ -5687,8 +5730,10 @@ def api_cashier_salaries_calculate():
                 'assistant_salary': assistant_salary,
             }
 
-        result = loop.run_until_complete(calc())
-        loop.close()
+        try:
+            result = loop.run_until_complete(calc())
+        finally:
+            loop.close()
 
         return jsonify({'success': True, **result})
 
@@ -5760,8 +5805,10 @@ def api_cashier_salaries_create():
 
             return cashier_result, doner_result
 
-        cashier_result, doner_result = loop.run_until_complete(create())
-        loop.close()
+        try:
+            cashier_result, doner_result = loop.run_until_complete(create())
+        finally:
+            loop.close()
 
         if not cashier_result.get('success') or not doner_result.get('success'):
             errors = []

@@ -270,6 +270,12 @@ class UserDatabase:
             except Exception:
                 pass  # Column already exists
 
+            # Index for fast lookup during sync (poster_transaction_id used in O(n) scan)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_expense_drafts_poster_txn
+                ON expense_drafts(poster_transaction_id)
+            """)
+
             # Migration: add is_income column for income transactions (доходы, например продажа масла)
             try:
                 cursor.execute("ALTER TABLE expense_drafts ADD COLUMN is_income INTEGER DEFAULT 0")
@@ -603,6 +609,12 @@ class UserDatabase:
                 cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS poster_transaction_id TEXT")
             except Exception:
                 pass  # Column already exists
+
+            # Index for fast lookup during sync (poster_transaction_id used in O(n) scan)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_expense_drafts_poster_txn
+                ON expense_drafts(poster_transaction_id)
+            """)
 
             # Migration: add is_income column for income transactions (доходы, например продажа масла)
             try:
