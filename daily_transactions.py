@@ -220,6 +220,21 @@ class DailyTransactionScheduler:
         )
         transactions_created.append(f"Курьер: {tx_id}")
 
+        # 1× Зарплаты - 1₸, комментарий "Мадина админ" (ID категории определяется автоматически)
+        zarplaty_id = await self._find_category_id(poster_client, 'зарплат')
+        if zarplaty_id:
+            tx_id = await poster_client.create_transaction(
+                transaction_type=0,
+                category_id=zarplaty_id,
+                account_from_id=4,
+                amount=1,
+                date=current_time,
+                comment="Мадина админ"
+            )
+            transactions_created.append(f"Зарплаты (Мадина админ): {tx_id}")
+        else:
+            logger.warning("⚠️ Категория 'Зарплаты' не найдена в Pizzburg")
+
         # 3× Логистика - Доставка продуктов (ID=24) с разными комментариями
         logistics_configs = [
             {"comment": "Караганда", "amount": 1},
