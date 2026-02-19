@@ -16,6 +16,20 @@ class DailyTransactionScheduler:
     def __init__(self, telegram_user_id: int):
         self.telegram_user_id = telegram_user_id
 
+    async def _find_category_id(self, poster_client: PosterClient, *keywords: str) -> int | None:
+        """Найти ID категории по ключевым словам в названии"""
+        try:
+            categories = await poster_client.get_categories()
+            for cat in categories:
+                cat_name = cat.get('finance_category_name', '').lower()
+                if all(kw in cat_name for kw in keywords):
+                    cat_id = int(cat.get('finance_category_id'))
+                    logger.info(f"✅ Найдена категория '{cat.get('finance_category_name')}' ID={cat_id}")
+                    return cat_id
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска категории: {e}")
+        return None
+
     async def check_transactions_created_today(self) -> bool:
         """
         Проверить, были ли уже созданы ежедневные транзакции сегодня
@@ -305,19 +319,20 @@ class DailyTransactionScheduler:
         )
         transactions_created.append(f"Сушист: {tx_id}")
 
-        # 3. Повар Сандей - 1₸
-        # ПРИМЕЧАНИЕ: Категории "Повар Сандей" нет в Pizzburg-cafe
-        # Доступные категории: ID=18 (Бариста), ID=19 (КухРабочая)
-        # Закомментировано до выяснения правильной категории
-        # tx_id = await poster_client.create_transaction(
-        #     transaction_type=0,  # expense
-        #     category_id=???,  # Повар Сандей - КАТЕГОРИЯ НЕ НАЙДЕНА
-        #     account_from_id=5,  # Оставил в кассе (на закупы)
-        #     amount=1,
-        #     date=current_time,
-        #     comment=""
-        # )
-        # transactions_created.append(f"Повар Сандей: {tx_id}")
+        # 3. Повар Сандей - 1₸ (ID категории определяется автоматически из API)
+        povar_sandey_id = await self._find_category_id(poster_client, 'повар', 'санд')
+        if povar_sandey_id:
+            tx_id = await poster_client.create_transaction(
+                transaction_type=0,  # expense
+                category_id=povar_sandey_id,
+                account_from_id=5,  # Оставил в кассе (на закупы)
+                amount=1,
+                date=current_time,
+                comment=""
+            )
+            transactions_created.append(f"Повар Сандей: {tx_id}")
+        else:
+            logger.warning("⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe")
 
         # Переводы Инкассация→Оставил в кассе и Kaspi→Wolt
         # убраны — теперь создаются при закрытии смены с реальными суммами
