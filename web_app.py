@@ -7,6 +7,7 @@ import hashlib
 import json
 import asyncio
 import logging
+import pytz
 from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
@@ -15,6 +16,11 @@ from database import get_database
 import config
 
 logger = logging.getLogger(__name__)
+
+# Kazakhstan timezone — use pytz (not datetime.timezone(timedelta(hours=5)))
+# because the Railway server may have TZ=Asia/Almaty set, causing stdlib
+# timezone to double-apply the +5h offset
+KZ_TZ = pytz.timezone('Asia/Almaty')
 
 app = Flask(__name__)
 
@@ -920,8 +926,8 @@ def api_create_supply():
         # Prepare date with Kazakhstan timezone (UTC+5)
         supply_date = data.get('date')
         if not supply_date:
-            from datetime import timezone, timedelta
-            kz_tz = timezone(timedelta(hours=5))
+            from datetime import timedelta
+            kz_tz = KZ_TZ
             supply_date = datetime.now(kz_tz).strftime('%Y-%m-%d %H:%M:%S')
 
         # Create supplies for each account
@@ -1173,14 +1179,14 @@ def delete_template(template_name):
 @app.route('/expenses')
 def list_expenses():
     """Show expense drafts for user - filter by date (default: today)"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     # Load ALL drafts (not just pending) to show completion status
     drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
     # Get date from query param or use today (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz).strftime("%Y-%m-%d")
     selected_date = request.args.get('date', today)
 
@@ -1540,7 +1546,7 @@ def create_expense():
 @app.route('/expenses/sync-from-poster', methods=['POST'])
 def sync_expenses_from_poster():
     """Sync automatic transactions from Poster to expense drafts"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     from poster_client import PosterClient
 
     db = get_database()
@@ -1550,7 +1556,7 @@ def sync_expenses_from_poster():
         return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
 
     # Get today's date in Kazakhstan timezone (UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz)
     date_str = today.strftime('%Y%m%d')
 
@@ -1836,7 +1842,7 @@ def sync_expenses_from_poster():
 @app.route('/api/poster-transactions')
 def api_poster_transactions():
     """Get today's transactions from Poster for real-time comparison"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
@@ -1845,7 +1851,7 @@ def api_poster_transactions():
         return jsonify({'success': False, 'error': 'No Poster accounts'})
 
     # Kazakhstan time UTC+5
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz)
     date_str = today.strftime("%Y%m%d")
 
@@ -1935,14 +1941,14 @@ def api_poster_transactions():
 @app.route('/api/expenses')
 def api_get_expenses():
     """Get all expense drafts with categories, accounts, and poster transactions for React app"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     # Load ALL drafts (not just pending) to show completion status
     drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
 
     # Filter by date - use ?date=YYYY-MM-DD param, default to today (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     filter_date = request.args.get('date')
     if not filter_date:
         filter_date = datetime.now(kz_tz).strftime("%Y-%m-%d")
@@ -2166,12 +2172,12 @@ def api_update_completion_status(draft_id):
 @app.route('/api/shift-reconciliation')
 def api_get_shift_reconciliation():
     """Get shift reconciliation data for a specific date"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
 
     # Default to today (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     date = request.args.get('date')
     if not date:
         date = datetime.now(kz_tz).strftime("%Y-%m-%d")
@@ -2198,13 +2204,13 @@ def api_get_shift_reconciliation():
 @app.route('/api/shift-reconciliation', methods=['POST'])
 def api_save_shift_reconciliation():
     """Save shift reconciliation data for a specific date and source"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     data = request.get_json() or {}
 
     # Default to today (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     date = data.get('date')
     if not date:
         date = datetime.now(kz_tz).strftime("%Y-%m-%d")
@@ -2234,7 +2240,7 @@ def api_save_shift_reconciliation():
 @app.route('/api/expenses/sync-from-poster', methods=['POST'])
 def api_sync_expenses_from_poster():
     """Sync expenses from Poster - API version"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
@@ -2243,7 +2249,7 @@ def api_sync_expenses_from_poster():
         return jsonify({'success': False, 'error': 'No Poster accounts', 'synced': 0, 'skipped': 0, 'errors': []})
 
     # Kazakhstan time UTC+5
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz)
     date_str = today.strftime("%Y%m%d")
 
@@ -2623,13 +2629,13 @@ def api_process_expenses():
 @app.route('/api/supply-drafts')
 def api_get_supply_drafts():
     """Get all supply drafts with items for React app (today only)"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
 
     # Filter to only today's drafts (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz).strftime("%Y-%m-%d")
 
     # Load items for each draft and linked expense amount
@@ -3128,13 +3134,13 @@ def process_drafts():
 @app.route('/supplies')
 def list_supplies():
     """Show supply drafts for user with ingredients for search - only today's"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
 
     # Filter to only today's drafts (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz).strftime("%Y-%m-%d")
 
     # Load items for each draft and linked expense amount
@@ -4141,14 +4147,14 @@ def api_shift_closing_poster_data():
         # Shift closing only uses primary account (PizzBurg)
         primary_account = next((a for a in accounts if a.get('is_primary')), accounts[0])
 
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         async def get_poster_data_primary():
             if date is None:
                 # Business day logic: before 6 AM KZ time, use yesterday
-                kz_tz = timezone(timedelta(hours=5))
+                kz_tz = KZ_TZ
                 kz_now = datetime.now(kz_tz)
                 if kz_now.hour < 6:
                     date_param = (kz_now - timedelta(days=1)).strftime("%Y%m%d")
@@ -4379,12 +4385,12 @@ def api_shift_closing_calculate():
 @app.route('/api/shift-closing/save', methods=['POST'])
 def api_shift_closing_save():
     """Save shift closing data for a specific date"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     data = request.json
     db = get_database()
 
     try:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         date = data.get('date') or datetime.now(kz_tz).strftime('%Y-%m-%d')
 
         db.save_shift_closing(g.user_id, date, data)
@@ -4404,7 +4410,7 @@ def api_shift_closing_history():
     db = get_database()
 
     if not date:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         date = datetime.now(kz_tz).strftime('%Y-%m-%d')
 
     try:
@@ -4442,10 +4448,10 @@ def api_shift_closing_dates():
 @app.route('/api/shift-closing/report')
 def api_shift_closing_report():
     """Generate text report for shift closing (for copying to WhatsApp)"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
 
     date = request.args.get('date')
     if not date:
@@ -4550,12 +4556,12 @@ def api_shift_closing_report():
 @app.route('/api/expense-report')
 def api_expense_report():
     """Generate expense report in text format for shift closing"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
 
     # Get today's pending drafts (Kazakhstan time UTC+5)
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
     today = datetime.now(kz_tz)
     today_str = today.strftime("%Y-%m-%d")
     date_display = today.strftime("%d.%m")
@@ -4733,7 +4739,7 @@ def api_cafe_poster_data_legacy(token):
 @app.route('/api/cafe/poster-data')
 def api_cafe_poster_data():
     """Get Poster data for cafe shift closing"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     date = request.args.get('date')  # YYYYMMDD
 
@@ -4744,7 +4750,7 @@ def api_cafe_poster_data():
 
         async def get_cafe_poster_data():
             if date is None:
-                kz_tz = timezone(timedelta(hours=5))
+                kz_tz = KZ_TZ
                 kz_now = datetime.now(kz_tz)
                 if kz_now.hour < 6:
                     date_param = (kz_now - timedelta(days=1)).strftime("%Y%m%d")
@@ -4914,13 +4920,13 @@ def api_cafe_save_legacy(token):
 @app.route('/api/cafe/save', methods=['POST'])
 def api_cafe_save():
     """Save cafe shift closing data"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     data = request.json
     db = get_database()
 
     try:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         date = data.get('date') or datetime.now(kz_tz).strftime('%Y-%m-%d')
 
         db.save_shift_closing(
@@ -4944,13 +4950,13 @@ def api_cafe_history_legacy(token):
 @app.route('/api/cafe/history')
 def api_cafe_history():
     """Get cafe shift closing data for a specific date"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     date = request.args.get('date')
     db = get_database()
 
     if not date:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         date = datetime.now(kz_tz).strftime('%Y-%m-%d')
 
     try:
@@ -4992,10 +4998,10 @@ def api_cafe_report_legacy(token):
 @app.route('/api/cafe/report')
 def api_cafe_report():
     """Generate text report for cafe shift closing"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     db = get_database()
-    kz_tz = timezone(timedelta(hours=5))
+    kz_tz = KZ_TZ
 
     date = request.args.get('date')
     if not date:
@@ -5103,12 +5109,12 @@ CAFE_ACCOUNTS = {
 @app.route('/api/cafe/salaries/status')
 def api_cafe_salaries_status():
     """Check if cafe salaries were already created today"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     db = get_database()
 
     try:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -5143,13 +5149,13 @@ def api_cafe_salaries_status():
 @app.route('/api/cafe/employees/last')
 def api_cafe_employees_last():
     """Get last used cafe employee names for auto-fill"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     db = get_database()
 
     try:
         # Find last shift closing with salaries_data
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
 
         from database import DB_TYPE
@@ -5187,14 +5193,14 @@ def api_cafe_employees_last():
 @app.route('/api/cafe/salaries/create', methods=['POST'])
 def api_cafe_salaries_create():
     """Create cafe salary transactions in Poster (Кассир, Сушист, Повар Сандей)"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     from poster_client import PosterClient
     info = resolve_cafe_info()
     db = get_database()
     data = request.json
 
     try:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -5324,7 +5330,7 @@ def api_cafe_transfers_legacy(token):
 @app.route('/api/cafe/transfers', methods=['POST'])
 def api_cafe_transfers():
     """Create auto-transfers for cafe shift closing"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     info = resolve_cafe_info()
     db = get_database()
 
@@ -5332,7 +5338,7 @@ def api_cafe_transfers():
     date = data.get('date')
 
     try:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         if not date:
             kz_now = datetime.now(kz_tz)
             date = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -5469,7 +5475,7 @@ MAIN_ACCOUNTS = {
 @app.route('/api/shift-closing/transfers', methods=['POST'])
 def api_shift_closing_transfers():
     """Create auto-transfers for main dept shift closing"""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     db = get_database()
     user_id = g.user_id
@@ -5478,7 +5484,7 @@ def api_shift_closing_transfers():
     date = data.get('date')
 
     try:
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         if not date:
             kz_now = datetime.now(kz_tz)
             date = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -5679,8 +5685,8 @@ def api_cashier_salaries_calculate():
 
     try:
         # Block salary calculation before 21:30 KZ time
-        from datetime import datetime, timedelta, timezone
-        kz_tz = timezone(timedelta(hours=5))
+        from datetime import datetime, timedelta
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
             return jsonify({
@@ -5757,8 +5763,8 @@ def api_cashier_salaries_create():
 
     try:
         # Block salary creation before 21:30 KZ time
-        from datetime import datetime, timedelta, timezone
-        kz_tz = timezone(timedelta(hours=5))
+        from datetime import datetime, timedelta
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         if kz_now.hour < 21 or (kz_now.hour == 21 and kz_now.minute < 30):
             return jsonify({
@@ -5839,8 +5845,8 @@ def api_cashier_salaries_create():
 
         # Save to cashier_shift_data
         import json
-        from datetime import datetime, timedelta, timezone
-        kz_tz = timezone(timedelta(hours=5))
+        from datetime import datetime, timedelta
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -5879,8 +5885,8 @@ def api_cashier_shift_data_save():
     db = get_database()
 
     try:
-        from datetime import datetime, timedelta, timezone
-        kz_tz = timezone(timedelta(hours=5))
+        from datetime import datetime, timedelta
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -5928,8 +5934,8 @@ def api_cashier_shift_data_status():
     db = get_database()
 
     try:
-        from datetime import datetime, timedelta, timezone
-        kz_tz = timezone(timedelta(hours=5))
+        from datetime import datetime, timedelta
+        kz_tz = KZ_TZ
         kz_now = datetime.now(kz_tz)
         date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -5971,7 +5977,7 @@ def api_cashier_shift_data_status():
 def _background_expense_sync():
     """Background job: sync expenses from Poster for all users with accounts"""
     try:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
         from poster_client import PosterClient
 
         db = get_database()
@@ -5979,7 +5985,7 @@ def _background_expense_sync():
         if not poster_accounts:
             return
 
-        kz_tz = timezone(timedelta(hours=5))
+        kz_tz = KZ_TZ
         today = datetime.now(kz_tz)
         date_str = today.strftime("%Y%m%d")
 

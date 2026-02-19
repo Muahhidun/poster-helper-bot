@@ -1,13 +1,14 @@
 """Автоматические ежедневные транзакции"""
 import logging
+import pytz
 from typing import List, Dict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from poster_client import PosterClient
 
 logger = logging.getLogger(__name__)
 
-# Almaty timezone (UTC+5)
-KZ_TZ = timezone(timedelta(hours=5))
+# Almaty timezone — use pytz to avoid issues with server TZ config
+KZ_TZ = pytz.timezone('Asia/Almaty')
 
 
 class DailyTransactionScheduler:
