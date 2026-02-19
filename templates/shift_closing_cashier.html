@@ -193,6 +193,8 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
 
 <script>
 const API_BASE = '/api/cashier';
+const USER_ROLE = '{{ user_role }}';
+const IS_OWNER = USER_ROLE === 'owner';
 
 let cashierCount = 2;
 let assistantTime = '10:00';
@@ -202,7 +204,25 @@ let calculatedSalaries = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     loadLastEmployees();
-    checkStatus();
+
+    if (IS_OWNER) {
+        // Owner: show all steps at once, readonly
+        document.querySelector('.sc-step-indicator').style.display = 'none';
+        for (var i = 1; i <= 4; i++) {
+            document.getElementById('step' + i).classList.remove('hidden');
+        }
+        document.getElementById('step4').style.display = 'none'; // hide "done" card
+        // Hide action buttons
+        document.getElementById('btnNext1').style.display = 'none';
+        document.getElementById('btnConfirm').parentElement.style.display = 'none';
+        document.getElementById('btnSubmit').style.display = 'none';
+        // Make all inputs readonly
+        document.querySelectorAll('input').forEach(function(el) { el.setAttribute('readonly', ''); });
+        document.querySelectorAll('.sc-toggle').forEach(function(el) { el.style.pointerEvents = 'none'; });
+        checkStatusForOwner();
+    } else {
+        checkStatus();
+    }
 });
 
 async function checkStatus() {
@@ -216,6 +236,47 @@ async function checkStatus() {
             } else if (d.salaries_created) {
                 goToStep(3);
                 showBanner('Зарплаты созданы. Введите данные смены', 'info');
+            }
+        }
+    } catch(e) {
+        console.error('Status check error:', e);
+    }
+}
+
+async function checkStatusForOwner() {
+    try {
+        const r = await fetch(API_BASE + '/shift-data/status');
+        const d = await r.json();
+        if (d.success) {
+            // Show salary results if created
+            if (d.salaries_created && d.salaries_data) {
+                try {
+                    var salaries = JSON.parse(d.salaries_data);
+                    var list = document.getElementById('salaryList');
+                    list.innerHTML = '';
+                    var total = 0;
+                    salaries.forEach(function(s) {
+                        total += s.salary;
+                        list.innerHTML += salaryRow(s.role, s.name, s.salary);
+                    });
+                    document.getElementById('salaryTotal').textContent = fmt(total) + ' ₸';
+                } catch(e) {}
+                showBanner('Зарплаты созданы', 'success');
+            } else {
+                document.getElementById('step2').classList.add('hidden');
+                showBanner('Зарплаты ещё не созданы', 'warning');
+            }
+
+            // Show shift data if submitted
+            if (d.shift_data_submitted && d.shift_data) {
+                var sd = d.shift_data;
+                if (sd.wolt) document.getElementById('sd_wolt').value = sd.wolt;
+                if (sd.halyk) document.getElementById('sd_halyk').value = sd.halyk;
+                if (sd.cash_bills) document.getElementById('sd_cash_bills').value = sd.cash_bills;
+                if (sd.cash_coins) document.getElementById('sd_cash_coins').value = sd.cash_coins;
+                if (sd.expenses) document.getElementById('sd_expenses').value = sd.expenses;
+            } else {
+                document.getElementById('step3').querySelector('.sc-card-title').textContent += ' (не заполнено)';
             }
         }
     } catch(e) {
