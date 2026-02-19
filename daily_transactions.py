@@ -16,6 +16,20 @@ class DailyTransactionScheduler:
     def __init__(self, telegram_user_id: int):
         self.telegram_user_id = telegram_user_id
 
+    async def _find_category_id(self, poster_client: PosterClient, *keywords: str) -> int | None:
+        """Найти ID категории по ключевым словам в названии"""
+        try:
+            categories = await poster_client.get_categories()
+            for cat in categories:
+                cat_name = cat.get('finance_category_name', '').lower()
+                if all(kw in cat_name for kw in keywords):
+                    cat_id = int(cat.get('finance_category_id'))
+                    logger.info(f"✅ Найдена категория '{cat.get('finance_category_name')}' ID={cat_id}")
+                    return cat_id
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска категории: {e}")
+        return None
+
     async def check_transactions_created_today(self) -> bool:
         """
         Проверить, были ли уже созданы ежедневные транзакции сегодня
@@ -260,43 +274,10 @@ class DailyTransactionScheduler:
 
         # === ПЕРЕВОДЫ ===
 
-        # 1× Kaspi Pay → Wolt доставка - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=8,  # Wolt доставка
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi → Wolt: {tx_id}")
+        # Переводы Kaspi→Wolt, Kaspi→Халык, Инкассация→Оставил в кассе
+        # убраны — теперь создаются при закрытии смены с реальными суммами
 
-        # 2× Kaspi Pay → Халык банк - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=10,  # Халык банк
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi → Халык: {tx_id}")
-
-        # 3× Инкассация (вечером) → Оставил в кассе (на закупы) - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=2,  # Инкассация (вечером)
-            account_to_id=4,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
-
-        # 4× Оставил в кассе (на закупы) → Деньги дома (отложенные) - 1₸, комментарий "Забрал - Имя"
+        # Оставил в кассе (на закупы) → Деньги дома (отложенные) - 1₸, комментарий "Забрал - Имя"
         tx_id = await poster_client.create_transaction(
             transaction_type=2,  # transfer
             category_id=0,  # не используется для переводов
@@ -338,45 +319,23 @@ class DailyTransactionScheduler:
         )
         transactions_created.append(f"Сушист: {tx_id}")
 
-        # 3. Повар Сандей - 1₸
-        # ПРИМЕЧАНИЕ: Категории "Повар Сандей" нет в Pizzburg-cafe
-        # Доступные категории: ID=18 (Бариста), ID=19 (КухРабочая)
-        # Закомментировано до выяснения правильной категории
-        # tx_id = await poster_client.create_transaction(
-        #     transaction_type=0,  # expense
-        #     category_id=???,  # Повар Сандей - КАТЕГОРИЯ НЕ НАЙДЕНА
-        #     account_from_id=5,  # Оставил в кассе (на закупы)
-        #     amount=1,
-        #     date=current_time,
-        #     comment=""
-        # )
-        # transactions_created.append(f"Повар Сандей: {tx_id}")
+        # 3. Повар Сандей - 1₸ (ID категории определяется автоматически из API)
+        povar_sandey_id = await self._find_category_id(poster_client, 'повар', 'санд')
+        if povar_sandey_id:
+            tx_id = await poster_client.create_transaction(
+                transaction_type=0,  # expense
+                category_id=povar_sandey_id,
+                account_from_id=5,  # Оставил в кассе (на закупы)
+                amount=1,
+                date=current_time,
+                comment=""
+            )
+            transactions_created.append(f"Повар Сандей: {tx_id}")
+        else:
+            logger.warning("⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe")
 
-        # === ПЕРЕВОДЫ ===
-
-        # 4. Инкассация → Оставил в кассе - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=2,  # Инкассация (вечером)
-            account_to_id=5,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Инкассация → Оставил в кассе: {tx_id}")
-
-        # 5. Kaspi Pay → Wolt доставка - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=2,  # transfer
-            category_id=0,  # не используется для переводов
-            account_from_id=1,  # Kaspi Pay
-            account_to_id=7,  # Wolt доставка
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Перевод Kaspi Pay → Wolt: {tx_id}")
+        # Переводы Инкассация→Оставил в кассе и Kaspi→Wolt
+        # убраны — теперь создаются при закрытии смены с реальными суммами
 
         return transactions_created
 

@@ -6552,46 +6552,8 @@ def setup_scheduler(app: Application):
 
         logger.info(f"✅ Запланирована еженедельная проверка цен для пользователя {telegram_user_id} в Пн 9:00 (Asia/Almaty)")
 
-    # Напоминание о расчете зарплат для всех активных пользователей в 21:30
-    for telegram_user_id in ALLOWED_USER_IDS:
-        # Триггер: каждый день в 21:30
-        salary_trigger = CronTrigger(
-            hour=21,
-            minute=30,
-            timezone=astana_tz
-        )
-
-        scheduler.add_job(
-            salary_flow_handlers.send_salary_reminder_for_user,
-            trigger=salary_trigger,
-            args=[telegram_user_id, app],
-            id=f'salary_reminder_{telegram_user_id}',
-            name=f'Напоминание о зарплатах для пользователя {telegram_user_id}',
-            replace_existing=True
-        )
-
-        logger.info(f"✅ Запланировано напоминание о зарплатах для пользователя {telegram_user_id} в 21:30 (Asia/Almaty)")
-
-    # Напоминание о сверке счетов для всех активных пользователей в 22:30
-    from accounts_check import send_accounts_check_reminder
-    for telegram_user_id in ALLOWED_USER_IDS:
-        # Триггер: каждый день в 22:30
-        accounts_check_trigger = CronTrigger(
-            hour=22,
-            minute=30,
-            timezone=astana_tz
-        )
-
-        scheduler.add_job(
-            send_accounts_check_reminder,
-            trigger=accounts_check_trigger,
-            args=[telegram_user_id, app],
-            id=f'accounts_check_reminder_{telegram_user_id}',
-            name=f'Напоминание о сверке счетов для пользователя {telegram_user_id}',
-            replace_existing=True
-        )
-
-        logger.info(f"✅ Запланировано напоминание о сверке счетов для пользователя {telegram_user_id} в 22:30 (Asia/Almaty)")
+    # Напоминание о зарплатах (21:30) — убрано, зарплаты считает кассир через свою страницу
+    # Сверка счетов (22:30) — убрано, сверка через сайт расходов
 
     # Запустить scheduler
     scheduler.start()
