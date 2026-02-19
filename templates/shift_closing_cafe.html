@@ -91,6 +91,36 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
 .sc-btn-sm{padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#e5e5ea;color:#1c1c1e}
 .sc-report{background:#1c1c1e;color:#e5e5ea;padding:12px;border-radius:8px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;max-height:400px;overflow-y:auto;margin:0;font-family:'SF Mono','Menlo',monospace}
 .loading{opacity:.5;pointer-events:none}
+
+.sc-step-indicator{display:flex;justify-content:center;gap:8px;margin-bottom:12px}
+.sc-step-dot{width:8px;height:8px;border-radius:50%;background:#d1d1d6;transition:background .2s}
+.sc-step-dot.active{background:#007aff}
+.sc-step-dot.done{background:#34c759}
+
+.sc-salary-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid #e5e5ea}
+.sc-salary-row:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+.sc-salary-role{font-size:13px;font-weight:600;color:#8e8e93;margin-bottom:6px}
+.sc-field input.sc-name-input{text-align:left;font-weight:500}
+
+.sc-salary-total{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-radius:10px;background:#f2f2f7;margin-top:8px;font-size:16px;font-weight:700;color:#1c1c1e}
+.sc-salary-total span:last-child{font-size:20px;font-variant-numeric:tabular-nums}
+
+.sc-salary-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #e5e5ea}
+.sc-salary-item:last-child{border-bottom:none}
+.sc-salary-item-role{font-size:13px;color:#8e8e93}
+.sc-salary-item-name{font-size:15px;font-weight:600;color:#1c1c1e}
+.sc-salary-item-amount{font-size:17px;font-weight:700;color:#1c1c1e;font-variant-numeric:tabular-nums}
+
+.sc-btn-full{display:block;width:100%;padding:14px 0;border-radius:12px;font-size:16px;font-weight:600;border:none;cursor:pointer;background:#007aff;color:#fff;-webkit-appearance:none;transition:opacity .15s;margin-bottom:8px}
+.sc-btn-full:active{opacity:.7}
+.sc-btn-full:disabled{opacity:.4;cursor:default}
+.sc-btn-full.green{background:#34c759}
+
+.sc-banner-sal{padding:10px 14px;border-radius:10px;text-align:center;font-size:14px;font-weight:500;margin-bottom:10px}
+.sc-banner-sal.info{background:#007aff15;color:#007aff}
+.sc-banner-sal.success{background:#34c75920;color:#30d158}
+.sc-banner-sal.error{background:#ff3b3020;color:#ff3b30}
+
 @media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}.sc-day-value{font-size:32px}.sc-collection span:last-child{font-size:18px}}
     </style>
 </head>
@@ -98,6 +128,67 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
 <div class="sc">
     <div class="sc-title">{{ account_name }}</div>
     <div class="sc-title-sub">Закрытие смены</div>
+
+    <!-- Step indicator -->
+    <div class="sc-step-indicator">
+        <div class="sc-step-dot active" id="sdot1"></div>
+        <div class="sc-step-dot" id="sdot2"></div>
+    </div>
+
+    <!-- ==================== SALARY STEP ==================== -->
+    <div id="salary-step">
+        <div id="sal-banner" class="sc-banner-sal hidden"></div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Зарплаты</div>
+
+            <div class="sc-salary-role">Кассир</div>
+            <div class="sc-salary-row">
+                <div class="sc-field">
+                    <label>Имя</label>
+                    <input type="text" id="sal_cashier_name" class="sc-name-input" placeholder="Имя" autocomplete="off">
+                </div>
+                <div class="sc-field">
+                    <label>Сумма</label>
+                    <input type="text" id="sal_cashier_amount" inputmode="decimal" placeholder="0" oninput="updateSalaryTotal()">
+                </div>
+            </div>
+
+            <div class="sc-salary-role">Сушист</div>
+            <div class="sc-salary-row">
+                <div class="sc-field">
+                    <label>Имя</label>
+                    <input type="text" id="sal_sushi_name" class="sc-name-input" placeholder="Имя" autocomplete="off">
+                </div>
+                <div class="sc-field">
+                    <label>Сумма</label>
+                    <input type="text" id="sal_sushi_amount" inputmode="decimal" placeholder="0" oninput="updateSalaryTotal()">
+                </div>
+            </div>
+
+            <div class="sc-salary-role">Повар Сандей</div>
+            <div class="sc-salary-row">
+                <div class="sc-field">
+                    <label>Имя</label>
+                    <input type="text" id="sal_povar_name" class="sc-name-input" placeholder="Имя" autocomplete="off">
+                </div>
+                <div class="sc-field">
+                    <label>Сумма</label>
+                    <input type="text" id="sal_povar_amount" inputmode="decimal" placeholder="0" oninput="updateSalaryTotal()">
+                </div>
+            </div>
+
+            <div class="sc-salary-total">
+                <span>Итого</span>
+                <span id="sal_total">0 ₸</span>
+            </div>
+        </div>
+
+        <button class="sc-btn-full" id="btnSalaryNext" onclick="createCafeSalaries()">Далее</button>
+    </div>
+
+    <!-- ==================== SHIFT CLOSING STEP ==================== -->
+    <div id="shift-closing-step" class="hidden">
 
     <!-- Date selector -->
     <div class="sc-dates" id="dates-bar">
@@ -247,6 +338,8 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
         <pre id="report-text" class="sc-report"></pre>
         <div id="transfer-status" class="hidden" style="margin-top:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:500;text-align:center"></div>
     </div>
+
+    </div><!-- /shift-closing-step -->
 </div>
 
 <script>
@@ -259,8 +352,132 @@ let lastCalc = null;
 let currentDate = '';
 let isReadonly = false;
 let transfersCreated = false;
+let salariesCreated = false;
 const INPUT_IDS = ['wolt','kaspi','kaspi_pizzburg','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
 const USER_INPUT_IDS = ['wolt','kaspi','kaspi_pizzburg','cash_bills','cash_coins','expenses','cash_to_leave'];
+
+// ==================== Salary Step ====================
+
+function salPi(id) {
+    var el = document.getElementById(id);
+    if (!el) return 0;
+    return parseFloat(el.value.replace(/\s/g, '').replace(/,/g, '.')) || 0;
+}
+
+function updateSalaryTotal() {
+    var total = salPi('sal_cashier_amount') + salPi('sal_sushi_amount') + salPi('sal_povar_amount');
+    document.getElementById('sal_total').textContent = fmt(total) + ' ₸';
+}
+
+function showSalBanner(msg, type) {
+    var b = document.getElementById('sal-banner');
+    b.textContent = msg;
+    b.className = 'sc-banner-sal ' + (type || 'info');
+}
+
+function hideSalBanner() {
+    document.getElementById('sal-banner').className = 'sc-banner-sal hidden';
+}
+
+function goToShiftClosing() {
+    document.getElementById('salary-step').classList.add('hidden');
+    document.getElementById('shift-closing-step').classList.remove('hidden');
+    document.getElementById('sdot1').classList.remove('active');
+    document.getElementById('sdot1').classList.add('done');
+    document.getElementById('sdot2').classList.add('active');
+    window.scrollTo(0, 0);
+    // Load shift closing data
+    loadHistoryDates();
+    loadDateData(currentDate);
+}
+
+async function loadLastEmployees() {
+    try {
+        var r = await fetch(API_BASE + '/employees/last');
+        var d = await r.json();
+        if (d.success && d.salaries) {
+            d.salaries.forEach(function(s) {
+                if (s.role === 'Кассир') {
+                    document.getElementById('sal_cashier_name').value = s.name || '';
+                    document.getElementById('sal_cashier_amount').value = s.amount || '';
+                } else if (s.role === 'Сушист') {
+                    document.getElementById('sal_sushi_name').value = s.name || '';
+                    document.getElementById('sal_sushi_amount').value = s.amount || '';
+                } else if (s.role === 'Повар Сандей') {
+                    document.getElementById('sal_povar_name').value = s.name || '';
+                    document.getElementById('sal_povar_amount').value = s.amount || '';
+                }
+            });
+            updateSalaryTotal();
+        }
+    } catch(e) {
+        console.error('Load employees error:', e);
+    }
+}
+
+async function checkSalaryStatus() {
+    try {
+        var r = await fetch(API_BASE + '/salaries/status');
+        var d = await r.json();
+        if (d.success && d.salaries_created) {
+            salariesCreated = true;
+            goToShiftClosing();
+        }
+    } catch(e) {
+        console.error('Salary status check error:', e);
+    }
+}
+
+async function createCafeSalaries() {
+    var cashierName = document.getElementById('sal_cashier_name').value.trim();
+    var sushiName = document.getElementById('sal_sushi_name').value.trim();
+    var povarName = document.getElementById('sal_povar_name').value.trim();
+    var cashierAmt = salPi('sal_cashier_amount');
+    var sushiAmt = salPi('sal_sushi_amount');
+    var povarAmt = salPi('sal_povar_amount');
+
+    if (!cashierName || !sushiName || !povarName) {
+        showSalBanner('Заполните все имена', 'error');
+        return;
+    }
+    if (cashierAmt <= 0 && sushiAmt <= 0 && povarAmt <= 0) {
+        showSalBanner('Введите хотя бы одну сумму', 'error');
+        return;
+    }
+
+    hideSalBanner();
+    var btn = document.getElementById('btnSalaryNext');
+    btn.disabled = true;
+    btn.textContent = 'Создание...';
+
+    var salaries = [];
+    if (cashierAmt > 0) salaries.push({role: 'Кассир', name: cashierName, amount: cashierAmt});
+    if (sushiAmt > 0) salaries.push({role: 'Сушист', name: sushiName, amount: sushiAmt});
+    if (povarAmt > 0) salaries.push({role: 'Повар Сандей', name: povarName, amount: povarAmt});
+
+    try {
+        var r = await fetch(API_BASE + '/salaries/create', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({salaries: salaries})
+        });
+        var d = await r.json();
+
+        if (!d.success) {
+            showSalBanner(d.error || 'Ошибка', 'error');
+            btn.disabled = false;
+            btn.textContent = 'Далее';
+            return;
+        }
+
+        salariesCreated = true;
+        goToShiftClosing();
+    } catch(e) {
+        showSalBanner('Ошибка сети: ' + e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Далее';
+    }
+}
 
 function fmt(n) { return Math.round(n).toLocaleString('ru-RU'); }
 
@@ -786,8 +1003,10 @@ async function copyReportAndTransfer() {
 document.addEventListener('DOMContentLoaded', function() {
     currentDate = getTodayStr();
     document.getElementById('current-date').textContent = fmtDateFull(currentDate);
-    loadHistoryDates();
-    loadDateData(currentDate);
+
+    // Salary step: load last names and check if already created today
+    loadLastEmployees();
+    checkSalaryStatus();
 });
 </script>
 </body>
