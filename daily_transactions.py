@@ -76,6 +76,24 @@ class DailyTransactionScheduler:
             transactions = result.get('response', [])
             await poster_client.close()
 
+            # Детальное логирование всех транзакций за сегодня для диагностики
+            logger.info(f"🔍 [{self.telegram_user_id}] Найдено {len(transactions)} транзакций за {today}")
+            for tx in transactions:
+                tx_id = tx.get('transaction_id', '?')
+                tx_type = tx.get('type', '?')  # 0=expense, 1=income, 2=transfer
+                comment = tx.get('comment', '')
+                amount = tx.get('amount', '?')
+                amount_tiyins = tx.get('amount_in', '?')
+                category_id = tx.get('finance_category_id', '?')
+                category_name = tx.get('finance_category_name', '')
+                account_id = tx.get('account_id', '?')
+                date = tx.get('date', '?')
+                logger.info(
+                    f"  📋 TX#{tx_id} type={tx_type} cat={category_id}({category_name}) "
+                    f"acc={account_id} amount={amount}(raw={amount_tiyins}) "
+                    f"comment='{comment}' date={date}"
+                )
+
             existing = set()
             for tx in transactions:
                 comment = tx.get('comment', '').strip()
@@ -86,6 +104,7 @@ class DailyTransactionScheduler:
                 if category_id == '17':
                     existing.add('__cafe_sushist__')
 
+            logger.info(f"🔍 [{self.telegram_user_id}] Уникальные комментарии: {existing}")
             return existing
 
         except Exception as e:
