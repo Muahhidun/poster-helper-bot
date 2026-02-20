@@ -342,7 +342,7 @@ function setAssistantTime(t) {
 
 function getKZTime() {
     var now = new Date();
-    var kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
+    var kz = new Date(now.getTime() + 6 * 3600000); // UTC+6 Asia/Almaty
     return { hour: kz.getUTCHours(), minute: kz.getUTCMinutes() };
 }
 

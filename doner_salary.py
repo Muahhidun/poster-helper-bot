@@ -267,10 +267,12 @@ class DonerSalaryCalculator:
 
             await poster_client.close()
 
-            # Вернуть МИНИМАЛЬНЫЕ данные (БЕЗ doner_count и sales_data)
             return {
                 'success': True,
                 'doner_name': doner_name or "Донерщик",
+                'doner_count': total_count,
+                'base_salary': base_salary,
+                'bonus': bonus,
                 'salary': salary,
                 'assistant_name': assistant_name or "Помощник",
                 'assistant_salary': assistant_salary,

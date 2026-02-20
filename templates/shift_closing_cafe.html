@@ -538,7 +538,7 @@ function pi(id) {
 
 function getTodayStr() {
     const now = new Date();
-    const kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
+    const kz = new Date(now.getTime() + 6 * 3600000); // UTC+6 Asia/Almaty
     if (kz.getUTCHours() < 6) kz.setUTCDate(kz.getUTCDate() - 1);
     return kz.toISOString().slice(0, 10);
 }
@@ -859,7 +859,7 @@ function renderDateButtons(dates) {
     for (let i = 1; i <= 7; i++) {
         const d = new Date();
         d.setDate(d.getDate() - i);
-        const kz = new Date(d.getTime() + (5 * 60 - d.getTimezoneOffset()) * 60000);
+        const kz = new Date(d.getTime() + 6 * 3600000); // UTC+6 Asia/Almaty
         const ds = kz.toISOString().slice(0, 10);
         if (allDates.indexOf(ds) === -1) allDates.push(ds);
     }
@@ -868,7 +868,7 @@ function renderDateButtons(dates) {
 
     const yd = new Date();
     yd.setDate(yd.getDate() - 1);
-    const ykz = new Date(yd.getTime() + (5 * 60 - yd.getTimezoneOffset()) * 60000);
+    const ykz = new Date(yd.getTime() + 6 * 3600000); // UTC+6 Asia/Almaty
     const yesterday = ykz.toISOString().slice(0, 10);
     const savedSet = new Set(dates);
 
