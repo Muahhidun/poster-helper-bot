@@ -20,10 +20,10 @@ function parseInputValue(value: string): number {
   return isNaN(num) ? 0 : num
 }
 
-// Get today's date in Kazakhstan timezone (UTC+6 Asia/Almaty) as YYYY-MM-DD
+// Get today's date in Kazakhstan timezone (UTC+5 Asia/Almaty) as YYYY-MM-DD
 function getKzToday(): string {
   const now = new Date()
-  const kzTime = new Date(now.getTime() + 6 * 3600000) // UTC+6 Asia/Almaty
+  const kzTime = new Date(now.getTime() + 5 * 3600000) // UTC+5 Asia/Almaty
   return kzTime.toISOString().slice(0, 10)
 }
 
