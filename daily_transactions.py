@@ -22,10 +22,11 @@ class DailyTransactionScheduler:
         try:
             categories = await poster_client.get_categories()
             for cat in categories:
-                cat_name = cat.get('category_name', '').lower()
+                cat_name = (cat.get('category_name') or cat.get('name') or '').lower()
                 if all(kw in cat_name for kw in keywords):
                     cat_id = int(cat.get('category_id'))
-                    logger.info(f"✅ Найдена категория '{cat.get('category_name')}' ID={cat_id}")
+                    display_name = cat.get('category_name') or cat.get('name') or '?'
+                    logger.info(f"✅ Найдена категория '{display_name}' ID={cat_id}")
                     return cat_id
         except Exception as e:
             logger.error(f"❌ Ошибка поиска категории: {e}")
@@ -346,7 +347,7 @@ class DailyTransactionScheduler:
             else:
                 try:
                     categories = await poster_client.get_categories()
-                    cat_names = [f"{c.get('category_name')} (ID={c.get('category_id')})" for c in categories]
+                    cat_names = [f"{c.get('category_name') or c.get('name')} (ID={c.get('category_id')})" for c in categories]
                     logger.warning(f"⚠️ Категория 'Зарплаты' не найдена в Pizzburg. Доступные: {cat_names}")
                 except Exception:
                     logger.warning("⚠️ Категория 'Зарплаты' не найдена в Pizzburg")
@@ -487,7 +488,7 @@ class DailyTransactionScheduler:
         else:
             try:
                 categories = await poster_client.get_categories()
-                cat_names = [f"{c.get('category_name')} (ID={c.get('category_id')})" for c in categories]
+                cat_names = [f"{c.get('category_name') or c.get('name')} (ID={c.get('category_id')})" for c in categories]
                 logger.warning(f"⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe. Доступные: {cat_names}")
             except Exception:
                 logger.warning("⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe")
