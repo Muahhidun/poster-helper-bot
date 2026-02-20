@@ -4350,12 +4350,13 @@ def api_shift_closing_calculate():
         # 6. Смена оставили = бумажные оставить + мелочь
         shift_left = cash_to_leave + cash_coins
 
-        # 7. Инкассация = Бумажные - оставить бумажными + расходы
-        # Или: вся наличка - то что оставили
-        collection = cash_bills - cash_to_leave + expenses
-
-        # 8. Разница безнала (для проверки)
+        # 7. Разница безнала
         cashless_diff = fact_cashless - poster_card
+
+        # 8. Инкассация = Бумажные - оставить бумажными + расходы - разница безнала
+        # Если безнал факт < Poster (diff<0): в кассе больше наличных → инкассируем больше
+        # Если безнал факт > Poster (diff>0): в кассе меньше наличных → инкассируем меньше
+        collection = cash_bills - cash_to_leave + expenses - cashless_diff
 
         return jsonify({
             'success': True,
@@ -4549,7 +4550,7 @@ def api_shift_closing_report():
         if abs(cashless_diff) >= 1:
             diff_sign = "+" if cashless_diff > 0 else ""
             lines.append("")
-            lines.append(f"⚠️ Разница безнал: {diff_sign}{fmt(cashless_diff)}₸")
+            lines.append(f"ℹ️ Разница безнал: {diff_sign}{fmt(cashless_diff)}₸ (учтено в инкассации)")
 
         report = "\n".join(lines)
 
@@ -4894,8 +4895,8 @@ def api_cafe_calculate():
         poster_total = poster_trade - poster_bonus
         day_result = fact_adjusted - poster_total
         shift_left = cash_to_leave + cash_coins
-        collection = cash_bills - cash_to_leave + expenses
         cashless_diff = fact_cashless - poster_card
+        collection = cash_bills - cash_to_leave + expenses - cashless_diff
 
         return jsonify({
             'success': True,
@@ -5096,7 +5097,7 @@ def api_cafe_report():
         if abs(cashless_diff) >= 1:
             diff_sign = "+" if cashless_diff > 0 else ""
             lines.append("")
-            lines.append(f"⚠️ Разница безнал: {diff_sign}{fmt(cashless_diff)}₸")
+            lines.append(f"ℹ️ Разница безнал: {diff_sign}{fmt(cashless_diff)}₸ (учтено в инкассации)")
 
         report = "\n".join(lines)
         return jsonify({'success': True, 'report': report, 'date': date})
@@ -5402,17 +5403,15 @@ def api_cafe_transfers():
         wolt = float(closing.get('wolt', 0))
         cashless_diff = float(closing.get('cashless_diff', 0))
 
-        # Корректировка инкассации на разницу безнала
-        adjusted_collection = collection + cashless_diff
-
+        # collection уже включает корректировку на cashless_diff (рассчитано в calculate)
         # Build transfer list
         transfers = []
-        if adjusted_collection > 0:
+        if collection > 0:
             transfers.append({
                 'name': 'Инкассация → Оставил в кассе',
                 'from': CAFE_ACCOUNTS['inkassacia'],
                 'to': CAFE_ACCOUNTS['cash_left'],
-                'amount': int(round(adjusted_collection)),
+                'amount': int(round(collection)),
             })
         if wolt > 0:
             transfers.append({
@@ -5421,25 +5420,26 @@ def api_cafe_transfers():
                 'to': CAFE_ACCOUNTS['wolt'],
                 'amount': int(round(wolt)),
             })
-        # Перевод разницы безнала: выравнивает Каспий и Оставил в кассе
+        # Корректировка безнала: выравнивает счёт Каспий через счёт Инкассация
+        # (не через Оставил, т.к. инкассация уже скорректирована)
         if cashless_diff < -0.5:
             transfers.append({
-                'name': 'Корр. безнала: Каспий → Оставил',
+                'name': 'Корр. безнала: Каспий → Инкассация',
                 'from': CAFE_ACCOUNTS['kaspi'],
-                'to': CAFE_ACCOUNTS['cash_left'],
+                'to': CAFE_ACCOUNTS['inkassacia'],
                 'amount': int(round(abs(cashless_diff))),
             })
-            print(f"[CAFE TRANSFER] Корректировка: инкассация {int(round(collection))} → {int(round(adjusted_collection))}₸ "
-                  f"(diff={cashless_diff:+,.0f}), перевод Каспий→Оставил: {int(round(abs(cashless_diff)))}₸", flush=True)
+            print(f"[CAFE TRANSFER] Корр. безнала: Каспий→Инкассация {int(round(abs(cashless_diff)))}₸ "
+                  f"(diff={cashless_diff:+,.0f})", flush=True)
         elif cashless_diff > 0.5:
             transfers.append({
-                'name': 'Корр. безнала: Оставил → Каспий',
-                'from': CAFE_ACCOUNTS['cash_left'],
+                'name': 'Корр. безнала: Инкассация → Каспий',
+                'from': CAFE_ACCOUNTS['inkassacia'],
                 'to': CAFE_ACCOUNTS['kaspi'],
                 'amount': int(round(cashless_diff)),
             })
-            print(f"[CAFE TRANSFER] Корректировка: инкассация {int(round(collection))} → {int(round(adjusted_collection))}₸ "
-                  f"(diff={cashless_diff:+,.0f}), перевод Оставил→Каспий: {int(round(cashless_diff))}₸", flush=True)
+            print(f"[CAFE TRANSFER] Корр. безнала: Инкассация→Каспий {int(round(cashless_diff))}₸ "
+                  f"(diff={cashless_diff:+,.0f})", flush=True)
 
         if not transfers:
             return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
@@ -5546,20 +5546,15 @@ def api_shift_closing_transfers():
         halyk = float(closing.get('halyk', 0))
         cashless_diff = float(closing.get('cashless_diff', 0))
 
-        # Корректировка инкассации на разницу безнала:
-        # cashless_diff = fact_cashless - poster_card
-        # < 0: Poster думает карты больше → наличных меньше → уменьшаем инкассацию
-        # > 0: Poster думает карты меньше → наличных больше → увеличиваем инкассацию
-        adjusted_collection = collection + cashless_diff
-
+        # collection уже включает корректировку на cashless_diff (рассчитано в calculate)
         # Build transfer list
         transfers = []
-        if adjusted_collection > 0:
+        if collection > 0:
             transfers.append({
                 'name': 'Инкассация → Оставил в кассе',
                 'from': MAIN_ACCOUNTS['inkassacia'],
                 'to': MAIN_ACCOUNTS['cash_left'],
-                'amount': int(round(adjusted_collection)),
+                'amount': int(round(collection)),
             })
         if wolt > 0:
             transfers.append({
@@ -5575,28 +5570,26 @@ def api_shift_closing_transfers():
                 'to': MAIN_ACCOUNTS['halyk'],
                 'amount': int(round(halyk)),
             })
-        # Перевод разницы безнала: выравнивает Каспий и Оставил в кассе
-        # Инкассация уже скорректирована, поэтому двойной ошибки нет
+        # Корректировка безнала: выравнивает счёт Каспий через счёт Инкассация
+        # (не через Оставил, т.к. инкассация уже скорректирована)
         if cashless_diff < -0.5:
-            # Poster карты > факт → переводим излишек Каспий → Оставил в кассе
             transfers.append({
-                'name': 'Корр. безнала: Каспий → Оставил',
+                'name': 'Корр. безнала: Каспий → Инкассация',
                 'from': MAIN_ACCOUNTS['kaspi'],
-                'to': MAIN_ACCOUNTS['cash_left'],
+                'to': MAIN_ACCOUNTS['inkassacia'],
                 'amount': int(round(abs(cashless_diff))),
             })
-            print(f"[MAIN TRANSFER] Корректировка: инкассация {int(round(collection))} → {int(round(adjusted_collection))}₸ "
-                  f"(diff={cashless_diff:+,.0f}), перевод Каспий→Оставил: {int(round(abs(cashless_diff)))}₸", flush=True)
+            print(f"[MAIN TRANSFER] Корр. безнала: Каспий→Инкассация {int(round(abs(cashless_diff)))}₸ "
+                  f"(diff={cashless_diff:+,.0f})", flush=True)
         elif cashless_diff > 0.5:
-            # Poster карты < факт → переводим недостачу Оставил → Каспий
             transfers.append({
-                'name': 'Корр. безнала: Оставил → Каспий',
-                'from': MAIN_ACCOUNTS['cash_left'],
+                'name': 'Корр. безнала: Инкассация → Каспий',
+                'from': MAIN_ACCOUNTS['inkassacia'],
                 'to': MAIN_ACCOUNTS['kaspi'],
                 'amount': int(round(cashless_diff)),
             })
-            print(f"[MAIN TRANSFER] Корректировка: инкассация {int(round(collection))} → {int(round(adjusted_collection))}₸ "
-                  f"(diff={cashless_diff:+,.0f}), перевод Оставил→Каспий: {int(round(cashless_diff))}₸", flush=True)
+            print(f"[MAIN TRANSFER] Корр. безнала: Инкассация→Каспий {int(round(cashless_diff))}₸ "
+                  f"(diff={cashless_diff:+,.0f})", flush=True)
 
         if not transfers:
             return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
