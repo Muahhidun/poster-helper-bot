@@ -54,8 +54,8 @@ async def get_ids():
         print("-" * 80)
         categories = await client.get_categories()
         for cat in categories:
-            cat_id = cat.get('finance_category_id')
-            cat_name = cat.get('finance_category_name', 'Unknown')
+            cat_id = cat.get('category_id')
+            cat_name = cat.get('category_name', 'Unknown')
             cat_type = cat.get('category_type', 0)  # 0=расход, 1=доход, 2=возврат
 
             if cat_type == 0:  # Только расходы
@@ -87,19 +87,19 @@ async def get_ids():
         print()
         print("Категории:")
         for cat in categories:
-            cat_id = cat.get('finance_category_id')
-            cat_name = cat.get('finance_category_name', '').lower()
+            cat_id = cat.get('category_id')
+            cat_name = cat.get('category_name', '').lower()
             cat_type = cat.get('category_type', 0)
 
             if cat_type != 0:  # Пропускаем доходы
                 continue
 
             if 'кассир' in cat_name:
-                print(f"  ✅ Кассир: ID={cat_id} ({cat.get('finance_category_name')})")
+                print(f"  ✅ Кассир: ID={cat_id} ({cat.get('category_name')})")
             elif 'суш' in cat_name:
-                print(f"  ✅ Сушист: ID={cat_id} ({cat.get('finance_category_name')})")
+                print(f"  ✅ Сушист: ID={cat_id} ({cat.get('category_name')})")
             elif 'повар' in cat_name and 'санд' in cat_name:
-                print(f"  ✅ Повар Сандей: ID={cat_id} ({cat.get('finance_category_name')})")
+                print(f"  ✅ Повар Сандей: ID={cat_id} ({cat.get('category_name')})")
 
     finally:
         await client.close()

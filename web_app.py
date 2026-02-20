@@ -5273,22 +5273,22 @@ def api_cafe_salaries_create():
                             categories = await poster_client.get_categories()
                             # First try exact match: 'повар' + 'санд'
                             for cat in categories:
-                                cat_name = cat.get('finance_category_name', '').lower()
+                                cat_name = cat.get('category_name', '').lower()
                                 if 'повар' in cat_name and 'санд' in cat_name:
-                                    povar_sandey_id = int(cat.get('finance_category_id'))
-                                    logger.info(f"✅ Найдена категория '{cat.get('finance_category_name')}' ID={povar_sandey_id}")
+                                    povar_sandey_id = int(cat.get('category_id'))
+                                    logger.info(f"✅ Найдена категория '{cat.get('category_name')}' ID={povar_sandey_id}")
                                     break
                             # Fallback: just 'повар'
                             if povar_sandey_id is None:
                                 for cat in categories:
-                                    cat_name = cat.get('finance_category_name', '').lower()
+                                    cat_name = cat.get('category_name', '').lower()
                                     if 'повар' in cat_name:
-                                        povar_sandey_id = int(cat.get('finance_category_id'))
-                                        logger.info(f"✅ Найдена категория (fallback) '{cat.get('finance_category_name')}' ID={povar_sandey_id}")
+                                        povar_sandey_id = int(cat.get('category_id'))
+                                        logger.info(f"✅ Найдена категория (fallback) '{cat.get('category_name')}' ID={povar_sandey_id}")
                                         break
                             # Log all categories if still not found
                             if povar_sandey_id is None:
-                                cat_names = [f"{c.get('finance_category_name')} (ID={c.get('finance_category_id')})" for c in categories]
+                                cat_names = [f"{c.get('category_name')} (ID={c.get('category_id')})" for c in categories]
                                 logger.warning(f"⚠️ Категория 'Повар Сандей' не найдена. Доступные категории: {cat_names}")
                         cat_id = povar_sandey_id
 
