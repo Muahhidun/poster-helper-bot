@@ -31,32 +31,50 @@ class DailyTransactionScheduler:
             logger.error(f"❌ Ошибка поиска категории: {e}")
         return None
 
-    async def check_transactions_created_today(self) -> bool:
+    def _comment_exists(self, marker: str, existing_comments: set) -> bool:
         """
-        Проверить, были ли уже созданы ежедневные транзакции сегодня.
-        Возвращает True если ВСЕ ключевые транзакции найдены, False если нет.
+        Проверить, есть ли транзакция с данным комментарием (substring matching).
+        Например, маркер 'Заготовка' найдётся в комментарии 'Заготовка Полина'.
         """
-        existing = await self.get_existing_daily_comments()
-        if not existing:
+        if not marker:
+            return False
+        for existing in existing_comments:
+            if marker in existing or existing in marker:
+                return True
+        return False
+
+    def _check_all_markers_present(self, existing_comments: set) -> bool:
+        """
+        Проверить, все ли ключевые маркеры присутствуют в existing_comments.
+        Используется для быстрой проверки без повторного API-запроса.
+        """
+        if not existing_comments:
             return False
 
-        # Проверяем наличие ВСЕХ ключевых маркеров, а не любого одного
         if self.telegram_user_id == 167084307:
             required = {'Заготовка', 'Мадира Т', 'Нургуль Т', 'Мадина админ'}
-            missing = required - existing
+            missing = {m for m in required if not self._comment_exists(m, existing_comments)}
             if missing:
                 logger.info(f"⚠️ Частично созданы транзакции для {self.telegram_user_id}. Отсутствуют: {missing}")
                 return False
             logger.info(f"✅ Все ежедневные транзакции найдены для пользователя {self.telegram_user_id}")
             return True
         elif self.telegram_user_id == 8010984368:
-            # Для кафе проверяем по категории
-            if '__cafe_sushist__' in existing:
+            if '__cafe_sushist__' in existing_comments:
                 logger.info(f"✅ Найдены ежедневные транзакции для пользователя {self.telegram_user_id}")
                 return True
 
         logger.info(f"❌ Ежедневные транзакции не найдены для пользователя {self.telegram_user_id}")
         return False
+
+    async def check_transactions_created_today(self) -> bool:
+        """
+        Проверить, были ли уже созданы ежедневные транзакции сегодня.
+        Возвращает True если ВСЕ ключевые транзакции найдены, False если нет.
+        Использует substring matching: маркер 'Заготовка' найдёт 'Заготовка Полина'.
+        """
+        existing = await self.get_existing_daily_comments()
+        return self._check_all_markers_present(existing)
 
     async def get_existing_daily_comments(self) -> set:
         """
@@ -76,22 +94,14 @@ class DailyTransactionScheduler:
             transactions = result.get('response', [])
             await poster_client.close()
 
-            # Детальное логирование всех транзакций за сегодня для диагностики
             logger.info(f"🔍 [{self.telegram_user_id}] Найдено {len(transactions)} транзакций за {today}")
+            # Детальное логирование только на уровне DEBUG (включить при необходимости)
             for tx in transactions:
-                tx_id = tx.get('transaction_id', '?')
-                tx_type = tx.get('type', '?')  # 0=expense, 1=income, 2=transfer
-                comment = tx.get('comment', '')
-                amount = tx.get('amount', '?')
-                amount_tiyins = tx.get('amount_in', '?')
-                category_id = tx.get('finance_category_id', '?')
-                category_name = tx.get('finance_category_name', '')
-                account_id = tx.get('account_id', '?')
-                date = tx.get('date', '?')
-                logger.info(
-                    f"  📋 TX#{tx_id} type={tx_type} cat={category_id}({category_name}) "
-                    f"acc={account_id} amount={amount}(raw={amount_tiyins}) "
-                    f"comment='{comment}' date={date}"
+                logger.debug(
+                    f"  📋 TX#{tx.get('transaction_id', '?')} type={tx.get('type', '?')} "
+                    f"cat={tx.get('finance_category_id', '?')}({tx.get('finance_category_name', '')}) "
+                    f"acc={tx.get('account_id', '?')} amount={tx.get('amount', '?')} "
+                    f"comment='{tx.get('comment', '')}' date={tx.get('date', '?')}"
                 )
 
             existing = set()
@@ -123,7 +133,8 @@ class DailyTransactionScheduler:
             existing_comments = await self.get_existing_daily_comments()
 
             # Если ВСЕ ключевые транзакции есть — пропустить
-            already_exists = await self.check_transactions_created_today()
+            # Проверяем прямо здесь чтобы не делать повторный API-запрос
+            already_exists = self._check_all_markers_present(existing_comments)
             if already_exists:
                 logger.info(f"⏭️ Все ежедневные транзакции уже существуют для пользователя {self.telegram_user_id}, пропускаю создание")
                 return {
@@ -206,8 +217,9 @@ class DailyTransactionScheduler:
             existing_comments = set()
 
         def _should_skip(comment: str) -> bool:
-            """Проверить, существует ли транзакция с таким комментарием."""
-            if comment and comment in existing_comments:
+            """Проверить, существует ли транзакция с таким комментарием (substring matching).
+            'Заготовка' найдёт 'Заготовка Полина' и наоборот."""
+            if comment and self._comment_exists(comment, existing_comments):
                 logger.info(f"⏭️ Пропускаю (уже есть): '{comment}'")
                 return True
             return False
