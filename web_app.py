@@ -1279,13 +1279,13 @@ def list_expenses():
                             cat_type = c.get('type', '1')
                             if str(cat_type) != '1':
                                 continue
-                            cat_name = c.get('category_name', '').lower()
+                            cat_name = (c.get('category_name') or c.get('name') or '').lower()
                             # Add poster account info
                             c['poster_account_id'] = acc['id']
                             c['poster_account_name'] = acc['account_name']
                             # Add all categories (not deduplicated) so user can filter by department
                             all_categories.append(c)
-                            print(f"  Category: {c.get('category_name')} (type={cat_type})")
+                            print(f"  Category: {c.get('category_name') or c.get('name')} (type={cat_type})")
 
                         # Load finance accounts with poster_account info
                         accs = await client.get_accounts()
@@ -1471,9 +1471,9 @@ def search_categories():
 
         # Filter by query
         matches = [
-            {'id': c.get('category_id'), 'name': c.get('category_name', '')}
+            {'id': c.get('category_id'), 'name': c.get('category_name') or c.get('name', '')}
             for c in categories
-            if query in c.get('category_name', '').lower()
+            if query in (c.get('category_name') or c.get('name') or '').lower()
         ][:10]
 
         return jsonify(matches)
@@ -5273,22 +5273,22 @@ def api_cafe_salaries_create():
                             categories = await poster_client.get_categories()
                             # First try exact match: 'повар' + 'санд'
                             for cat in categories:
-                                cat_name = cat.get('category_name', '').lower()
+                                cat_name = (cat.get('category_name') or cat.get('name') or '').lower()
                                 if 'повар' in cat_name and 'санд' in cat_name:
                                     povar_sandey_id = int(cat.get('category_id'))
-                                    logger.info(f"✅ Найдена категория '{cat.get('category_name')}' ID={povar_sandey_id}")
+                                    logger.info(f"✅ Найдена категория '{cat.get('category_name') or cat.get('name')}' ID={povar_sandey_id}")
                                     break
                             # Fallback: just 'повар'
                             if povar_sandey_id is None:
                                 for cat in categories:
-                                    cat_name = cat.get('category_name', '').lower()
+                                    cat_name = (cat.get('category_name') or cat.get('name') or '').lower()
                                     if 'повар' in cat_name:
                                         povar_sandey_id = int(cat.get('category_id'))
-                                        logger.info(f"✅ Найдена категория (fallback) '{cat.get('category_name')}' ID={povar_sandey_id}")
+                                        logger.info(f"✅ Найдена категория (fallback) '{cat.get('category_name') or cat.get('name')}' ID={povar_sandey_id}")
                                         break
                             # Log all categories if still not found
                             if povar_sandey_id is None:
-                                cat_names = [f"{c.get('category_name')} (ID={c.get('category_id')})" for c in categories]
+                                cat_names = [f"{c.get('category_name') or c.get('name')} (ID={c.get('category_id')})" for c in categories]
                                 logger.warning(f"⚠️ Категория 'Повар Сандей' не найдена. Доступные категории: {cat_names}")
                         cat_id = povar_sandey_id
 
