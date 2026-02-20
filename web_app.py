@@ -5420,25 +5420,24 @@ def api_cafe_transfers():
                 'to': CAFE_ACCOUNTS['wolt'],
                 'amount': int(round(wolt)),
             })
-        # Корректировка безнала: выравнивает счёт Каспий через счёт Инкассация
-        # (не через Оставил, т.к. инкассация уже скорректирована)
+        # Корректировка безнала: выравнивает счёт Каспий и Оставил в кассе
         if cashless_diff < -0.5:
             transfers.append({
-                'name': 'Корр. безнала: Каспий → Инкассация',
+                'name': 'Корр. безнала: Каспий → Оставил',
                 'from': CAFE_ACCOUNTS['kaspi'],
-                'to': CAFE_ACCOUNTS['inkassacia'],
+                'to': CAFE_ACCOUNTS['cash_left'],
                 'amount': int(round(abs(cashless_diff))),
             })
-            print(f"[CAFE TRANSFER] Корр. безнала: Каспий→Инкассация {int(round(abs(cashless_diff)))}₸ "
+            print(f"[CAFE TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
         elif cashless_diff > 0.5:
             transfers.append({
-                'name': 'Корр. безнала: Инкассация → Каспий',
-                'from': CAFE_ACCOUNTS['inkassacia'],
+                'name': 'Корр. безнала: Оставил → Каспий',
+                'from': CAFE_ACCOUNTS['cash_left'],
                 'to': CAFE_ACCOUNTS['kaspi'],
                 'amount': int(round(cashless_diff)),
             })
-            print(f"[CAFE TRANSFER] Корр. безнала: Инкассация→Каспий {int(round(cashless_diff))}₸ "
+            print(f"[CAFE TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
 
         if not transfers:
@@ -5570,25 +5569,24 @@ def api_shift_closing_transfers():
                 'to': MAIN_ACCOUNTS['halyk'],
                 'amount': int(round(halyk)),
             })
-        # Корректировка безнала: выравнивает счёт Каспий через счёт Инкассация
-        # (не через Оставил, т.к. инкассация уже скорректирована)
+        # Корректировка безнала: выравнивает счёт Каспий и Оставил в кассе
         if cashless_diff < -0.5:
             transfers.append({
-                'name': 'Корр. безнала: Каспий → Инкассация',
+                'name': 'Корр. безнала: Каспий → Оставил',
                 'from': MAIN_ACCOUNTS['kaspi'],
-                'to': MAIN_ACCOUNTS['inkassacia'],
+                'to': MAIN_ACCOUNTS['cash_left'],
                 'amount': int(round(abs(cashless_diff))),
             })
-            print(f"[MAIN TRANSFER] Корр. безнала: Каспий→Инкассация {int(round(abs(cashless_diff)))}₸ "
+            print(f"[MAIN TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
         elif cashless_diff > 0.5:
             transfers.append({
-                'name': 'Корр. безнала: Инкассация → Каспий',
-                'from': MAIN_ACCOUNTS['inkassacia'],
+                'name': 'Корр. безнала: Оставил → Каспий',
+                'from': MAIN_ACCOUNTS['cash_left'],
                 'to': MAIN_ACCOUNTS['kaspi'],
                 'amount': int(round(cashless_diff)),
             })
-            print(f"[MAIN TRANSFER] Корр. безнала: Инкассация→Каспий {int(round(cashless_diff))}₸ "
+            print(f"[MAIN TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
 
         if not transfers:
