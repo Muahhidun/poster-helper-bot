@@ -1138,8 +1138,8 @@ function loadShiftReport() {
     const poster_card = calc.poster_card || (posterData ? posterData.poster_card / 100 : 0);
     const day_result = calc.day_result || 0;
     const shift_left = calc.shift_left || (cash_to_leave + cash_coins);
-    const collection = calc.collection || (cash_bills - cash_to_leave + expenses);
     const cashless_diff = calc.cashless_diff || (fact_cashless - poster_card);
+    const collection = calc.collection || (cash_bills - cash_to_leave + expenses - cashless_diff);
 
     const dayLabel = day_result > 0 ? 'излишек' : day_result < 0 ? 'недостача' : 'ровно';
     const daySign = day_result > 0 ? '+' : '';
@@ -1201,7 +1201,7 @@ function loadShiftReport() {
     if (Math.abs(cashless_diff) >= 1) {
         const diffSign = cashless_diff > 0 ? '+' : '';
         lines.push('');
-        lines.push('⚠️ Разница безнал: ' + diffSign + fmtR(cashless_diff) + '₸');
+        lines.push('ℹ️ Разница безнал: ' + diffSign + fmtR(cashless_diff) + '₸ (учтено в инкассации)');
     }
 
     const report = lines.join('\n');
