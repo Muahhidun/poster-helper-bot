@@ -22,10 +22,10 @@ class DailyTransactionScheduler:
         try:
             categories = await poster_client.get_categories()
             for cat in categories:
-                cat_name = cat.get('finance_category_name', '').lower()
+                cat_name = cat.get('category_name', '').lower()
                 if all(kw in cat_name for kw in keywords):
-                    cat_id = int(cat.get('finance_category_id'))
-                    logger.info(f"✅ Найдена категория '{cat.get('finance_category_name')}' ID={cat_id}")
+                    cat_id = int(cat.get('category_id'))
+                    logger.info(f"✅ Найдена категория '{cat.get('category_name')}' ID={cat_id}")
                     return cat_id
         except Exception as e:
             logger.error(f"❌ Ошибка поиска категории: {e}")
@@ -42,6 +42,36 @@ class DailyTransactionScheduler:
             if marker in existing or existing in marker:
                 return True
         return False
+
+    async def _get_account_existing_data(self, poster_client: PosterClient) -> dict:
+        """
+        Получить существующие транзакции для конкретного аккаунта Poster.
+        Возвращает comments (set) и category_ids (set) для проверки дублей.
+        """
+        try:
+            today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
+            result = await poster_client._request('GET', 'finance.getTransactions', params={
+                'dateFrom': today,
+                'dateTo': today
+            })
+            transactions = result.get('response', [])
+
+            comments = set()
+            category_ids = set()
+            for tx in transactions:
+                comment = tx.get('comment', '').strip()
+                if comment:
+                    comments.add(comment)
+                # Try both field names for robustness
+                cat_id = tx.get('category_id') or tx.get('finance_category_id')
+                if cat_id:
+                    category_ids.add(str(cat_id))
+
+            logger.info(f"🔍 Account data: {len(transactions)} tx, comments={len(comments)}, category_ids={category_ids}")
+            return {'comments': comments, 'category_ids': category_ids}
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения данных аккаунта: {e}")
+            return {'comments': set(), 'category_ids': set()}
 
     def _check_all_markers_present(self, existing_comments: set) -> bool:
         """
@@ -99,7 +129,7 @@ class DailyTransactionScheduler:
             for tx in transactions:
                 logger.debug(
                     f"  📋 TX#{tx.get('transaction_id', '?')} type={tx.get('type', '?')} "
-                    f"cat={tx.get('finance_category_id', '?')}({tx.get('finance_category_name', '')}) "
+                    f"cat={tx.get('category_id', tx.get('finance_category_id', '?'))} "
                     f"acc={tx.get('account_id', '?')} amount={tx.get('amount', '?')} "
                     f"comment='{tx.get('comment', '')}' date={tx.get('date', '?')}"
                 )
@@ -110,8 +140,8 @@ class DailyTransactionScheduler:
                 if comment:
                     existing.add(comment)
                 # Special marker for cafe category-based detection
-                category_id = tx.get('finance_category_id')
-                if category_id == '17':
+                category_id = tx.get('category_id') or tx.get('finance_category_id')
+                if str(category_id) == '17':
                     existing.add('__cafe_sushist__')
 
             logger.info(f"🔍 [{self.telegram_user_id}] Уникальные комментарии: {existing}")
@@ -178,11 +208,14 @@ class DailyTransactionScheduler:
                 )
 
                 try:
+                    # Получить существующие транзакции ЭТОГО аккаунта (не основного)
+                    account_existing = await self._get_account_existing_data(poster_client)
+
                     # Выбрать конфигурацию в зависимости от аккаунта
                     if account_name == 'Pizzburg':
-                        transactions = await self._create_transactions_pizzburg(poster_client, current_time, existing_comments)
+                        transactions = await self._create_transactions_pizzburg(poster_client, current_time, account_existing)
                     elif account_name == 'Pizzburg-cafe':
-                        transactions = await self._create_transactions_pizzburg_cafe(poster_client, current_time)
+                        transactions = await self._create_transactions_pizzburg_cafe(poster_client, current_time, account_existing)
                     else:
                         logger.warning(f"Нет конфигурации для аккаунта '{account_name}'")
                         transactions = []
@@ -209,18 +242,23 @@ class DailyTransactionScheduler:
                 'error': str(e)
             }
 
-    async def _create_transactions_pizzburg(self, poster_client: PosterClient, current_time: str, existing_comments: set = None) -> List[str]:
+    async def _create_transactions_pizzburg(self, poster_client: PosterClient, current_time: str, existing_data: dict = None) -> List[str]:
         """Транзакции для аккаунта Pizzburg (основной).
-        Пропускает транзакции, которые уже существуют (по комментарию)."""
+        Пропускает транзакции, которые уже существуют (по комментарию или category_id)."""
         transactions_created = []
-        if existing_comments is None:
-            existing_comments = set()
+        if existing_data is None:
+            existing_data = {'comments': set(), 'category_ids': set()}
+        existing_comments = existing_data.get('comments', set())
+        existing_category_ids = existing_data.get('category_ids', set())
 
-        def _should_skip(comment: str) -> bool:
-            """Проверить, существует ли транзакция с таким комментарием (substring matching).
-            'Заготовка' найдёт 'Заготовка Полина' и наоборот."""
+        def _should_skip(comment: str = None, category_id: int = None) -> bool:
+            """Проверить дубликат по комментарию (substring) или category_id.
+            Для транзакций с пустым комментарием используем category_id."""
             if comment and self._comment_exists(comment, existing_comments):
                 logger.info(f"⏭️ Пропускаю (уже есть): '{comment}'")
+                return True
+            if category_id is not None and str(category_id) in existing_category_ids:
+                logger.info(f"⏭️ Пропускаю (category {category_id} уже есть)")
                 return True
             return False
 
@@ -265,16 +303,17 @@ class DailyTransactionScheduler:
             )
             transactions_created.append(f"Повара (Нургуль Т): {tx_id}")
 
-        # 1× Кухрабочая (ID=18) - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,
-            category_id=18,  # КухРабочая
-            account_from_id=4,
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Кухрабочая: {tx_id}")
+        # 1× Кухрабочая (ID=18) - 1₸ (пустой комментарий → проверяем по category_id)
+        if not _should_skip(category_id=18):
+            tx_id = await poster_client.create_transaction(
+                transaction_type=0,
+                category_id=18,  # КухРабочая
+                account_from_id=4,
+                amount=1,
+                date=current_time,
+                comment=""
+            )
+            transactions_created.append(f"Кухрабочая: {tx_id}")
 
         # 1× Курьер (ID=15) - 1₸, комментарий "Курьеры"
         if not _should_skip("Курьеры"):
@@ -307,7 +346,7 @@ class DailyTransactionScheduler:
             else:
                 try:
                     categories = await poster_client.get_categories()
-                    cat_names = [f"{c.get('finance_category_name')} (ID={c.get('finance_category_id')})" for c in categories]
+                    cat_names = [f"{c.get('category_name')} (ID={c.get('category_id')})" for c in categories]
                     logger.warning(f"⚠️ Категория 'Зарплаты' не найдена в Pizzburg. Доступные: {cat_names}")
                 except Exception:
                     logger.warning("⚠️ Категория 'Зарплаты' не найдена в Pizzburg")
@@ -388,33 +427,46 @@ class DailyTransactionScheduler:
 
         return transactions_created
 
-    async def _create_transactions_pizzburg_cafe(self, poster_client: PosterClient, current_time: str) -> List[str]:
-        """Транзакции для аккаунта Pizzburg-cafe"""
+    async def _create_transactions_pizzburg_cafe(self, poster_client: PosterClient, current_time: str, existing_data: dict = None) -> List[str]:
+        """Транзакции для аккаунта Pizzburg-cafe.
+        Пропускает транзакции, которые уже существуют (по category_id, т.к. комментарии пустые)."""
         transactions_created = []
+        if existing_data is None:
+            existing_data = {'comments': set(), 'category_ids': set()}
+        existing_category_ids = existing_data.get('category_ids', set())
+
+        def _should_skip_cat(category_id: int) -> bool:
+            """Проверить, есть ли уже транзакция с таким category_id."""
+            if str(category_id) in existing_category_ids:
+                logger.info(f"⏭️ Пропускаю cafe (category {category_id} уже есть)")
+                return True
+            return False
 
         # === СЧЕТ "Оставил в кассе (на закупы)" (ID=5) ===
 
         # 1. Кассир - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,  # expense
-            category_id=16,  # Кассир
-            account_from_id=5,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Кассир: {tx_id}")
+        if not _should_skip_cat(16):
+            tx_id = await poster_client.create_transaction(
+                transaction_type=0,  # expense
+                category_id=16,  # Кассир
+                account_from_id=5,  # Оставил в кассе (на закупы)
+                amount=1,
+                date=current_time,
+                comment=""
+            )
+            transactions_created.append(f"Кассир: {tx_id}")
 
         # 2. Сушист - 1₸
-        tx_id = await poster_client.create_transaction(
-            transaction_type=0,  # expense
-            category_id=17,  # Сушист
-            account_from_id=5,  # Оставил в кассе (на закупы)
-            amount=1,
-            date=current_time,
-            comment=""
-        )
-        transactions_created.append(f"Сушист: {tx_id}")
+        if not _should_skip_cat(17):
+            tx_id = await poster_client.create_transaction(
+                transaction_type=0,  # expense
+                category_id=17,  # Сушист
+                account_from_id=5,  # Оставил в кассе (на закупы)
+                amount=1,
+                date=current_time,
+                comment=""
+            )
+            transactions_created.append(f"Сушист: {tx_id}")
 
         # 3. Повар Сандей - 1₸ (ID категории определяется автоматически из API)
         povar_sandey_id = await self._find_category_id(poster_client, 'повар', 'санд')
@@ -422,19 +474,20 @@ class DailyTransactionScheduler:
             # Fallback: just 'повар'
             povar_sandey_id = await self._find_category_id(poster_client, 'повар')
         if povar_sandey_id:
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,  # expense
-                category_id=povar_sandey_id,
-                account_from_id=5,  # Оставил в кассе (на закупы)
-                amount=1,
-                date=current_time,
-                comment=""
-            )
-            transactions_created.append(f"Повар Сандей: {tx_id}")
+            if not _should_skip_cat(povar_sandey_id):
+                tx_id = await poster_client.create_transaction(
+                    transaction_type=0,  # expense
+                    category_id=povar_sandey_id,
+                    account_from_id=5,  # Оставил в кассе (на закупы)
+                    amount=1,
+                    date=current_time,
+                    comment=""
+                )
+                transactions_created.append(f"Повар Сандей: {tx_id}")
         else:
             try:
                 categories = await poster_client.get_categories()
-                cat_names = [f"{c.get('finance_category_name')} (ID={c.get('finance_category_id')})" for c in categories]
+                cat_names = [f"{c.get('category_name')} (ID={c.get('category_id')})" for c in categories]
                 logger.warning(f"⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe. Доступные: {cat_names}")
             except Exception:
                 logger.warning("⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe")
