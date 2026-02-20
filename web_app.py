@@ -5253,6 +5253,7 @@ def api_cafe_salaries_create():
             )
 
             created = []
+            skipped = []
             povar_sandey_id = None
 
             try:
@@ -5270,15 +5271,30 @@ def api_cafe_salaries_create():
                     if cat_id is None and 'повар' in role.lower():
                         if povar_sandey_id is None:
                             categories = await poster_client.get_categories()
+                            # First try exact match: 'повар' + 'санд'
                             for cat in categories:
                                 cat_name = cat.get('finance_category_name', '').lower()
                                 if 'повар' in cat_name and 'санд' in cat_name:
                                     povar_sandey_id = int(cat.get('finance_category_id'))
+                                    logger.info(f"✅ Найдена категория '{cat.get('finance_category_name')}' ID={povar_sandey_id}")
                                     break
+                            # Fallback: just 'повар'
+                            if povar_sandey_id is None:
+                                for cat in categories:
+                                    cat_name = cat.get('finance_category_name', '').lower()
+                                    if 'повар' in cat_name:
+                                        povar_sandey_id = int(cat.get('finance_category_id'))
+                                        logger.info(f"✅ Найдена категория (fallback) '{cat.get('finance_category_name')}' ID={povar_sandey_id}")
+                                        break
+                            # Log all categories if still not found
+                            if povar_sandey_id is None:
+                                cat_names = [f"{c.get('finance_category_name')} (ID={c.get('finance_category_id')})" for c in categories]
+                                logger.warning(f"⚠️ Категория 'Повар Сандей' не найдена. Доступные категории: {cat_names}")
                         cat_id = povar_sandey_id
 
                     if cat_id is None:
                         logger.warning(f"⚠️ Категория не найдена для роли '{role}', пропускаю")
+                        skipped.append({'role': role, 'name': name, 'amount': amount, 'reason': 'Категория не найдена в Poster'})
                         continue
 
                     tx_id = await poster_client.create_transaction(
@@ -5300,12 +5316,20 @@ def api_cafe_salaries_create():
             finally:
                 await poster_client.close()
 
-            return created
+            return created, skipped
 
         try:
-            created = loop.run_until_complete(create())
+            created, skipped = loop.run_until_complete(create())
         finally:
             loop.close()
+
+        if not created and skipped:
+            skipped_desc = ', '.join(f"{s['role']} {s['name']}" for s in skipped)
+            return jsonify({
+                'success': False,
+                'error': f'Не удалось создать транзакции. Пропущено: {skipped_desc}',
+                'skipped': skipped,
+            }), 500
 
         if not created:
             return jsonify({'success': False, 'error': 'Не удалось создать транзакции'}), 500
@@ -5322,11 +5346,17 @@ def api_cafe_salaries_create():
         )
 
         total = sum(c['amount'] for c in created)
-        return jsonify({
+        result = {
             'success': True,
             'salaries': created,
             'total': total,
-        })
+        }
+        if skipped:
+            skipped_desc = ', '.join(f"{s['role']} {s['name']}" for s in skipped)
+            result['warning'] = f'Не удалось создать: {skipped_desc}'
+            result['skipped'] = skipped
+            logger.warning(f"⚠️ Частично созданы зарплаты кафе. Пропущено: {skipped_desc}")
+        return jsonify(result)
 
     except Exception as e:
         import traceback

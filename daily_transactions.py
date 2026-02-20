@@ -337,6 +337,9 @@ class DailyTransactionScheduler:
 
         # 3. Повар Сандей - 1₸ (ID категории определяется автоматически из API)
         povar_sandey_id = await self._find_category_id(poster_client, 'повар', 'санд')
+        if povar_sandey_id is None:
+            # Fallback: just 'повар'
+            povar_sandey_id = await self._find_category_id(poster_client, 'повар')
         if povar_sandey_id:
             tx_id = await poster_client.create_transaction(
                 transaction_type=0,  # expense
@@ -348,7 +351,12 @@ class DailyTransactionScheduler:
             )
             transactions_created.append(f"Повар Сандей: {tx_id}")
         else:
-            logger.warning("⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe")
+            try:
+                categories = await poster_client.get_categories()
+                cat_names = [f"{c.get('finance_category_name')} (ID={c.get('finance_category_id')})" for c in categories]
+                logger.warning(f"⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe. Доступные: {cat_names}")
+            except Exception:
+                logger.warning("⚠️ Категория 'Повар Сандей' не найдена в Pizzburg-cafe")
 
         # Переводы Инкассация→Оставил в кассе и Kaspi→Wolt
         # убраны — теперь создаются при закрытии смены с реальными суммами

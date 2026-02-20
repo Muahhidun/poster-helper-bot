@@ -515,6 +515,10 @@ async function createCafeSalaries() {
             return;
         }
 
+        if (d.warning) {
+            showSalBanner(d.warning, 'error');
+        }
+
         salariesCreated = true;
         goToShiftClosing();
     } catch(e) {
