@@ -332,8 +332,10 @@ class DailyTransactionScheduler:
         if not _should_skip("Мадина админ"):
             zarplaty_id = await self._find_category_id(poster_client, 'зарплат')
             if zarplaty_id is None:
-                # Fallback: try broader search
                 zarplaty_id = await self._find_category_id(poster_client, 'зарпл')
+            if zarplaty_id is None:
+                # Системные категории Poster имеют английские имена
+                zarplaty_id = await self._find_category_id(poster_client, 'labour_cost')
             if zarplaty_id:
                 tx_id = await poster_client.create_transaction(
                     transaction_type=0,
