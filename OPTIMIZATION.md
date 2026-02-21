@@ -273,10 +273,25 @@
 
 **Файлы:** `tests/`, `pytest.ini`, `requirements.txt`
 
-### 8.2 Добавить валидацию входных данных
+### 8.2 ~~Добавить валидацию входных данных~~ ГОТОВО
 
-- [ ] Pydantic-модели для JSON-эндпоинтов (суммы, даты, ID)
-- [ ] Rate limiting на `/login` (Flask-Limiter)
+~~**Проблема:** JSON-эндпоинты не валидировали типы, диапазоны и обязательные поля.~~
+
+**Что сделано:**
+- [x] Создан `validators.py` с 15 Pydantic-моделями для всех ключевых эндпоинтов
+- [x] Декоратор `@validate_json(Model)` — автоматически валидирует и возвращает 400 при ошибке
+- [x] Валидация применена к 8 API-эндпоинтам: expenses (create/update/toggle/status/process), aliases (create/update), shift-closing/calculate, shift-reconciliation
+- [x] Rate limiting на `/login` — 10 запросов/минуту (Flask-Limiter, in-memory storage)
+- [x] Flask-Limiter добавлен в requirements.txt
+
+**Модели включают:**
+- Ограничения диапазонов (суммы 0–100M, количество >0)
+- Enum-валидация (source: cash/kaspi/halyk, expense_type, completion_status)
+- Максимальная длина строк (description: 200, category: 50)
+- Валидация дат (ISO формат)
+- Обязательные поля (alias_text, poster_item_id, supplier_id)
+
+**Файлы:** `validators.py`, `web_app.py`, `requirements.txt`
 
 ---
 

@@ -13,8 +13,20 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g, session
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from database import get_database
 import config
+from validators import (
+    validate_json,
+    CreateExpenseRequest, UpdateExpenseRequest, ProcessExpensesRequest,
+    ToggleExpenseTypeRequest, UpdateCompletionStatusRequest,
+    CreateSupplyRequest as CreateSupplyModel,
+    CreateAliasRequest as CreateAliasModel, UpdateAliasRequest as UpdateAliasModel,
+    ShiftClosingCalculateRequest,
+    CafeSalariesRequest, CashierSalaryCalcRequest,
+    SaveReconciliationRequest as ReconciliationModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +53,14 @@ def run_async(coro):
     return run_async(coro)
 
 app = Flask(__name__)
+
+# Rate limiter
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
 
 # Generate or use SECRET_KEY for Flask sessions
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
@@ -97,6 +117,7 @@ def check_role_access(path, role):
 
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
 def login():
     """Login page and authentication"""
     # If already logged in, redirect to home
@@ -484,18 +505,18 @@ def api_aliases():
 
 
 @app.route('/api/aliases', methods=['POST'])
-def api_create_alias():
+@validate_json(CreateAliasModel)
+def api_create_alias(validated=None):
     """Create new alias for Mini App"""
-    data = request.json
     db = get_database()
 
     success = db.add_ingredient_alias(
         telegram_user_id=g.user_id,
-        alias_text=data['alias_text'],
-        poster_item_id=data['poster_item_id'],
-        poster_item_name=data['poster_item_name'],
-        source=data.get('source', 'user'),
-        notes=data.get('notes', '')
+        alias_text=validated.alias_text,
+        poster_item_id=validated.poster_item_id,
+        poster_item_name=validated.poster_item_name,
+        source=validated.source,
+        notes=validated.notes,
     )
 
     if success:
@@ -505,19 +526,19 @@ def api_create_alias():
 
 
 @app.route('/api/aliases/<int:alias_id>', methods=['PUT'])
-def api_update_alias(alias_id):
+@validate_json(UpdateAliasModel)
+def api_update_alias(alias_id, validated=None):
     """Update alias for Mini App"""
-    data = request.json
     db = get_database()
 
     success = db.update_alias(
         alias_id=alias_id,
         telegram_user_id=g.user_id,
-        alias_text=data.get('alias_text', ''),
-        poster_item_id=data.get('poster_item_id', 0),
-        poster_item_name=data.get('poster_item_name', ''),
-        source=data.get('source', 'user'),
-        notes=data.get('notes', '')
+        alias_text=validated.alias_text,
+        poster_item_id=validated.poster_item_id,
+        poster_item_name=validated.poster_item_name,
+        source=validated.source,
+        notes=validated.notes,
     )
 
     if success:
@@ -1938,27 +1959,28 @@ def api_get_expenses():
 
 
 @app.route('/api/expenses/<int:draft_id>', methods=['PUT'])
-def api_update_expense(draft_id):
+@validate_json(UpdateExpenseRequest)
+def api_update_expense(draft_id, validated=None):
     """Update an expense draft"""
     db = get_database()
-    data = request.get_json() or {}
 
-    # Map frontend field names to database field names
+    # Only include fields that were actually sent in the request
+    data = request.get_json() or {}
     update_fields = {}
     if 'amount' in data:
-        update_fields['amount'] = data['amount']
+        update_fields['amount'] = validated.amount
     if 'description' in data:
-        update_fields['description'] = data['description']
+        update_fields['description'] = validated.description
     if 'category' in data:
-        update_fields['category'] = data['category']
+        update_fields['category'] = validated.category
     if 'source' in data:
-        update_fields['source'] = data['source']
+        update_fields['source'] = validated.source.value if validated.source else None
     if 'account_id' in data:
-        update_fields['account_id'] = data['account_id']
+        update_fields['account_id'] = validated.account_id
     if 'poster_account_id' in data:
-        update_fields['poster_account_id'] = data['poster_account_id']
+        update_fields['poster_account_id'] = validated.poster_account_id
     if 'completion_status' in data:
-        update_fields['completion_status'] = data['completion_status']
+        update_fields['completion_status'] = validated.completion_status.value if validated.completion_status else None
 
     success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, **update_fields)
     return jsonify({'success': success})
@@ -1973,31 +1995,31 @@ def api_delete_expense(draft_id):
 
 
 @app.route('/api/expenses', methods=['POST'])
-def api_create_expense():
+@validate_json(CreateExpenseRequest)
+def api_create_expense(validated=None):
     """Create a new expense draft"""
     db = get_database()
-    data = request.get_json() or {}
 
     draft_id = db.create_expense_draft(
         telegram_user_id=g.user_id,
-        amount=data.get('amount', 0),
-        description=data.get('description', ''),
-        expense_type=data.get('expense_type', 'transaction'),
-        category=data.get('category'),
-        source=data.get('source', 'cash'),
-        account_id=data.get('account_id'),
-        poster_account_id=data.get('poster_account_id')
+        amount=validated.amount,
+        description=validated.description,
+        expense_type=validated.expense_type.value,
+        category=validated.category or None,
+        source=validated.source.value,
+        account_id=validated.account_id,
+        poster_account_id=validated.poster_account_id,
     )
 
     return jsonify({'success': True, 'id': draft_id})
 
 
 @app.route('/api/expenses/<int:draft_id>/toggle-type', methods=['POST'])
-def api_toggle_expense_type(draft_id):
+@validate_json(ToggleExpenseTypeRequest)
+def api_toggle_expense_type(draft_id, validated=None):
     """Toggle expense type between transaction and supply"""
     db = get_database()
-    data = request.get_json() or {}
-    new_type = data.get('expense_type', 'transaction')
+    new_type = validated.expense_type.value
 
     # Get current expense draft
     all_drafts = db.get_expense_drafts(g.user_id, status="all")
@@ -2032,13 +2054,12 @@ def api_toggle_expense_type(draft_id):
 
 
 @app.route('/api/expenses/<int:draft_id>/completion-status', methods=['POST'])
-def api_update_completion_status(draft_id):
+@validate_json(UpdateCompletionStatusRequest)
+def api_update_completion_status(draft_id, validated=None):
     """Update completion status of expense draft"""
     db = get_database()
-    data = request.get_json() or {}
-    status = data.get('completion_status', 'pending')
 
-    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, completion_status=status)
+    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, completion_status=validated.completion_status.value)
     return jsonify({'success': success})
 
 
@@ -2077,36 +2098,29 @@ def api_get_shift_reconciliation():
 
 
 @app.route('/api/shift-reconciliation', methods=['POST'])
-def api_save_shift_reconciliation():
+@validate_json(ReconciliationModel)
+def api_save_shift_reconciliation(validated=None):
     """Save shift reconciliation data for a specific date and source"""
-    from datetime import datetime, timedelta
-
     db = get_database()
-    data = request.get_json() or {}
 
     # Default to today (Kazakhstan time UTC+5)
-    kz_tz = KZ_TZ
-    date = data.get('date')
+    date = validated.date
     if not date:
         date = _kz_now().strftime("%Y-%m-%d")
 
-    source = data.get('source')
-    if not source:
-        return jsonify({'success': False, 'error': 'source is required'}), 400
-
     # For kaspi/halyk: fact_balance is stored in opening_balance column
-    opening_balance = data.get('opening_balance')
-    if data.get('fact_balance') is not None:
-        opening_balance = data.get('fact_balance')
+    opening_balance = validated.opening_balance
+    if validated.fact_balance is not None:
+        opening_balance = validated.fact_balance
 
     success = db.save_shift_reconciliation(
         telegram_user_id=g.user_id,
         date=date,
-        source=source,
+        source=validated.source.value,
         opening_balance=opening_balance,
-        closing_balance=data.get('closing_balance'),
-        total_difference=data.get('total_difference'),
-        notes=data.get('notes'),
+        closing_balance=validated.closing_balance,
+        total_difference=validated.total_difference,
+        notes=validated.notes,
     )
 
     return jsonify({'success': success})
@@ -2387,14 +2401,11 @@ def api_sync_expenses_from_poster():
 
 
 @app.route('/api/expenses/process', methods=['POST'])
-def api_process_expenses():
+@validate_json(ProcessExpensesRequest)
+def api_process_expenses(validated=None):
     """Process selected expense drafts - create transactions in Poster"""
     db = get_database()
-    data = request.get_json() or {}
-    draft_ids = data.get('draft_ids', [])
-
-    if not draft_ids:
-        return jsonify({'success': False, 'error': 'No drafts selected'})
+    draft_ids = validated.draft_ids
 
     poster_accounts = db.get_accounts(g.user_id)
     if not poster_accounts:
@@ -4102,26 +4113,25 @@ def api_shift_closing_poster_data():
 
 
 @app.route('/api/shift-closing/calculate', methods=['POST'])
-def api_shift_closing_calculate():
+@validate_json(ShiftClosingCalculateRequest)
+def api_shift_closing_calculate(validated=None):
     """Calculate shift closing totals based on input data"""
-    data = request.json
-
     try:
         # Input values (all in tenge, whole numbers)
-        wolt = float(data.get('wolt', 0))
-        halyk = float(data.get('halyk', 0))
-        kaspi = float(data.get('kaspi', 0))
-        kaspi_cafe = float(data.get('kaspi_cafe', 0))  # Deducted from Kaspi
-        cash_bills = float(data.get('cash_bills', 0))
-        cash_coins = float(data.get('cash_coins', 0))
-        shift_start = float(data.get('shift_start', 0))
-        expenses = float(data.get('expenses', 0))
-        cash_to_leave = float(data.get('cash_to_leave', config.DEFAULT_CASH_TO_LEAVE))
+        wolt = validated.wolt
+        halyk = validated.halyk
+        kaspi = validated.kaspi
+        kaspi_cafe = validated.kaspi_cafe
+        cash_bills = validated.cash_bills
+        cash_coins = validated.cash_coins
+        shift_start = validated.shift_start
+        expenses = validated.expenses
+        cash_to_leave = validated.cash_to_leave
 
         # Poster data (from API, in tiyins - convert to tenge)
-        poster_trade = float(data.get('poster_trade', 0)) / 100  # С учётом скидок
-        poster_bonus = float(data.get('poster_bonus', 0)) / 100  # Онлайн-оплата
-        poster_card = float(data.get('poster_card', 0)) / 100    # Картой (для проверки)
+        poster_trade = validated.poster_trade / 100  # С учётом скидок
+        poster_bonus = validated.poster_bonus / 100  # Онлайн-оплата
+        poster_card = validated.poster_card / 100    # Картой (для проверки)
 
         # Calculations
         # 1. Итого безнал факт = Wolt + Halyk + (Kaspi - Kaspi от Cafe)
