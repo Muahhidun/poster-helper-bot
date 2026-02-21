@@ -76,7 +76,7 @@
                     {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
                     {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name %}
                     {% if not is_kaspi and not is_halyk %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}poster-mismatch{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}poster-mismatch{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -100,7 +100,7 @@
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
                                    data-id="{{ draft.id }}" step="1"
                                    data-poster-amount="{{ draft.poster_amount|default('', true) }}">
-                            {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}
+                            {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}
                             <span class="poster-amount-badge" title="Сумма в Poster: {{ draft.poster_amount|int }}₸. Измените, чтобы совпало.">Poster: {{ draft.poster_amount|int }}₸</span>
                             {% endif %}
                         </td>
@@ -195,7 +195,7 @@
                     {# Kaspi section: include drafts where account_name contains 'kaspi' OR source is 'kaspi' #}
                     {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
                     {% if is_kaspi %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}poster-mismatch{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}poster-mismatch{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -219,7 +219,7 @@
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
                                    data-id="{{ draft.id }}" step="1"
                                    data-poster-amount="{{ draft.poster_amount|default('', true) }}">
-                            {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}
+                            {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}
                             <span class="poster-amount-badge" title="Сумма в Poster: {{ draft.poster_amount|int }}₸. Измените, чтобы совпало.">Poster: {{ draft.poster_amount|int }}₸</span>
                             {% endif %}
                         </td>
@@ -314,7 +314,7 @@
                     {# Halyk section: include drafts where account_name contains 'халык'/'halyk' OR source is 'halyk' #}
                     {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name or ns.source == 'halyk' %}
                     {% if is_halyk %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}poster-mismatch{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}poster-mismatch{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -338,7 +338,7 @@
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
                                    data-id="{{ draft.id }}" step="1"
                                    data-poster-amount="{{ draft.poster_amount|default('', true) }}">
-                            {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}
+                            {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}
                             <span class="poster-amount-badge" title="Сумма в Poster: {{ draft.poster_amount|int }}₸. Измените, чтобы совпало.">Poster: {{ draft.poster_amount|int }}₸</span>
                             {% endif %}
                         </td>
