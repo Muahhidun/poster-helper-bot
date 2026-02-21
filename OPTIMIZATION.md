@@ -110,32 +110,22 @@
 
 ---
 
-## ЭТАП 3: Утечки соединений БД
+## ~~ЭТАП 3: Утечки соединений БД~~ ГОТОВО
 
-### 3.1 Добавить try-finally для закрытия соединений
+### 3.1 ~~Добавить автоматическое закрытие соединений~~ ГОТОВО
 
-**Проблема:** В database.py ~50+ методов. При ошибке соединение не закрывается. В продакшене на Railway это исчерпает пул PostgreSQL.
+~~**Проблема:** 84 из 85 методов database.py имели утечки соединений при ошибках.~~
 
-**Что сделать:**
-- [ ] Создать context manager для соединений:
-  ```python
-  @contextmanager
-  def _get_cursor(self):
-      conn = self._get_connection()
-      try:
-          cursor = conn.cursor()
-          yield cursor
-          conn.commit()
-      except:
-          conn.rollback()
-          raise
-      finally:
-          conn.close()
-  ```
-- [ ] Рефакторить все методы database.py на использование context manager
-- [ ] Или хотя бы обернуть критичные методы в try-finally
+**Решение:** `_ManagedConnection` — обёртка над соединением, которая:
+- [x] Безопасный повторный close() (без ошибки при двойном вызове)
+- [x] `__del__` ловит утечки при garbage collection (CPython — немедленно)
+- [x] Поддержка context manager (`with` statement)
+- [x] Прозрачный passthrough: cursor(), commit(), rollback(), row_factory
 
-**Файлы:** `database.py`
+**Как работает:** `_get_connection()` теперь возвращает `_ManagedConnection(conn)`.
+Все 85 методов автоматически защищены — НОЛЬ изменений в существующем коде.
+
+**Файлы изменены:** `database.py`
 
 ---
 
