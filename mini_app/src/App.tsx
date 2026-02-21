@@ -13,6 +13,8 @@ import { Aliases } from './pages/Aliases'
 import { AliasForm } from './pages/AliasForm'
 import { Templates } from './pages/Templates'
 import { ShiftClosing } from './pages/ShiftClosing'
+import { CashierShiftClosing } from './pages/CashierShiftClosing'
+import { CafeShiftClosing } from './pages/CafeShiftClosing'
 import { Loading } from './components/Loading'
 
 // Create a client
@@ -62,6 +64,8 @@ function AppContent() {
         <Route path="/aliases/:id/edit" element={<AliasForm />} />
         <Route path="/templates" element={<Templates />} />
         <Route path="/shift-closing" element={<ShiftClosing />} />
+        <Route path="/cashier/shift-closing" element={<CashierShiftClosing />} />
+        <Route path="/cafe/shift-closing" element={<CafeShiftClosing />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppLayout>

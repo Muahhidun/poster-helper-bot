@@ -6,37 +6,8 @@ import { getApiClient } from '../api/client'
 import { Header } from '../components/Header'
 import { Loading } from '../components/Loading'
 import { ErrorMessage } from '../components/ErrorMessage'
+import { formatMoney, parseInputValue, getKzToday, formatDate, toPosterDate } from '../utils/format'
 import type { ShiftClosingCalculations } from '../types'
-
-// Format number with spaces as thousands separator
-function formatMoney(amount: number): string {
-  return Math.round(amount).toLocaleString('ru-RU')
-}
-
-// Parse input value
-function parseInputValue(value: string): number {
-  const cleaned = value.replace(/\s/g, '').replace(/,/g, '.')
-  const num = parseFloat(cleaned)
-  return isNaN(num) ? 0 : num
-}
-
-// Get today's date in Kazakhstan timezone (UTC+5 Asia/Almaty) as YYYY-MM-DD
-function getKzToday(): string {
-  const now = new Date()
-  const kzTime = new Date(now.getTime() + 5 * 3600000) // UTC+5 Asia/Almaty
-  return kzTime.toISOString().slice(0, 10)
-}
-
-// Format YYYY-MM-DD to DD.MM.YYYY
-function formatDate(dateStr: string): string {
-  const [y, m, d] = dateStr.split('-')
-  return `${d}.${m}.${y}`
-}
-
-// Format YYYY-MM-DD to YYYYMMDD (for Poster API)
-function toPosterDate(dateStr: string): string {
-  return dateStr.replace(/-/g, '')
-}
 
 // localStorage key for inputs
 function storageKey(date: string): string {

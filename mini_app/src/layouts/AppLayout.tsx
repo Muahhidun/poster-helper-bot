@@ -6,6 +6,8 @@ import {
   Package,
   Clock,
   Settings,
+  User,
+  Coffee,
 } from 'lucide-react'
 
 interface AppLayoutProps {
@@ -16,6 +18,11 @@ const navItems = [
   { path: '/', label: 'Расходы', icon: Receipt },
   { path: '/supplies', label: 'Поставки', icon: Package },
   { path: '/shift-closing', label: 'Смена', icon: Clock },
+]
+
+const shiftSubItems = [
+  { path: '/cashier/shift-closing', label: 'Кассир', icon: User },
+  { path: '/cafe/shift-closing', label: 'Кафе', icon: Coffee },
 ]
 
 export function AppLayout({ children }: AppLayoutProps) {
@@ -37,24 +44,51 @@ export function AppLayout({ children }: AppLayoutProps) {
         <nav className="flex-1 p-4 space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon
+            const isShiftClosing = item.path === '/shift-closing'
             const isActive = location.pathname === item.path ||
               (item.path !== '/' && location.pathname.startsWith(item.path)) ||
-              (item.path === '/' && location.pathname === '/expenses')
+              (item.path === '/' && location.pathname === '/expenses') ||
+              (isShiftClosing && (location.pathname.includes('shift-closing')))
 
             return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              <div key={item.path}>
+                <NavLink
+                  to={item.path}
+                  className={cn(
+                    "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
+                    isActive
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  <Icon className="h-5 w-5" />
+                  {item.label}
+                </NavLink>
+                {/* Sub-items for Shift Closing */}
+                {isShiftClosing && isActive && (
+                  <div className="ml-8 mt-1 space-y-1">
+                    {shiftSubItems.map((sub) => {
+                      const SubIcon = sub.icon
+                      const subActive = location.pathname === sub.path
+                      return (
+                        <NavLink
+                          key={sub.path}
+                          to={sub.path}
+                          className={cn(
+                            "flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all",
+                            subActive
+                              ? "bg-primary/10 text-primary"
+                              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                          )}
+                        >
+                          <SubIcon className="h-4 w-4" />
+                          {sub.label}
+                        </NavLink>
+                      )
+                    })}
+                  </div>
                 )}
-              >
-                <Icon className="h-5 w-5" />
-                {item.label}
-              </NavLink>
+              </div>
             )
           })}
         </nav>
