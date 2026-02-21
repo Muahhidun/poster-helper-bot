@@ -143,7 +143,7 @@
         <div class="sc-card-title">Инкассация</div>
         <div class="sc-field">
             <label>Оставить на смену</label>
-            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="15000" value="15000" oninput="onInput()">
+            <input type="text" id="cash_to_leave" inputmode="decimal" placeholder="{{ default_cash_to_leave }}" value="{{ default_cash_to_leave }}" oninput="onInput()">
         </div>
         <div class="sc-info-row" id="shift_left_row" style="display:none">
             <span>Смена оставили</span>
@@ -742,7 +742,7 @@ async function loadDateData(date) {
 
     // Clear all inputs
     INPUT_IDS.forEach(id => { document.getElementById(id).value = ''; });
-    document.getElementById('cash_to_leave').value = '15000';
+    document.getElementById('cash_to_leave').value = '{{ default_cash_to_leave }}';
 
     const isToday = date === getTodayStr();
 

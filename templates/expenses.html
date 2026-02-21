@@ -76,7 +76,7 @@
                     {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
                     {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name %}
                     {% if not is_kaspi and not is_halyk %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}poster-mismatch{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -98,7 +98,11 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1">
+                                   data-id="{{ draft.id }}" step="1"
+                                   data-poster-amount="{{ draft.poster_amount|default('', true) }}">
+                            {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}
+                            <span class="poster-amount-badge" title="Сумма в Poster: {{ draft.poster_amount|int }}₸. Измените, чтобы совпало.">Poster: {{ draft.poster_amount|int }}₸</span>
+                            {% endif %}
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -191,7 +195,7 @@
                     {# Kaspi section: include drafts where account_name contains 'kaspi' OR source is 'kaspi' #}
                     {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
                     {% if is_kaspi %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}poster-mismatch{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -213,7 +217,11 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1">
+                                   data-id="{{ draft.id }}" step="1"
+                                   data-poster-amount="{{ draft.poster_amount|default('', true) }}">
+                            {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}
+                            <span class="poster-amount-badge" title="Сумма в Poster: {{ draft.poster_amount|int }}₸. Измените, чтобы совпало.">Poster: {{ draft.poster_amount|int }}₸</span>
+                            {% endif %}
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -306,7 +314,7 @@
                     {# Halyk section: include drafts where account_name contains 'халык'/'halyk' OR source is 'halyk' #}
                     {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name or ns.source == 'halyk' %}
                     {% if is_halyk %}
-                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %}"
+                    <tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}poster-mismatch{% endif %}"
                         data-id="{{ draft.id }}"
                         data-amount="{{ draft.amount|int }}"
                         data-description="{{ draft.description }}"
@@ -328,7 +336,11 @@
                         </td>
                         <td class="amount">
                             <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
-                                   data-id="{{ draft.id }}" step="1">
+                                   data-id="{{ draft.id }}" step="1"
+                                   data-poster-amount="{{ draft.poster_amount|default('', true) }}">
+                            {% if draft.poster_amount is not none and (draft.amount - draft.poster_amount)|abs >= 0.01 %}
+                            <span class="poster-amount-badge" title="Сумма в Poster: {{ draft.poster_amount|int }}₸. Измените, чтобы совпало.">Poster: {{ draft.poster_amount|int }}₸</span>
+                            {% endif %}
                         </td>
                         <td class="description">
                             <input type="text" class="edit-description" value="{{ draft.description }}"
@@ -878,6 +890,24 @@ h1 {
     text-align: right;
     font-variant-numeric: tabular-nums;
     font-weight: 600;
+}
+
+/* Poster amount mismatch badge */
+.poster-amount-badge {
+    display: inline-block;
+    font-size: 10px;
+    color: #92400e;
+    background: #fef3c7;
+    padding: 1px 6px;
+    border-radius: 10px;
+    white-space: nowrap;
+    margin-top: 2px;
+    cursor: help;
+}
+
+.draft-row.poster-mismatch {
+    background: #fffbeb !important;
+    border-left: 4px solid #f59e0b !important;
 }
 
 .edit-description {
@@ -1977,6 +2007,31 @@ function findSupplySyncStatus(expenseAmount, supplierName, category, accountName
 }
 
 // Update row sync status
+function updatePosterBadge(input) {
+    const posterAmount = input.dataset.posterAmount;
+    if (!posterAmount) return;
+    const amount = parseFloat(input.value) || 0;
+    const poster = parseFloat(posterAmount) || 0;
+    const hasMismatch = Math.abs(amount - poster) >= 0.01;
+    const row = input.closest('tr');
+    const td = input.closest('td');
+    let badge = td.querySelector('.poster-amount-badge');
+
+    if (hasMismatch) {
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'poster-amount-badge';
+            td.appendChild(badge);
+        }
+        badge.textContent = `Poster: ${Math.round(poster)}₸`;
+        badge.title = `Сумма в Poster: ${Math.round(poster)}₸. Измените, чтобы совпало.`;
+        row.classList.add('poster-mismatch');
+    } else {
+        if (badge) badge.remove();
+        row.classList.remove('poster-mismatch');
+    }
+}
+
 function updateRowSyncStatus(row) {
     const amount = parseFloat(row.querySelector('.edit-amount').value) || 0;
     const description = row.querySelector('.edit-description').value;
@@ -2333,6 +2388,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 input.classList.add('saved');
                 setTimeout(() => input.classList.remove('saved'), 300);
                 updateRowSyncStatus(input.closest('tr'));
+                // Update poster amount mismatch badge
+                updatePosterBadge(input);
             }
             updateSummary();
         }
@@ -2753,7 +2810,8 @@ function createRowElement(draft) {
     const tr = document.createElement('tr');
     const completionStatus = draft.completion_status || 'pending';
     const accountType = draft.account_type || 'cash';
-    tr.className = 'draft-row ' + (draft.expense_type === 'supply' ? 'supply' : 'transaction') + ' ' + completionStatus;
+    const hasMismatch = draft.poster_amount != null && Math.abs((draft.amount || 0) - draft.poster_amount) >= 0.01;
+    tr.className = 'draft-row ' + (draft.expense_type === 'supply' ? 'supply' : 'transaction') + ' ' + completionStatus + (hasMismatch ? ' poster-mismatch' : '');
     tr.dataset.id = draft.id;
     tr.dataset.amount = draft.amount || 0;
     tr.dataset.description = draft.description || '';
@@ -2783,7 +2841,9 @@ function createRowElement(draft) {
         </td>
         <td class="amount">
             <input type="number" class="edit-amount" value="${draft.amount || 0}"
-                   data-id="${draft.id}" step="1">
+                   data-id="${draft.id}" step="1"
+                   data-poster-amount="${draft.poster_amount != null ? draft.poster_amount : ''}">
+            ${hasMismatch ? `<span class="poster-amount-badge" title="Сумма в Poster: ${Math.round(draft.poster_amount)}₸. Измените, чтобы совпало.">Poster: ${Math.round(draft.poster_amount)}₸</span>` : ''}
         </td>
         <td class="description">
             <input type="text" class="edit-description" value="${draft.description || ''}"

@@ -203,22 +203,28 @@
 
 **Файлы изменены:** `web_app.py`
 
-### 6.2 Один event loop вместо создания нового на каждый запрос
+### 6.2 ~~Один event loop вместо создания нового на каждый запрос~~ ГОТОВО
 
-**Проблема:** `asyncio.new_event_loop()` вызывается 40+ раз — на каждый HTTP-запрос создаётся новый loop.
+~~**Проблема:** `asyncio.new_event_loop()` вызывается 40+ раз — на каждый HTTP-запрос создаётся новый loop.~~
 
-- [ ] Создать вспомогательную функцию `run_async(coro)` с единой точкой создания loop
-- [ ] Или перейти на async Flask (Quart) в перспективе
+**Что сделано:**
+- [x] Создана функция `run_async(coro)` — единая точка создания/закрытия event loop
+- [x] Заменены все 23 паттерна `asyncio.new_event_loop()` + `loop.run_until_complete()` + `loop.close()`
+- [x] 6 сложных случаев (несколько `run_until_complete` на одном loop) рефакторены в async-функции
 
-### 6.3 Вынести магические числа в конфигурацию
+**Файлы изменены:** `web_app.py`
 
-- [ ] `account_id = 4` → `config.ACCOUNT_CASH`
-- [ ] `score < 75` → `config.MIN_MATCH_CONFIDENCE`
-- [ ] `items[:15]` → `config.MAX_INLINE_BUTTONS`
-- [ ] `cash_to_leave = 15000` → `config.DEFAULT_CASH_TO_LEAVE`
-- [ ] И другие числовые константы
+### 6.3 ~~Вынести магические числа в конфигурацию~~ ГОТОВО
 
-**Файлы:** `config.py`, `web_app.py`, `bot.py`, `matchers.py`
+~~**Проблема:** Захардкоженные числовые константы разбросаны по коду.~~
+
+**Что сделано:**
+- [x] `account_id = 4` → `config.DEFAULT_ACCOUNT_FROM_ID` (уже существовал, но 3 места в bot.py использовали хардкод)
+- [x] `score < 75` → `config.MIN_MATCH_CONFIDENCE` (bot.py + 4 метода в matchers.py)
+- [x] `cash_to_leave = 15000` → `config.DEFAULT_CASH_TO_LEAVE` (web_app.py + shift_closing.html)
+- [x] Все 3 новые константы настраиваются через env-переменные
+
+**Файлы изменены:** `config.py`, `bot.py`, `matchers.py`, `web_app.py`, `templates/shift_closing.html`
 
 ---
 
@@ -249,16 +255,43 @@
 
 ## ЭТАП 8: Тесты и CI
 
-### 8.1 Перевести тесты на pytest
+### 8.1 ~~Перевести тесты на pytest~~ ГОТОВО
 
-- [ ] Установить pytest
-- [ ] Обернуть существующие тестовые скрипты в pytest-формат
-- [ ] Добавить тесты на критичные операции (удаление, создание транзакций)
+~~**Проблема:** 16 тестовых файлов — автономные скрипты без фреймворка.~~
 
-### 8.2 Добавить валидацию входных данных
+**Что сделано:**
+- [x] Установлен pytest, добавлен в requirements.txt
+- [x] Создана директория `tests/` с `conftest.py` (фикстуры: db, simple_parser)
+- [x] `test_supply_parser.py` → 6 тестов (parametrize: qty/price парсинг)
+- [x] `test_quick_template_parser.py` → 8 тестов (parametrize: синтаксис "лаваш 400")
+- [x] `test_templates_crud.py` → 6 тестов (CRUD шаблонов поставок с cleanup fixtures)
+- [x] Добавлен `pytest.ini` с конфигурацией
+- [x] Все 20 тестов проходят: `pytest tests/ -v`
 
-- [ ] Pydantic-модели для JSON-эндпоинтов (суммы, даты, ID)
-- [ ] Rate limiting на `/login` (Flask-Limiter)
+**Не конвертированы (11 файлов — интеграционные тесты с Poster API):**
+Оставлены как standalone-скрипты для ручного тестирования.
+
+**Файлы:** `tests/`, `pytest.ini`, `requirements.txt`
+
+### 8.2 ~~Добавить валидацию входных данных~~ ГОТОВО
+
+~~**Проблема:** JSON-эндпоинты не валидировали типы, диапазоны и обязательные поля.~~
+
+**Что сделано:**
+- [x] Создан `validators.py` с 15 Pydantic-моделями для всех ключевых эндпоинтов
+- [x] Декоратор `@validate_json(Model)` — автоматически валидирует и возвращает 400 при ошибке
+- [x] Валидация применена к 8 API-эндпоинтам: expenses (create/update/toggle/status/process), aliases (create/update), shift-closing/calculate, shift-reconciliation
+- [x] Rate limiting на `/login` — 10 запросов/минуту (Flask-Limiter, in-memory storage)
+- [x] Flask-Limiter добавлен в requirements.txt
+
+**Модели включают:**
+- Ограничения диапазонов (суммы 0–100M, количество >0)
+- Enum-валидация (source: cash/kaspi/halyk, expense_type, completion_status)
+- Максимальная длина строк (description: 200, category: 50)
+- Валидация дат (ISO формат)
+- Обязательные поля (alias_text, poster_item_id, supplier_id)
+
+**Файлы:** `validators.py`, `web_app.py`, `requirements.txt`
 
 ---
 
