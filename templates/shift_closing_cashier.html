@@ -63,21 +63,23 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
 @media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}}
 
 {% if user_role == 'owner' %}
-.owner-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 16px;height:48px;display:flex;align-items:center;position:sticky;top:0;z-index:100}
-.owner-nav .nav-inner{max-width:480px;width:100%;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
-.owner-nav .nav-brand{font-size:15px;font-weight:700;color:#1c1c1e;text-decoration:none}
-.owner-nav .nav-links{display:flex;gap:2px;list-style:none;margin:0;padding:0}
-.owner-nav .nav-links a{padding:6px 10px;border-radius:6px;color:#8e8e93;text-decoration:none;font-size:12px;font-weight:600;transition:all .15s}
-.owner-nav .nav-links a:hover{background:#f3f4f6;color:#1c1c1e}
-.owner-nav .nav-links a.active{background:#007aff15;color:#007aff}
+.modern-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 24px;height:56px;display:flex;align-items:center;position:sticky;top:0;z-index:100}
+.modern-nav .nav-container{max-width:1600px;width:100%;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
+.modern-nav .brand{font-size:18px;font-weight:700;color:#1f2937;text-decoration:none;display:flex;align-items:center;gap:8px}
+.modern-nav .nav-links{display:flex;gap:4px;list-style:none;margin:0;padding:0}
+.modern-nav .nav-links a{padding:8px 16px;border-radius:6px;color:#4b5563;text-decoration:none;font-size:14px;font-weight:500;transition:all .15s}
+.modern-nav .nav-links a:hover{background:#f3f4f6;color:#1f2937}
+.modern-nav .nav-links a.active{background:#f0fdf4;color:#059669}
+@media(max-width:480px){.modern-nav{padding:0 12px;height:48px}.modern-nav .brand{font-size:16px}.modern-nav .nav-links{gap:2px}.modern-nav .nav-links a{padding:6px 10px;font-size:12px}}
+@media(max-width:375px){.modern-nav .brand{font-size:14px}.modern-nav .nav-links a{padding:6px 8px;font-size:11px}}
 {% endif %}
     </style>
 </head>
-<body>
+<body style="background:#f9fafb;">
 {% if user_role == 'owner' %}
-<nav class="owner-nav">
-    <div class="nav-inner">
-        <a href="/" class="nav-brand">PizzBurg</a>
+<nav class="modern-nav">
+    <div class="nav-container">
+        <a href="/" class="brand">PizzBurg</a>
         <ul class="nav-links">
             <li><a href="{{ url_for('list_expenses') }}">Расходы</a></li>
             <li><a href="{{ url_for('list_supplies') }}">Поставки</a></li>
