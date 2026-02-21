@@ -8,28 +8,30 @@
 
 ## ЭТАП 1: Безопасность (критично)
 
-### 1.1 Убрать захардкоженный TELEGRAM_USER_ID
+### 1.1 ~~Убрать захардкоженный TELEGRAM_USER_ID~~ ГОТОВО
 
-**Проблема:** `TELEGRAM_USER_ID = 167084307` используется 53 раза в web_app.py. Все запросы к БД привязаны к этому ID вместо ID из сессии авторизованного пользователя.
+~~**Проблема:** `TELEGRAM_USER_ID = 167084307` используется 92 раза в web_app.py.~~
 
-**Что сделать:**
-- [ ] Создать функцию `get_current_user_id()` которая берёт `telegram_user_id` из сессии
-- [ ] Заменить все 53 вхождения `TELEGRAM_USER_ID` на вызов этой функции
-- [ ] Удалить константу `TELEGRAM_USER_ID = 167084307` (строка 50)
-- [ ] Убедиться что при отсутствии сессии возвращается ошибка 401, а не fallback
+**Что сделано:**
+- [x] Удалена константа `TELEGRAM_USER_ID = 167084307`
+- [x] Все 92 вхождения заменены на `g.user_id` (из сессии авторизованного пользователя)
+- [x] `check_auth()` теперь ставит `g.user_id` для ВСЕХ авторизованных запросов
+- [x] `validate_api_request()` — убраны fallback-и на захардкоженный ID
+- [x] `get_user_id_from_init_data()` — убран fallback, использует сессию
+- [x] Фоновый sync — получает user_id из БД через `get_all_user_ids_with_accounts()`
+- [x] Добавлен метод `get_all_user_ids_with_accounts()` в database.py
 
-**Файлы:** `web_app.py`
+**Файлы изменены:** `web_app.py`, `database.py`
 
-### 1.2 Убрать обход аутентификации (legacy mode)
+### 1.2 ~~Убрать обход аутентификации (legacy mode)~~ ГОТОВО
 
-**Проблема:** Строки 157-164 — если в таблице `web_users` нет записей, аутентификация полностью пропускается. При сбросе БД или свежем деплое сайт открыт всем.
+~~**Проблема:** Если в таблице `web_users` нет записей, аутентификация полностью пропускалась.~~
 
-**Что сделать:**
-- [ ] Убрать блок `if not all_users: return None`
-- [ ] Если web_users пусто — редиректить на страницу "Настройте пользователей через /staff в Telegram"
-- [ ] Или: создавать дефолтного owner при первом запуске
+**Что сделано:**
+- [x] Убран весь блок legacy mode (проверка `list_web_users` + `return None`)
+- [x] Теперь без сессии — всегда redirect на `/login` (для web) или 401 (для API)
 
-**Файлы:** `web_app.py` (строки 157-164)
+**Файлы изменены:** `web_app.py`
 
 ### 1.3 Добавить проверку владельца при удалении/обновлении
 
@@ -63,67 +65,41 @@
 
 ---
 
-## ЭТАП 2: Удаление мёртвого кода
+## ~~ЭТАП 2: Удаление мёртвого кода~~ ГОТОВО
 
-### 2.1 Удалить неиспользуемые файлы
+### 2.1-2.5 ~~Удаление файлов и хендлеров~~ ГОТОВО
 
-| Файл | Строк | Статус | Примечание |
-|------|-------|--------|-----------|
-| `invoice_processor.py` | 384 | Нигде не импортируется | Удалить |
-| `invoice_ocr_gpt4_only.py` | 197 | Нигде не импортируется | Удалить |
-| `advanced_supply_parser.py` | 325 | Нигде не импортируется | Удалить |
+**Удалённые файлы (8 шт):**
+- [x] `invoice_processor.py` (384 строки)
+- [x] `invoice_ocr_gpt4_only.py` (197 строк)
+- [x] `advanced_supply_parser.py` (325 строк)
+- [x] `invoice_ocr.py` (302 строки)
+- [x] `receipt_handler.py` (223 строки)
+- [x] `receipt_ocr.py` (170 строк)
+- [x] `stt_service.py` (54 строки)
 
-- [ ] Удалить `invoice_processor.py`
-- [ ] Удалить `invoice_ocr_gpt4_only.py`
-- [ ] Удалить `advanced_supply_parser.py`
+**Удалённые хендлеры в bot.py:**
+- [x] `handle_voice` — голосовой ввод (Whisper)
+- [x] `handle_document` — Excel/Kaspi
+- [x] `handle_supply_photo` — OCR фото накладных
+- [x] `handle_delete_order_callback` — удаление заказа по чеку
+- [x] Callback обработчики `delete_order:`, `cancel_order_delete`, `delete_receipt_mode`, `cancel_receipt_delete`
+- [x] Кнопка "Удалить чек" из меню
+- [x] Регистрация voice и document handler-ов
+- [x] `handle_photo` упрощён — только expense_input фото
 
-### 2.2 Удалить функционал OCR накладных (фото → поставка)
+**Удалённые скрипты (19 шт):**
+- [x] `migrate_aliases_to_db.py`, `import_aliases_to_railway.py`, `add_pizzburg_cafe.py`
+- [x] `fix_poster_urls.py`, `get_pizzburg_cafe_ids.py`, `check_aliases.py`
+- [x] `check_suppliers.py`, `show_all_products.py`, `fetch_types.py`
+- [x] `get_sales_direct.py`, `add_partner.py`, `add_account_command.py`
+- [x] `railway_aliases.py`, `add_user_aliases.py`, `check_doner_sales_nov20.py`
+- [x] `check_subscriptions.py`, `invoice_manual_selection.py`, `poster_links.py`
+- [x] `test_migration.py`
 
-**Контекст:** Пользователь подтвердил что OCR накладных не нужен — ручной ввод через веб-интерфейс быстрее и точнее.
-
-**Файлы для удаления:**
-- [ ] `invoice_ocr.py` (302 строки) — GPT-4 Vision OCR, импортируется из `handle_photo` в bot.py
-- [ ] Убрать `handle_photo` обработчик в `bot.py` (или убрать OCR-часть, оставив другое)
-
-### 2.3 Удалить функционал чеков (receipt)
-
-- [ ] `receipt_handler.py` (223 строки) — импортируется из bot.py
-- [ ] `receipt_ocr.py` (170 строк) — зависимость receipt_handler
-- [ ] Убрать импорты и вызовы в `bot.py` (строки 1668, 4847)
-
-### 2.4 Удалить голосовой ввод (STT)
-
-- [ ] `stt_service.py` (54 строки) — Whisper API
-- [ ] Убрать `handle_voice` обработчик и импорт `from stt_service import get_stt_service` в `bot.py` (строка 25)
-
-### 2.5 Удалить обработчик Excel/Kaspi
-
-- [ ] Убрать `handle_document` обработчик в `bot.py` (строка 1836+) — Excel файлы Kaspi больше не актуальны
-- [ ] Убрать регистрацию хендлера (строка 6758)
-
-### 2.6 Удалить одноразовые утилитные скрипты
-
-- [ ] `migrate_aliases_to_db.py` — миграция завершена
-- [ ] `import_aliases_to_railway.py` — одноразовый
-- [ ] `add_pizzburg_cafe.py` — аккаунт уже добавлен
-- [ ] `fix_poster_urls.py` — баг исправлен
-- [ ] `get_pizzburg_cafe_ids.py` — отладочный
-- [ ] `check_aliases.py` — диагностика
-- [ ] `check_suppliers.py` — диагностика
-- [ ] `show_all_products.py` — разовое исследование
-- [ ] `fetch_types.py` — разовое исследование
-- [ ] `get_sales_direct.py` — тест API
-- [ ] `add_partner.py` — одноразовый
-- [ ] `add_account_command.py` — одноразовый
-
-### 2.7 Удалить устаревшую документацию
-
-- [ ] `ETAP1_COMPLETE.md` — исторический артефакт
-- [ ] `PR_DESCRIPTION.md` — разовый PR
-- [ ] `MANUAL_CHECK.md` — устарел
-- [ ] `RAILWAY_GRPC_FIX.md` — проблема решена
-- [ ] `MULTI_ACCOUNT_PLAN.md` — реализовано
-- [ ] `SALARY_FLOW_IMPLEMENTATION.md` — реализовано
+**Удалённая документация (6 шт):**
+- [x] `ETAP1_COMPLETE.md`, `PR_DESCRIPTION.md`, `MANUAL_CHECK.md`
+- [x] `RAILWAY_GRPC_FIX.md`, `MULTI_ACCOUNT_PLAN.md`, `SALARY_FLOW_IMPLEMENTATION.md`
 
 ### 2.8 Удалить mock данные из API
 
@@ -134,32 +110,22 @@
 
 ---
 
-## ЭТАП 3: Утечки соединений БД
+## ~~ЭТАП 3: Утечки соединений БД~~ ГОТОВО
 
-### 3.1 Добавить try-finally для закрытия соединений
+### 3.1 ~~Добавить автоматическое закрытие соединений~~ ГОТОВО
 
-**Проблема:** В database.py ~50+ методов. При ошибке соединение не закрывается. В продакшене на Railway это исчерпает пул PostgreSQL.
+~~**Проблема:** 84 из 85 методов database.py имели утечки соединений при ошибках.~~
 
-**Что сделать:**
-- [ ] Создать context manager для соединений:
-  ```python
-  @contextmanager
-  def _get_cursor(self):
-      conn = self._get_connection()
-      try:
-          cursor = conn.cursor()
-          yield cursor
-          conn.commit()
-      except:
-          conn.rollback()
-          raise
-      finally:
-          conn.close()
-  ```
-- [ ] Рефакторить все методы database.py на использование context manager
-- [ ] Или хотя бы обернуть критичные методы в try-finally
+**Решение:** `_ManagedConnection` — обёртка над соединением, которая:
+- [x] Безопасный повторный close() (без ошибки при двойном вызове)
+- [x] `__del__` ловит утечки при garbage collection (CPython — немедленно)
+- [x] Поддержка context manager (`with` statement)
+- [x] Прозрачный passthrough: cursor(), commit(), rollback(), row_factory
 
-**Файлы:** `database.py`
+**Как работает:** `_get_connection()` теперь возвращает `_ManagedConnection(conn)`.
+Все 85 методов автоматически защищены — НОЛЬ изменений в существующем коде.
+
+**Файлы изменены:** `database.py`
 
 ---
 

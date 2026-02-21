@@ -1,6 +1,7 @@
 """Database management for multi-tenant bot - supports both SQLite and PostgreSQL"""
 import os
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime, timedelta
@@ -24,6 +25,51 @@ else:
     logger.info(f"Using SQLite database at {DATABASE_PATH}")
 
 
+class _ManagedConnection:
+    """Connection wrapper that ensures cleanup even if conn.close() is forgotten.
+
+    - Safe double-close (no error if close() called twice)
+    - __del__ catches leaked connections when garbage collected
+    - In CPython, reference counting ensures immediate cleanup when function returns
+    - Supports context manager protocol (with statement)
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._closed = False
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        if not self._closed:
+            self._closed = True
+            self._conn.close()
+
+    def __del__(self):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    @property
+    def row_factory(self):
+        return self._conn.row_factory
+
+    @row_factory.setter
+    def row_factory(self, value):
+        self._conn.row_factory = value
+
+
 class UserDatabase:
     """Database for managing user accounts"""
 
@@ -37,14 +83,14 @@ class UserDatabase:
         self._init_db()
 
     def _get_connection(self):
-        """Get database connection based on type"""
+        """Get managed database connection. Auto-closes when garbage collected."""
         if DB_TYPE == "sqlite":
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
-            return conn
+            return _ManagedConnection(conn)
         else:
             # PostgreSQL
-            return psycopg2.connect(self.db_url)
+            return _ManagedConnection(psycopg2.connect(self.db_url))
 
     def _init_db(self):
         """Initialize database with tables"""
@@ -1441,6 +1487,19 @@ class UserDatabase:
         return True
 
     # === Poster Accounts Methods ===
+
+    def get_all_user_ids_with_accounts(self) -> list:
+        """Get all distinct telegram_user_ids that have poster accounts"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT telegram_user_id FROM poster_accounts")
+            rows = cursor.fetchall()
+            conn.close()
+            return [row[0] for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to get user IDs with accounts: {e}")
+            return []
 
     def get_accounts(self, telegram_user_id: int) -> list:
         """Get all Poster accounts for a user"""

@@ -46,9 +46,6 @@ app.secret_key = SECRET_KEY
 from datetime import timedelta
 app.permanent_session_lifetime = timedelta(days=30)
 
-# Hardcoded user ID for demo (can be extended to multi-user with login)
-TELEGRAM_USER_ID = 167084307
-
 # Telegram Bot Token for WebApp validation
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
@@ -154,15 +151,6 @@ def check_auth():
     # Check session
     web_user_id = session.get('web_user_id')
     if not web_user_id:
-        # Not logged in — check if any web_users exist at all
-        # If no accounts created yet, allow access (backward-compatible)
-        db = get_database()
-        all_users = db.list_web_users(TELEGRAM_USER_ID)
-        if not all_users:
-            # No web_users exist — skip auth entirely (legacy mode)
-            logger.warning("Auth bypassed: no web_users configured (legacy mode). Create users via /staff command.")
-            return None
-
         if path.startswith('/api/'):
             return jsonify({'error': 'Unauthorized'}), 401
         return redirect('/login')
@@ -176,9 +164,8 @@ def check_auth():
             return jsonify({'error': 'Forbidden'}), 403
         return redirect(get_home_for_role(role))
 
-    # Set g.user_id from session for owner pages
-    if role == 'owner' and path.startswith('/api/') and not path.startswith('/api/cafe/') and not path.startswith('/api/cashier/'):
-        g.user_id = session.get('telegram_user_id', TELEGRAM_USER_ID)
+    # Set g.user_id from session for ALL authenticated requests
+    g.user_id = session.get('telegram_user_id')
 
 
 def get_date_in_kz_tz(dt_value, kz_tz) -> str:
@@ -282,7 +269,7 @@ def list_aliases():
     source_filter = request.args.get('source', 'all')
 
     # Get aliases from DB
-    aliases = db.get_ingredient_aliases(TELEGRAM_USER_ID)
+    aliases = db.get_ingredient_aliases(g.user_id)
 
     # Apply filters
     if search:
@@ -316,7 +303,7 @@ def new_alias():
         # Add to DB
         db = get_database()
         success = db.add_ingredient_alias(
-            telegram_user_id=TELEGRAM_USER_ID,
+            telegram_user_id=g.user_id,
             alias_text=alias_text,
             poster_item_id=poster_item_id,
             poster_item_name=poster_item_name,
@@ -356,7 +343,7 @@ def edit_alias(alias_id):
         # Update in DB
         success = db.update_alias(
             alias_id=alias_id,
-            telegram_user_id=TELEGRAM_USER_ID,
+            telegram_user_id=g.user_id,
             alias_text=alias_text,
             poster_item_id=poster_item_id,
             poster_item_name=poster_item_name,
@@ -372,7 +359,7 @@ def edit_alias(alias_id):
             return redirect(url_for('edit_alias', alias_id=alias_id))
 
     # GET - show form with data
-    alias = db.get_alias_by_id(alias_id, TELEGRAM_USER_ID)
+    alias = db.get_alias_by_id(alias_id, g.user_id)
 
     if not alias:
         flash('❌ Alias не найден', 'danger')
@@ -387,7 +374,7 @@ def delete_alias(alias_id):
     """Delete alias"""
     db = get_database()
 
-    success = db.delete_alias_by_id(alias_id, TELEGRAM_USER_ID)
+    success = db.delete_alias_by_id(alias_id, g.user_id)
 
     if success:
         flash('🗑️ Alias удалён!', 'info')
@@ -438,9 +425,12 @@ def get_user_id_from_init_data(init_data: str) -> int:
     try:
         parsed_data = dict(parse_qsl(init_data))
         user_data = json.loads(parsed_data.get('user', '{}'))
-        return user_data.get('id', TELEGRAM_USER_ID)
+        user_id = user_data.get('id')
+        if user_id:
+            return user_id
+        return session.get('telegram_user_id')
     except:
-        return TELEGRAM_USER_ID
+        return session.get('telegram_user_id')
 
 
 @app.before_request
@@ -453,7 +443,11 @@ def validate_api_request():
             # Mini App call — validate Telegram signature
             if not validate_telegram_web_app_data(init_data, TELEGRAM_TOKEN):
                 if not TELEGRAM_TOKEN:
-                    g.user_id = TELEGRAM_USER_ID
+                    # No token configured — use session if available
+                    if session.get('telegram_user_id'):
+                        g.user_id = session['telegram_user_id']
+                    else:
+                        return jsonify({'error': 'Unauthorized'}), 401
                 else:
                     return jsonify({'error': 'Unauthorized'}), 401
             else:
@@ -461,9 +455,6 @@ def validate_api_request():
         elif session.get('telegram_user_id'):
             # Web session — use user_id from session
             g.user_id = session['telegram_user_id']
-        else:
-            # Fallback for development
-            g.user_id = TELEGRAM_USER_ID
 
 
 @app.route('/api/dashboard')
@@ -1195,7 +1186,7 @@ def list_expenses():
 
     db = get_database()
     # Load ALL drafts (not just pending) to show completion status
-    drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+    drafts = db.get_expense_drafts(g.user_id, status="all")
 
     # Get date from query param or use today (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
@@ -1212,7 +1203,7 @@ def list_expenses():
     drafts = [d for d in drafts if d.get('created_at') and str(d['created_at'])[:10] == selected_date]
 
     # Load shift reconciliation data for selected date
-    reconciliation_rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, selected_date)
+    reconciliation_rows = db.get_shift_reconciliation(g.user_id, selected_date)
     # Initialize with default empty structures for all expected sources
     # For kaspi/halyk: use opening_balance to store fact_balance (user-entered actual balance)
     reconciliation = {
@@ -1237,7 +1228,7 @@ def list_expenses():
 
     try:
         from poster_client import PosterClient
-        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        poster_accounts = db.get_accounts(g.user_id)
 
         if poster_accounts:
             loop = asyncio.new_event_loop()
@@ -1265,7 +1256,7 @@ def list_expenses():
 
                 for acc in poster_accounts:
                     client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
                         poster_user_id=acc['poster_user_id'],
                         poster_base_url=acc['poster_base_url']
@@ -1361,7 +1352,7 @@ def toggle_expense_type(draft_id):
     new_type = data.get('expense_type', 'transaction')
 
     # Get current expense draft to check linked supply
-    all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+    all_drafts = db.get_expense_drafts(g.user_id, status="all")
     expense_draft = next((d for d in all_drafts if d['id'] == draft_id), None)
 
     if not expense_draft:
@@ -1373,7 +1364,7 @@ def toggle_expense_type(draft_id):
         # Create supply draft linked to this expense
         from datetime import datetime
         supply_draft_id = db.create_empty_supply_draft(
-            telegram_user_id=TELEGRAM_USER_ID,
+            telegram_user_id=g.user_id,
             supplier_name=expense_draft.get('description', ''),
             invoice_date=datetime.now().strftime("%Y-%m-%d"),
             total_sum=expense_draft.get('amount', 0),
@@ -1383,7 +1374,7 @@ def toggle_expense_type(draft_id):
         )
     else:
         # Switching to transaction - find and delete linked supply draft
-        supply_drafts = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+        supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
         linked_supply = next((s for s in supply_drafts if s.get('linked_expense_draft_id') == draft_id), None)
         if linked_supply:
             db.delete_supply_draft(linked_supply['id'])
@@ -1443,7 +1434,7 @@ def search_categories():
     try:
         from poster_client import PosterClient
         db = get_database()
-        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        poster_accounts = db.get_accounts(g.user_id)
 
         if not poster_accounts:
             return jsonify([])
@@ -1454,7 +1445,7 @@ def search_categories():
 
         async def get_categories():
             client = PosterClient(
-                telegram_user_id=TELEGRAM_USER_ID,
+                telegram_user_id=g.user_id,
                 poster_token=account['poster_token'],
                 poster_user_id=account['poster_user_id'],
                 poster_base_url=account['poster_base_url']
@@ -1511,7 +1502,7 @@ def create_expense():
     data = request.get_json() or {}
 
     # Get default poster_account_id (primary account)
-    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    poster_accounts = db.get_accounts(g.user_id)
     default_poster_account_id = None
     if poster_accounts:
         primary = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
@@ -1526,7 +1517,7 @@ def create_expense():
     poster_account_id = data.get('poster_account_id', default_poster_account_id)
 
     draft_id = db.create_expense_draft(
-        telegram_user_id=TELEGRAM_USER_ID,
+        telegram_user_id=g.user_id,
         amount=amount,
         description=description,
         expense_type=expense_type,
@@ -1562,7 +1553,7 @@ def sync_expenses_from_poster():
     from poster_client import PosterClient
 
     db = get_database()
-    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    poster_accounts = db.get_accounts(g.user_id)
 
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
@@ -1587,12 +1578,12 @@ def sync_expenses_from_poster():
         synced_account_ids = set()
 
         # Load all existing drafts once
-        existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+        existing_drafts = db.get_expense_drafts(g.user_id, status="all")
 
         for account in poster_accounts:
             try:
                 client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
+                    telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
                     poster_user_id=account['poster_user_id'],
                     poster_base_url=account['poster_base_url']
@@ -1748,7 +1739,7 @@ def sync_expenses_from_poster():
 
                         # Create draft - mark as 'completed' since it's already in Poster
                         draft_id = db.create_expense_draft(
-                            telegram_user_id=TELEGRAM_USER_ID,
+                            telegram_user_id=g.user_id,
                             amount=amount,
                             description=description,
                             expense_type='transaction',
@@ -1857,7 +1848,7 @@ def api_poster_transactions():
     from datetime import datetime, timedelta
 
     db = get_database()
-    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    poster_accounts = db.get_accounts(g.user_id)
 
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'No Poster accounts'})
@@ -1877,7 +1868,7 @@ def api_poster_transactions():
             try:
                 from poster_client import PosterClient
                 client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
+                    telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
                     poster_user_id=account['poster_user_id'],
                     poster_base_url=account['poster_base_url']
@@ -1957,7 +1948,7 @@ def api_get_expenses():
 
     db = get_database()
     # Load ALL drafts (not just pending) to show completion status
-    drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+    drafts = db.get_expense_drafts(g.user_id, status="all")
 
     # Filter by date - use ?date=YYYY-MM-DD param, default to today (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
@@ -1974,7 +1965,7 @@ def api_get_expenses():
 
     try:
         from poster_client import PosterClient
-        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        poster_accounts = db.get_accounts(g.user_id)
 
         if poster_accounts:
             loop = asyncio.new_event_loop()
@@ -2001,7 +1992,7 @@ def api_get_expenses():
 
                 for acc in poster_accounts:
                     client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
                         poster_user_id=acc['poster_user_id'],
                         poster_base_url=acc['poster_base_url']
@@ -2116,7 +2107,7 @@ def api_create_expense():
     data = request.get_json() or {}
 
     draft_id = db.create_expense_draft(
-        telegram_user_id=TELEGRAM_USER_ID,
+        telegram_user_id=g.user_id,
         amount=data.get('amount', 0),
         description=data.get('description', ''),
         expense_type=data.get('expense_type', 'transaction'),
@@ -2137,7 +2128,7 @@ def api_toggle_expense_type(draft_id):
     new_type = data.get('expense_type', 'transaction')
 
     # Get current expense draft
-    all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+    all_drafts = db.get_expense_drafts(g.user_id, status="all")
     expense_draft = next((d for d in all_drafts if d['id'] == draft_id), None)
 
     if not expense_draft:
@@ -2149,7 +2140,7 @@ def api_toggle_expense_type(draft_id):
         # Create supply draft linked to this expense
         from datetime import datetime
         supply_draft_id = db.create_empty_supply_draft(
-            telegram_user_id=TELEGRAM_USER_ID,
+            telegram_user_id=g.user_id,
             supplier_name=expense_draft.get('description', ''),
             invoice_date=datetime.now().strftime("%Y-%m-%d"),
             total_sum=expense_draft.get('amount', 0),
@@ -2159,7 +2150,7 @@ def api_toggle_expense_type(draft_id):
         )
     else:
         # Switching to transaction - find and delete linked supply draft
-        supply_drafts = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+        supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
         linked_supply = next((s for s in supply_drafts if s.get('linked_expense_draft_id') == draft_id), None)
         if linked_supply:
             db.delete_supply_draft(linked_supply['id'])
@@ -2194,7 +2185,7 @@ def api_get_shift_reconciliation():
     if not date:
         date = _kz_now().strftime("%Y-%m-%d")
 
-    rows = db.get_shift_reconciliation(TELEGRAM_USER_ID, date)
+    rows = db.get_shift_reconciliation(g.user_id, date)
 
     # Convert to dict keyed by source for easy frontend access
     # For all sources: opening_balance column stores fact_balance
@@ -2237,7 +2228,7 @@ def api_save_shift_reconciliation():
         opening_balance = data.get('fact_balance')
 
     success = db.save_shift_reconciliation(
-        telegram_user_id=TELEGRAM_USER_ID,
+        telegram_user_id=g.user_id,
         date=date,
         source=source,
         opening_balance=opening_balance,
@@ -2255,7 +2246,7 @@ def api_sync_expenses_from_poster():
     from datetime import datetime, timedelta
 
     db = get_database()
-    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    poster_accounts = db.get_accounts(g.user_id)
 
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'No Poster accounts', 'synced': 0, 'skipped': 0, 'errors': []})
@@ -2282,13 +2273,13 @@ def api_sync_expenses_from_poster():
         synced_account_ids = set()
 
         # Load all existing drafts once (not per-transaction)
-        existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+        existing_drafts = db.get_expense_drafts(g.user_id, status="all")
 
         for account in poster_accounts:
             try:
                 from poster_client import PosterClient
                 client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
+                    telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
                     poster_user_id=account['poster_user_id'],
                     poster_base_url=account['poster_base_url']
@@ -2434,7 +2425,7 @@ def api_sync_expenses_from_poster():
 
                         # Create expense draft
                         db.create_expense_draft(
-                            telegram_user_id=TELEGRAM_USER_ID,
+                            telegram_user_id=g.user_id,
                             amount=amount,
                             description=description,
                             expense_type='transaction',
@@ -2535,7 +2526,7 @@ def api_process_expenses():
     if not draft_ids:
         return jsonify({'success': False, 'error': 'No drafts selected'})
 
-    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    poster_accounts = db.get_accounts(g.user_id)
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'No Poster accounts'})
 
@@ -2548,7 +2539,7 @@ def api_process_expenses():
     async def process_drafts():
         nonlocal created, errors
 
-        all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+        all_drafts = db.get_expense_drafts(g.user_id, status="all")
         drafts_to_process = [d for d in all_drafts if d['id'] in draft_ids]
 
         for draft in drafts_to_process:
@@ -2559,7 +2550,7 @@ def api_process_expenses():
 
                 from poster_client import PosterClient
                 client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
+                    telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
                     poster_user_id=account['poster_user_id'],
                     poster_base_url=account['poster_base_url']
@@ -2644,7 +2635,7 @@ def api_get_supply_drafts():
     from datetime import datetime, timedelta
 
     db = get_database()
-    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+    drafts_raw = db.get_supply_drafts(g.user_id, status="pending")
 
     # Filter to only today's drafts (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
@@ -2684,12 +2675,12 @@ def api_get_supply_drafts():
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking
-    pending_supplies = db.get_pending_supply_items(TELEGRAM_USER_ID)
+    pending_supplies = db.get_pending_supply_items(g.user_id)
 
     # Get poster accounts
     poster_accounts_list = []
     try:
-        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        accounts = db.get_accounts(g.user_id)
         if accounts:
             for acc in accounts:
                 poster_accounts_list.append({
@@ -2715,7 +2706,7 @@ def api_create_supply_draft():
     data = request.get_json() or {}
 
     draft_id = db.create_empty_supply_draft(
-        telegram_user_id=TELEGRAM_USER_ID,
+        telegram_user_id=g.user_id,
         supplier_name=data.get('supplier_name', ''),
         invoice_date=data.get('invoice_date') or datetime.now().strftime("%Y-%m-%d"),
         total_sum=0,
@@ -2836,7 +2827,7 @@ def api_create_supply_in_poster(draft_id):
     if not draft.get('items'):
         return jsonify({'success': False, 'error': 'No items in draft'})
 
-    poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+    poster_accounts = db.get_accounts(g.user_id)
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'No Poster accounts'})
 
@@ -2854,7 +2845,7 @@ def api_create_supply_in_poster(draft_id):
     try:
         from poster_client import PosterClient
         client = PosterClient(
-            telegram_user_id=TELEGRAM_USER_ID,
+            telegram_user_id=g.user_id,
             poster_token=account['poster_token'],
             poster_user_id=account['poster_user_id'],
             poster_base_url=account['poster_base_url']
@@ -2910,7 +2901,7 @@ def process_drafts():
     db = get_database()
 
     # Get drafts
-    all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
+    all_drafts = db.get_expense_drafts(g.user_id, status="pending")
     selected_drafts = [d for d in all_drafts if d['id'] in draft_ids]
 
     # Filter only transactions (not supplies)
@@ -2923,7 +2914,7 @@ def process_drafts():
     # Create transactions in Poster
     try:
         from poster_client import PosterClient
-        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        poster_accounts = db.get_accounts(g.user_id)
 
         if not poster_accounts:
             flash('Нет подключенных аккаунтов Poster', 'error')
@@ -2955,7 +2946,7 @@ def process_drafts():
                 account = accounts_by_id.get(poster_account_id, primary_account)
 
                 client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
+                    telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
                     poster_user_id=account['poster_user_id'],
                     poster_base_url=account['poster_base_url']
@@ -3149,7 +3140,7 @@ def list_supplies():
     from datetime import datetime, timedelta
 
     db = get_database()
-    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+    drafts_raw = db.get_supply_drafts(g.user_id, status="pending")
 
     # Filter to only today's drafts (Kazakhstan time UTC+5)
     kz_tz = KZ_TZ
@@ -3186,14 +3177,14 @@ def list_supplies():
             drafts.append(draft)
 
     # Get pending expense items of type 'supply' for linking
-    pending_supplies = db.get_pending_supply_items(TELEGRAM_USER_ID)
+    pending_supplies = db.get_pending_supply_items(g.user_id)
 
     # Load ingredients from ALL Poster accounts for search
     items = []
     poster_accounts_list = []
 
     try:
-        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        accounts = db.get_accounts(g.user_id)
         if accounts:
             from poster_client import PosterClient
 
@@ -3209,7 +3200,7 @@ def list_supplies():
             for acc in accounts:
                 try:
                     poster_client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
                         poster_user_id=acc['poster_user_id'],
                         poster_base_url=acc['poster_base_url']
@@ -3302,7 +3293,7 @@ def list_supplies():
 def view_all_supplies():
     """View all supply drafts expanded on one page"""
     db = get_database()
-    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+    drafts_raw = db.get_supply_drafts(g.user_id, status="pending")
 
     # Load items for each draft
     drafts = []
@@ -3323,14 +3314,14 @@ def view_all_supplies():
     # Load ingredients from ALL Poster accounts
     items = []
     try:
-        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        accounts = db.get_accounts(g.user_id)
         if accounts:
             from poster_client import PosterClient
 
             for acc in accounts:
                 try:
                     poster_client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
                         poster_user_id=acc['poster_user_id'],
                         poster_base_url=acc['poster_base_url']
@@ -3382,7 +3373,7 @@ def create_supply_draft():
     from datetime import datetime
 
     draft_id = db.create_empty_supply_draft(
-        telegram_user_id=TELEGRAM_USER_ID,
+        telegram_user_id=g.user_id,
         supplier_name=data.get('supplier_name', ''),
         invoice_date=data.get('invoice_date') or datetime.now().strftime("%Y-%m-%d"),
         total_sum=data.get('total_sum', 0),
@@ -3478,7 +3469,7 @@ def delete_supply_item(item_id):
 def process_all_supplies():
     """Process all supply drafts - create supplies in Poster"""
     db = get_database()
-    drafts_raw = db.get_supply_drafts(TELEGRAM_USER_ID, status="pending")
+    drafts_raw = db.get_supply_drafts(g.user_id, status="pending")
 
     results = []
     errors = []
@@ -3498,7 +3489,7 @@ def process_all_supplies():
         try:
             from poster_client import PosterClient
 
-            accounts = db.get_accounts(TELEGRAM_USER_ID)
+            accounts = db.get_accounts(g.user_id)
             if not accounts:
                 errors.append(f"#{draft['id']}: нет аккаунтов Poster")
                 continue
@@ -3526,7 +3517,7 @@ def process_all_supplies():
 
                 async def create_supply_in_poster():
                     client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=g.user_id,
                         poster_token=account['poster_token'],
                         poster_user_id=account['poster_user_id'],
                         poster_base_url=account['poster_base_url']
@@ -3645,14 +3636,14 @@ def view_supply(draft_id):
     # Load items from ALL Poster accounts (not just CSV)
     items = []
     try:
-        accounts = db.get_accounts(TELEGRAM_USER_ID)
+        accounts = db.get_accounts(g.user_id)
         if accounts:
             from poster_client import PosterClient
 
             for acc in accounts:
                 try:
                     poster_client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
                         poster_user_id=acc['poster_user_id'],
                         poster_base_url=acc['poster_base_url']
@@ -3763,7 +3754,7 @@ def process_supply(draft_id):
         from poster_client import PosterClient
         from collections import defaultdict
 
-        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+        poster_accounts = db.get_accounts(g.user_id)
         if not poster_accounts:
             return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
 
@@ -3793,7 +3784,7 @@ def process_supply(draft_id):
                            f"token={token_prefix}...)")
 
                 client = PosterClient(
-                    telegram_user_id=TELEGRAM_USER_ID,
+                    telegram_user_id=g.user_id,
                     poster_token=account['poster_token'],
                     poster_user_id=account['poster_user_id'],
                     poster_base_url=account['poster_base_url']
@@ -4068,7 +4059,7 @@ def load_suppliers_from_csv():
 def list_supplier_aliases():
     """Show supplier aliases"""
     db = get_database()
-    aliases = db.get_supplier_aliases(TELEGRAM_USER_ID)
+    aliases = db.get_supplier_aliases(g.user_id)
     suppliers = load_suppliers_from_csv()
     return render_template('supplier_aliases.html', aliases=aliases, suppliers=suppliers)
 
@@ -4091,7 +4082,7 @@ def add_supplier_alias():
         return redirect(url_for('list_supplier_aliases'))
 
     success = db.add_supplier_alias(
-        telegram_user_id=TELEGRAM_USER_ID,
+        telegram_user_id=g.user_id,
         alias_text=alias_text,
         poster_supplier_id=int(poster_supplier_id),
         poster_supplier_name=poster_supplier_name,
@@ -4113,7 +4104,7 @@ def add_supplier_alias():
 def delete_supplier_alias_route(alias_id):
     """Delete supplier alias"""
     db = get_database()
-    success = db.delete_supplier_alias(TELEGRAM_USER_ID, alias_id)
+    success = db.delete_supplier_alias(g.user_id, alias_id)
     return jsonify({'success': success})
 
 
@@ -4581,7 +4572,7 @@ def api_expense_report():
 
     try:
         # Get all pending expense drafts for today
-        all_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="pending")
+        all_drafts = db.get_expense_drafts(g.user_id, status="pending")
 
         # Filter to today's drafts
         drafts = []
@@ -6002,11 +5993,28 @@ def _background_expense_sync():
         from poster_client import PosterClient
 
         db = get_database()
-        poster_accounts = db.get_accounts(TELEGRAM_USER_ID)
+
+        # Get all user IDs that have poster accounts
+        user_ids = db.get_all_user_ids_with_accounts()
+        if not user_ids:
+            return
+
+        for sync_user_id in user_ids:
+            _sync_expenses_for_user(db, sync_user_id)
+
+    except Exception as e:
+        logger.error(f"[BG SYNC] Expense sync error: {e}")
+
+
+def _sync_expenses_for_user(db, sync_user_id):
+    """Sync expenses from Poster for a specific user"""
+    try:
+        from poster_client import PosterClient
+
+        poster_accounts = db.get_accounts(sync_user_id)
         if not poster_accounts:
             return
 
-        kz_tz = KZ_TZ
         today = _kz_now()
         date_str = today.strftime("%Y%m%d")
 
@@ -6021,12 +6029,12 @@ def _background_expense_sync():
             nonlocal synced, updated, deleted
             seen_poster_ids = set()
             synced_account_ids = set()
-            existing_drafts = db.get_expense_drafts(TELEGRAM_USER_ID, status="all")
+            existing_drafts = db.get_expense_drafts(sync_user_id, status="all")
 
             for account in poster_accounts:
                 try:
                     client = PosterClient(
-                        telegram_user_id=TELEGRAM_USER_ID,
+                        telegram_user_id=sync_user_id,
                         poster_token=account['poster_token'],
                         poster_user_id=account['poster_user_id'],
                         poster_base_url=account['poster_base_url']
@@ -6123,7 +6131,7 @@ def _background_expense_sync():
                                 source = 'halyk'
 
                             db.create_expense_draft(
-                                telegram_user_id=TELEGRAM_USER_ID,
+                                telegram_user_id=sync_user_id,
                                 amount=amount,
                                 description=description,
                                 expense_type='transaction',
@@ -6180,10 +6188,10 @@ def _background_expense_sync():
             loop.close()
 
         if synced > 0 or updated > 0 or deleted > 0:
-            logger.info(f"[BG SYNC] Expenses: +{synced} new, ~{updated} updated, -{deleted} deleted")
+            logger.info(f"[BG SYNC] User {sync_user_id}: +{synced} new, ~{updated} updated, -{deleted} deleted")
 
     except Exception as e:
-        logger.error(f"[BG SYNC] Expense sync error: {e}")
+        logger.error(f"[BG SYNC] Expense sync error for user {sync_user_id}: {e}")
 
 
 def start_background_sync():
@@ -6215,7 +6223,7 @@ if __name__ == '__main__':
     print("🚀 Starting Poster Helper Web Interface")
     print("=" * 60)
     print(f"📂 Data directory: {config.DATA_DIR}")
-    print(f"👤 User ID: {TELEGRAM_USER_ID}")
+    print(f"👤 Auth: web-session based (no hardcoded user ID)")
     print(f"🌐 Access at: http://localhost:5000/aliases")
     print("=" * 60)
 
