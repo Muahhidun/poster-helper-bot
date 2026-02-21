@@ -878,20 +878,22 @@ class UserDatabase:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            try:
-                if DB_TYPE == "sqlite":
-                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN salaries_created INTEGER DEFAULT 0")
-                else:
-                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN salaries_created BOOLEAN DEFAULT FALSE")
-                logger.info("✅ Cafe salaries migration: added salaries_created to shift_closings")
-            except Exception:
-                pass  # Column already exists
-
-            try:
-                cursor.execute("ALTER TABLE shift_closings ADD COLUMN salaries_data TEXT DEFAULT NULL")
-                logger.info("✅ Cafe salaries migration: added salaries_data to shift_closings")
-            except Exception:
-                pass  # Column already exists
+            for col_sql in [
+                ("salaries_created", "ALTER TABLE shift_closings ADD COLUMN salaries_created INTEGER DEFAULT 0"
+                 if DB_TYPE == "sqlite" else
+                 "ALTER TABLE shift_closings ADD COLUMN salaries_created BOOLEAN DEFAULT FALSE"),
+                ("salaries_data", "ALTER TABLE shift_closings ADD COLUMN salaries_data TEXT DEFAULT NULL"),
+            ]:
+                try:
+                    if DB_TYPE != "sqlite":
+                        cursor.execute("SAVEPOINT migration_sp")
+                    cursor.execute(col_sql[1])
+                    if DB_TYPE != "sqlite":
+                        cursor.execute("RELEASE SAVEPOINT migration_sp")
+                    logger.info(f"✅ Cafe salaries migration: added {col_sql[0]} to shift_closings")
+                except Exception:
+                    if DB_TYPE != "sqlite":
+                        cursor.execute("ROLLBACK TO SAVEPOINT migration_sp")
 
             conn.commit()
             conn.close()
@@ -933,24 +935,21 @@ class UserDatabase:
                 """)
 
             # 2. Add poster_account_id to shift_closings (nullable, NULL = primary)
-            try:
-                if DB_TYPE == "sqlite":
-                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN poster_account_id INTEGER DEFAULT NULL")
-                else:
-                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN poster_account_id INTEGER DEFAULT NULL")
-                logger.info("✅ Cafe migration: added poster_account_id to shift_closings")
-            except Exception:
-                pass  # Column already exists
-
             # 3. Add kaspi_pizzburg column to shift_closings (for Cafe: deliveries via Pizzburg couriers)
-            try:
-                if DB_TYPE == "sqlite":
-                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN kaspi_pizzburg REAL DEFAULT 0")
-                else:
-                    cursor.execute("ALTER TABLE shift_closings ADD COLUMN kaspi_pizzburg REAL DEFAULT 0")
-                logger.info("✅ Cafe migration: added kaspi_pizzburg to shift_closings")
-            except Exception:
-                pass  # Column already exists
+            for col_name, col_sql in [
+                ("poster_account_id", "ALTER TABLE shift_closings ADD COLUMN poster_account_id INTEGER DEFAULT NULL"),
+                ("kaspi_pizzburg", "ALTER TABLE shift_closings ADD COLUMN kaspi_pizzburg REAL DEFAULT 0"),
+            ]:
+                try:
+                    if DB_TYPE != "sqlite":
+                        cursor.execute("SAVEPOINT migration_sp")
+                    cursor.execute(col_sql)
+                    if DB_TYPE != "sqlite":
+                        cursor.execute("RELEASE SAVEPOINT migration_sp")
+                    logger.info(f"✅ Cafe migration: added {col_name} to shift_closings")
+                except Exception:
+                    if DB_TYPE != "sqlite":
+                        cursor.execute("ROLLBACK TO SAVEPOINT migration_sp")
 
             conn.commit()
             conn.close()
@@ -1043,13 +1042,18 @@ class UserDatabase:
 
             # 3. Add transfers_created to shift_closings
             try:
+                if DB_TYPE != "sqlite":
+                    cursor.execute("SAVEPOINT migration_sp")
                 if DB_TYPE == "sqlite":
                     cursor.execute("ALTER TABLE shift_closings ADD COLUMN transfers_created INTEGER DEFAULT 0")
                 else:
                     cursor.execute("ALTER TABLE shift_closings ADD COLUMN transfers_created BOOLEAN DEFAULT FALSE")
+                if DB_TYPE != "sqlite":
+                    cursor.execute("RELEASE SAVEPOINT migration_sp")
                 logger.info("✅ Cashier migration: added transfers_created to shift_closings")
             except Exception:
-                pass  # Column already exists
+                if DB_TYPE != "sqlite":
+                    cursor.execute("ROLLBACK TO SAVEPOINT migration_sp")
 
             conn.commit()
             conn.close()
