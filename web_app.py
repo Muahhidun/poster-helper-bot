@@ -4203,7 +4203,7 @@ def api_shift_closing_poster_data():
 
                 logger.info(f"[SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
-                      f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
+                      f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}")
 
                 # 2. Get shift_start from Poster getCashShifts API
                 # This is the "Фактический баланс" (actual closing balance) from the previous day's shift
@@ -4222,7 +4222,7 @@ def api_shift_closing_poster_data():
                               f"amount_start={last_shift.get('amount_start')}, "
                               f"amount_end={last_shift.get('amount_end')} (parsed: {amount_end}), "
                               f"date_start={last_shift.get('date_start')}, "
-                              f"date_end={last_shift.get('date_end')}", flush=True)
+                              f"date_end={last_shift.get('date_end')}")
                         if amount_end > 0:
                             poster_prev_shift_left = amount_end
                             logger.debug(f"[SHIFT] ✅ poster_prev_shift_left={amount_end/100:,.0f}₸")
@@ -4796,7 +4796,7 @@ def api_cafe_poster_data():
                 account_name = info.get('account_name', 'Cafe')
                 logger.info(f"[CAFE SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
-                      f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
+                      f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}")
 
                 # 2. Get shift_start from getCashShifts
                 poster_prev_shift_left = None
@@ -4810,7 +4810,7 @@ def api_cafe_poster_data():
                         if amount_end > 0:
                             poster_prev_shift_left = amount_end
                             logger.debug(f"[CAFE SHIFT] getCashShifts prev day ({prev_day}): "
-                                  f"amount_end={amount_end/100:,.0f}₸", flush=True)
+                                  f"amount_end={amount_end/100:,.0f}₸")
                 except Exception as e:
                     logger.debug(f"[CAFE SHIFT] getCashShifts error: {e}")
 
@@ -5421,7 +5421,7 @@ def api_cafe_transfers():
                 'amount': int(round(abs(cashless_diff))),
             })
             logger.info(f"[CAFE TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
-                  f"(diff={cashless_diff:+,.0f})", flush=True)
+                  f"(diff={cashless_diff:+,.0f})")
         elif cashless_diff > 0.5:
             transfers.append({
                 'name': 'Корр. безнала: Оставил → Каспий',
@@ -5430,7 +5430,7 @@ def api_cafe_transfers():
                 'amount': int(round(cashless_diff)),
             })
             logger.info(f"[CAFE TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
-                  f"(diff={cashless_diff:+,.0f})", flush=True)
+                  f"(diff={cashless_diff:+,.0f})")
 
         if not transfers:
             return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
@@ -5570,7 +5570,7 @@ def api_shift_closing_transfers():
                 'amount': int(round(abs(cashless_diff))),
             })
             logger.info(f"[MAIN TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
-                  f"(diff={cashless_diff:+,.0f})", flush=True)
+                  f"(diff={cashless_diff:+,.0f})")
         elif cashless_diff > 0.5:
             transfers.append({
                 'name': 'Корр. безнала: Оставил → Каспий',
@@ -5579,7 +5579,7 @@ def api_shift_closing_transfers():
                 'amount': int(round(cashless_diff)),
             })
             logger.info(f"[MAIN TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
-                  f"(diff={cashless_diff:+,.0f})", flush=True)
+                  f"(diff={cashless_diff:+,.0f})")
 
         if not transfers:
             return jsonify({'success': True, 'created_count': 0, 'message': 'Нет переводов для создания (суммы = 0)'})
@@ -5925,7 +5925,7 @@ def api_cashier_shift_data_save():
 
         logger.info(f"[CASHIER] Shift data saved for {date_str}: wolt={save_data['wolt']}, "
               f"halyk={save_data['halyk']}, cash_bills={save_data['cash_bills']}, "
-              f"cash_coins={save_data['cash_coins']}, expenses={save_data['expenses']}", flush=True)
+              f"cash_coins={save_data['cash_coins']}, expenses={save_data['expenses']}")
 
         return jsonify({'success': True, 'date': date_str})
 
