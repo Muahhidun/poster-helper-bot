@@ -26,6 +26,25 @@ import type {
   ShiftClosingDatesResponse,
   ShiftClosingReportResponse,
   ShiftClosingData,
+  CashierEmployeesLastResponse,
+  CashierSalaryCalculateRequest,
+  CashierSalaryCalculateResponse,
+  CashierSalaryCreateRequest,
+  CashierSalaryCreateResponse,
+  CashierShiftDataSaveRequest,
+  CashierShiftDataStatusResponse,
+  CafeEmployeesLastResponse,
+  CafeSalaryCreateRequest,
+  CafeSalaryCreateResponse,
+  CafeSalaryStatusResponse,
+  CafePosterData,
+  CafeShiftInput,
+  CafeCalculateResponse,
+  CafeShiftData,
+  CafeShiftHistoryResponse,
+  CafeShiftDatesResponse,
+  CafeReportResponse,
+  CafeTransfersResponse,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -290,6 +309,104 @@ class ApiClient {
     return this.request('/api/shift-reconciliation', {
       method: 'POST',
       body: JSON.stringify(data),
+    })
+  }
+
+  // ==========================================
+  // Cashier Shift Closing
+  // ==========================================
+
+  async getCashierEmployeesLast(): Promise<CashierEmployeesLastResponse> {
+    return this.request<CashierEmployeesLastResponse>('/api/cashier/employees/last')
+  }
+
+  async calculateCashierSalaries(data: CashierSalaryCalculateRequest): Promise<CashierSalaryCalculateResponse> {
+    return this.request<CashierSalaryCalculateResponse>('/api/cashier/salaries/calculate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async createCashierSalaries(data: CashierSalaryCreateRequest): Promise<CashierSalaryCreateResponse> {
+    return this.request<CashierSalaryCreateResponse>('/api/cashier/salaries/create', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async saveCashierShiftData(data: CashierShiftDataSaveRequest): Promise<{ success: boolean; date: string }> {
+    return this.request('/api/cashier/shift-data/save', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getCashierShiftDataStatus(): Promise<CashierShiftDataStatusResponse> {
+    return this.request<CashierShiftDataStatusResponse>('/api/cashier/shift-data/status')
+  }
+
+  // ==========================================
+  // Cafe Shift Closing
+  // ==========================================
+
+  async getCafeEmployeesLast(): Promise<CafeEmployeesLastResponse> {
+    return this.request<CafeEmployeesLastResponse>('/api/cafe/employees/last')
+  }
+
+  async getCafeSalaryStatus(date?: string): Promise<CafeSalaryStatusResponse> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const qs = params.toString()
+    return this.request<CafeSalaryStatusResponse>(qs ? `/api/cafe/salaries/status?${qs}` : '/api/cafe/salaries/status')
+  }
+
+  async createCafeSalaries(data: CafeSalaryCreateRequest): Promise<CafeSalaryCreateResponse> {
+    return this.request<CafeSalaryCreateResponse>('/api/cafe/salaries/create', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getCafePosterData(date?: string): Promise<CafePosterData> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const qs = params.toString()
+    return this.request<CafePosterData>(qs ? `/api/cafe/poster-data?${qs}` : '/api/cafe/poster-data')
+  }
+
+  async calculateCafeShift(data: CafeShiftInput): Promise<CafeCalculateResponse> {
+    return this.request<CafeCalculateResponse>('/api/cafe/calculate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async saveCafeShift(data: CafeShiftData & { date?: string }): Promise<{ success: boolean }> {
+    return this.request('/api/cafe/save', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getCafeShiftHistory(date: string): Promise<CafeShiftHistoryResponse> {
+    return this.request<CafeShiftHistoryResponse>(`/api/cafe/history?date=${date}`)
+  }
+
+  async getCafeShiftDates(): Promise<CafeShiftDatesResponse> {
+    return this.request<CafeShiftDatesResponse>('/api/cafe/dates')
+  }
+
+  async getCafeReport(date?: string): Promise<CafeReportResponse> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const qs = params.toString()
+    return this.request<CafeReportResponse>(qs ? `/api/cafe/report?${qs}` : '/api/cafe/report')
+  }
+
+  async createCafeTransfers(date?: string): Promise<CafeTransfersResponse> {
+    return this.request<CafeTransfersResponse>('/api/cafe/transfers', {
+      method: 'POST',
+      body: JSON.stringify({ date }),
     })
   }
 }

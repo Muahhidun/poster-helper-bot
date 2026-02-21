@@ -529,3 +529,198 @@ export interface SupplyDraftsResponse {
   pending_supplies: PendingSupplyExpense[]
   poster_accounts: ExpensePosterAccount[]
 }
+
+// ==========================================
+// Cashier Shift Closing (Зарплаты + 5 значений)
+// ==========================================
+
+export interface CashierEmployeesLastResponse {
+  success: boolean
+  cashier_names: string  // JSON-encoded array of names
+  cashier_count: number
+  doner_name: string
+  assistant_name: string
+  assistant_start_time: string
+}
+
+export interface CashierSalaryCalculateRequest {
+  cashier_count: number
+  assistant_start_time: string
+}
+
+export interface CashierSalaryCalculateResponse {
+  success: boolean
+  cashier_salary: number
+  doner_salary: number
+  assistant_salary: number
+}
+
+export interface CashierSalaryDetail {
+  name: string
+  role: string
+  salary: number
+}
+
+export interface CashierSalaryCreateRequest {
+  cashier_count: number
+  cashier_names: string[]
+  assistant_start_time: string
+  doner_name: string
+  assistant_name: string
+}
+
+export interface CashierSalaryCreateResponse {
+  success: boolean
+  salaries: CashierSalaryDetail[]
+  total: number
+}
+
+export interface CashierShiftDataSaveRequest {
+  wolt: number
+  halyk: number
+  cash_bills: number
+  cash_coins: number
+  expenses: number
+}
+
+export interface CashierShiftDataStatusResponse {
+  success: boolean
+  date: string
+  salaries_created: boolean
+  shift_data_submitted: boolean
+  salaries_data?: string  // JSON-encoded array of CashierSalaryDetail
+  shift_data?: {
+    wolt: number
+    halyk: number
+    cash_bills: number
+    cash_coins: number
+    expenses: number
+  }
+}
+
+// ==========================================
+// Cafe Shift Closing (Зарплаты + Закрытие)
+// ==========================================
+
+export interface CafeSalaryEntry {
+  role: string
+  name: string
+  amount: number
+}
+
+export interface CafeEmployeesLastResponse {
+  success: boolean
+  employees: CafeSalaryEntry[]
+}
+
+export interface CafeSalaryCreateRequest {
+  salaries: CafeSalaryEntry[]
+}
+
+export interface CafeSalaryCreateResponse {
+  success: boolean
+  warning: string | null
+  total: number
+}
+
+export interface CafeSalaryStatusResponse {
+  success: boolean
+  date: string
+  salaries_created: boolean
+  salaries_data?: CafeSalaryEntry[]
+}
+
+export interface CafePosterData {
+  success: boolean
+  date: string
+  trade_total: number      // tiyins
+  bonus: number            // tiyins
+  poster_card: number      // tiyins
+  shift_start: number      // tiyins
+  transactions_count: number
+  prev_shift_left: number | null
+  main_kaspi_cafe: number | null
+}
+
+export interface CafeShiftInput {
+  wolt: number
+  kaspi: number
+  kaspi_pizzburg: number
+  cash_bills: number
+  cash_coins: number
+  shift_start: number
+  expenses: number
+  cash_to_leave: number
+  poster_trade: number
+  poster_bonus: number
+  poster_card: number
+}
+
+export interface CafeCalculations {
+  fact_cashless: number
+  fact_total: number
+  fact_adjusted: number
+  poster_total: number
+  day_result: number
+  shift_left: number
+  collection: number
+  cashless_diff: number
+}
+
+export interface CafeCalculateResponse {
+  success: boolean
+  calculations: CafeCalculations
+}
+
+export interface CafeShiftData {
+  wolt: number
+  kaspi: number
+  kaspi_pizzburg: number
+  cash_bills: number
+  cash_coins: number
+  shift_start: number
+  expenses: number
+  cash_to_leave: number
+  deposits: number
+  poster_trade: number
+  poster_bonus: number
+  poster_card: number
+  poster_cash: number
+  transactions_count: number
+  fact_cashless: number
+  fact_total: number
+  fact_adjusted: number
+  poster_total: number
+  day_result: number
+  shift_left: number
+  collection: number
+  cashless_diff: number
+  transfers_created?: boolean | number
+}
+
+export interface CafeShiftHistoryResponse {
+  success: boolean
+  date: string
+  closing: CafeShiftData | null
+}
+
+export interface CafeShiftDatesResponse {
+  success: boolean
+  dates: string[]
+}
+
+export interface CafeReportResponse {
+  success: boolean
+  report: string
+  date: string
+  error?: string
+}
+
+export interface CafeTransfersResponse {
+  success: boolean
+  already_created?: boolean
+  created_count?: number
+  message?: string
+  transfers?: Array<{ name: string; amount: number }>
+  error?: string
+}
