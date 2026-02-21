@@ -5113,15 +5113,19 @@ CAFE_ACCOUNTS = {
 
 @app.route('/api/cafe/salaries/status')
 def api_cafe_salaries_status():
-    """Check if cafe salaries were already created today"""
+    """Check if cafe salaries were already created for a given date"""
     from datetime import datetime, timedelta
     info = resolve_cafe_info()
     db = get_database()
 
     try:
-        kz_tz = KZ_TZ
-        kz_now = _kz_now()
-        date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
+        # Accept date parameter, default to today
+        date_param = request.args.get('date', '')
+        if date_param and len(date_param) == 10:
+            date_str = date_param
+        else:
+            kz_now = _kz_now()
+            date_str = kz_now.strftime('%Y-%m-%d') if kz_now.hour >= 6 else (kz_now - timedelta(days=1)).strftime('%Y-%m-%d')
 
         closing = db.get_shift_closing(
             info['telegram_user_id'], date_str,
