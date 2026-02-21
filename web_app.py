@@ -40,7 +40,7 @@ app = Flask(__name__)
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not SECRET_KEY:
     SECRET_KEY = secrets.token_hex(32)
-    print(f"⚠️  Warning: Using generated SECRET_KEY. Set FLASK_SECRET_KEY in .env for production")
+    logger.warning(f"⚠️  Warning: Using generated SECRET_KEY. Set FLASK_SECRET_KEY in .env for production")
 app.secret_key = SECRET_KEY
 
 from datetime import timedelta
@@ -223,7 +223,7 @@ def load_items_from_csv():
                         'type': 'ingredient'
                     })
         except Exception as e:
-            print(f"Error loading ingredients: {e}")
+            logger.error(f"Error loading ingredients: {e}")
 
     # Load products (only "Напитки" category - drinks that can be supplied)
     products_csv = config.DATA_DIR / "poster_products.csv"
@@ -243,7 +243,7 @@ def load_items_from_csv():
                         'type': 'product'
                     })
         except Exception as e:
-            print(f"Error loading products: {e}")
+            logger.error(f"Error loading products: {e}")
 
     return items
 
@@ -416,7 +416,7 @@ def validate_telegram_web_app_data(init_data: str, bot_token: str) -> bool:
 
         return calculated_hash == hash_str
     except Exception as e:
-        print(f"Validation error: {e}")
+        logger.error(f"Validation error: {e}")
         return False
 
 
@@ -639,12 +639,12 @@ def search_items():
         db = get_database()
         accounts = db.get_accounts(g.user_id)
 
-        print(f"[DEBUG] Found {len(accounts)} accounts for user {g.user_id}", flush=True)
+        logger.debug(f"Found {len(accounts)} accounts for user {g.user_id}")
         if accounts:
             from poster_client import PosterClient
 
             for acc in accounts:
-                print(f"[DEBUG] Processing account: {acc['account_name']} (id={acc['id']})", flush=True)
+                logger.debug(f"Processing account: {acc['account_name']} (id={acc['id']})")
                 try:
                     poster_client = PosterClient(
                         telegram_user_id=g.user_id,
@@ -659,7 +659,7 @@ def search_items():
 
                     if source in ['all', 'ingredient']:
                         ingredients = loop.run_until_complete(poster_client.get_ingredients())
-                        print(f"[DEBUG] Account {acc['account_name']}: got {len(ingredients)} ingredients", flush=True)
+                        logger.debug(f"Account {acc['account_name']}: got {len(ingredients)} ingredients")
                         for ing in ingredients:
                             # Include all ingredients (including deleted ones)
                             # User may need to see deleted ingredients to understand what was available
@@ -710,10 +710,10 @@ def search_items():
                         loop.close()
                     except Exception:
                         pass
-                    print(f"Error loading from account {acc['account_name']}: {e}")
+                    logger.error(f"Error loading from account {acc['account_name']}: {e}")
                     continue
     except Exception as e:
-        print(f"Error loading from Poster API: {e}")
+        logger.error(f"Error loading from Poster API: {e}")
         # Fallback to CSV
         items = load_items_from_csv()
 
@@ -724,28 +724,28 @@ def search_items():
     # For 'all' and 'ingredient' - show both ingredients and products (for supply autocomplete)
 
     # Filter by query
-    print(f"[DEBUG] Total items before query filter: {len(items)} (ingredients + products)", flush=True)
+    logger.debug(f"Total items before query filter: {len(items)} (ingredients + products)")
     products_count = len([i for i in items if i['type'] == 'product'])
-    print(f"[DEBUG] Products in list: {products_count}", flush=True)
+    logger.debug(f"Products in list: {products_count}")
 
     # Debug: show first 5 items with names
     for i, item in enumerate(items[:5]):
-        print(f"[DEBUG] Sample item {i}: id={item.get('id')}, name='{item.get('name')}', account={item.get('poster_account_name')}", flush=True)
+        logger.debug(f"Sample item {i}: id={item.get('id')}, name='{item.get('name')}', account={item.get('poster_account_name')}")
 
     # Debug: check for empty names
     empty_names = len([i for i in items if not i.get('name')])
-    print(f"[DEBUG] Items with empty names: {empty_names}", flush=True)
+    logger.debug(f"Items with empty names: {empty_names}")
 
     if query:
         items = [item for item in items if query in item['name'].lower()]
-        print(f"[DEBUG] Items after query filter '{query}': {len(items)}", flush=True)
+        logger.debug(f"Items after query filter '{query}': {len(items)}")
         # Limit results only when there's a query (server-side filtering)
         items = items[:50]
     else:
         # No limit when preloading all items (client-side filtering)
         # Sort by account name, then by ingredient name for consistent ordering
         items = sorted(items, key=lambda x: (x.get('poster_account_name', ''), x.get('name', '')))
-        print(f"[DEBUG] Returning all {len(items)} items for preload", flush=True)
+        logger.debug(f"Returning all {len(items)} items for preload")
 
     return jsonify(items)
 
@@ -942,7 +942,7 @@ def api_create_supply():
 
             for account_id, account_items in items_by_account.items():
                 account = accounts_by_id[account_id]
-                print(f"📦 Creating supply in {account['account_name']} ({account['poster_base_url']}) - {len(account_items)} items")
+                logger.info(f"📦 Creating supply in {account['account_name']} ({account['poster_base_url']}) - {len(account_items)} items")
 
                 poster_client = PosterClient(
                     telegram_user_id=g.user_id,
@@ -984,10 +984,10 @@ def api_create_supply():
                                 break
 
                     if not supplier_id:
-                        print(f"⚠️ Supplier '{supplier_name}' not found in {account['account_name']}, using ID from form")
+                        logger.warning(f"⚠️ Supplier '{supplier_name}' not found in {account['account_name']}, using ID from form")
                         supplier_id = data['supplier_id']
                     else:
-                        print(f"✅ Found supplier '{supplier_name}' -> ID={supplier_id} in {account['account_name']}")
+                        logger.info(f"✅ Found supplier '{supplier_name}' -> ID={supplier_id} in {account['account_name']}")
 
                     # Auto-detect finance account based on source (like process_supply does)
                     finance_accounts = await poster_client.get_accounts()
@@ -1018,7 +1018,7 @@ def api_create_supply():
                     if not finance_account_id and finance_accounts:
                         finance_account_id = int(finance_accounts[0]['account_id'])
 
-                    print(f"💳 Using finance account ID={finance_account_id} for source='{source}' in {account['account_name']}")
+                    logger.debug(f"💳 Using finance account ID={finance_account_id} for source='{source}' in {account['account_name']}")
 
                     supply_id = await poster_client.create_supply(
                         supplier_id=supplier_id,
@@ -1050,9 +1050,9 @@ def api_create_supply():
                                 'date': data.get('date', datetime.now().strftime('%Y-%m-%d'))
                             })
                     else:
-                        print(f"⚠️ Failed to create supply in {account['account_name']}")
+                        logger.warning(f"⚠️ Failed to create supply in {account['account_name']}")
                 except Exception as e:
-                    print(f"⚠️ Error creating supply in {account['account_name']}: {e}")
+                    logger.error(f"⚠️ Error creating supply in {account['account_name']}: {e}")
                 finally:
                     await poster_client.close()
 
@@ -1264,7 +1264,7 @@ def list_expenses():
                     try:
                         # Load categories from each account with poster_account info
                         cats = await client.get_categories()
-                        print(f"Loaded {len(cats)} categories from {acc['account_name']}")
+                        logger.debug(f"Loaded {len(cats)} categories from {acc['account_name']}")
                         for c in cats:
                             # Only include expense categories (type=1), not income (type=0)
                             cat_type = c.get('type', '1')
@@ -1276,7 +1276,7 @@ def list_expenses():
                             c['poster_account_name'] = acc['account_name']
                             # Add all categories (not deduplicated) so user can filter by department
                             all_categories.append(c)
-                            print(f"  Category: {c.get('category_name') or c.get('name')} (type={cat_type})")
+                            logger.debug(f"  Category: {c.get('category_name') or c.get('name')} (type={cat_type})")
 
                         # Load finance accounts with poster_account info
                         accs = await client.get_accounts()
@@ -1302,7 +1302,7 @@ def list_expenses():
             finally:
                 loop.close()
     except Exception as e:
-        print(f"Error loading categories/accounts: {e}")
+        logger.error(f"Error loading categories/accounts: {e}")
         import traceback
         traceback.print_exc()
 
@@ -1327,7 +1327,7 @@ def list_expenses():
         elif 'оставил' in name_lower:
             account_totals['cash'] += balance
 
-    print(f"Account totals: {account_totals}")
+    logger.debug(f"Account totals: {account_totals}")
 
     return render_template('expenses.html',
                           drafts=drafts,
@@ -1377,9 +1377,9 @@ def toggle_expense_type(draft_id):
         supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
         linked_supply = next((s for s in supply_drafts if s.get('linked_expense_draft_id') == draft_id), None)
         if linked_supply:
-            db.delete_supply_draft(linked_supply['id'])
+            db.delete_supply_draft(linked_supply['id'], telegram_user_id=g.user_id)
 
-    success = db.update_expense_draft(draft_id, expense_type=new_type)
+    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, expense_type=new_type)
     return jsonify({'success': success, 'supply_draft_id': supply_draft_id})
 
 
@@ -1419,7 +1419,7 @@ def update_expense(draft_id):
     if not update_fields:
         return jsonify({'success': False, 'error': 'No fields to update'})
 
-    success = db.update_expense_draft(draft_id, **update_fields)
+    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, **update_fields)
     return jsonify({'success': success})
 
 
@@ -1470,7 +1470,7 @@ def search_categories():
         return jsonify(matches)
 
     except Exception as e:
-        print(f"Error searching categories: {e}")
+        logger.error(f"Error searching categories: {e}")
         return jsonify([])
 
 
@@ -1478,7 +1478,7 @@ def search_categories():
 def delete_expense(draft_id):
     """Delete single expense draft"""
     db = get_database()
-    success = db.delete_expense_draft(draft_id)
+    success = db.delete_expense_draft(draft_id, telegram_user_id=g.user_id)
     return jsonify({'success': success})
 
 
@@ -1489,7 +1489,7 @@ def delete_drafts():
 
     if draft_ids:
         db = get_database()
-        deleted = db.delete_expense_drafts_bulk(draft_ids)
+        deleted = db.delete_expense_drafts_bulk(draft_ids, telegram_user_id=g.user_id)
         flash(f'Удалено {deleted} черновиков', 'success')
 
     return redirect(url_for('list_expenses'))
@@ -1592,16 +1592,16 @@ def sync_expenses_from_poster():
                 try:
                     # Fetch today's transactions
                     transactions = await client.get_transactions(date_str, date_str)
-                    print(f"📅 Fetched {len(transactions)} transactions for {date_str} from {account['account_name']}")
+                    logger.info(f"📅 Fetched {len(transactions)} transactions for {date_str} from {account['account_name']}")
 
                     # Also fetch finance accounts for mapping account_id -> account name
                     finance_accounts = await client.get_accounts()
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
                     # Debug: print account map
-                    print(f"📊 Finance accounts for {account['account_name']}:")
+                    logger.debug(f"📊 Finance accounts for {account['account_name']}:")
                     for acc in finance_accounts:
-                        print(f"   - ID {acc.get('account_id')}: {acc.get('account_name') or acc.get('name')}")
+                        logger.info(f"   - ID {acc.get('account_id')}: {acc.get('account_name') or acc.get('name')}")
 
                     for txn in transactions:
                         # Accept both expense (type=0) and income (type=1) transactions
@@ -1620,7 +1620,7 @@ def sync_expenses_from_poster():
                         # - "Актуализация" — correcting/actualisation transactions
                         skip_categories = ['перевод', 'кассовые смены', 'актуализац']
                         if any(skip in category_lower for skip in skip_categories):
-                            print(f"   ⏭️ Skipping system transaction: category='{category_name}'")
+                            logger.debug(f"   ⏭️ Skipping system transaction: category='{category_name}'")
                             continue
 
                         # Build unique poster_transaction_id
@@ -1672,7 +1672,7 @@ def sync_expenses_from_poster():
                             if update_fields:
                                 db.update_expense_draft(existing_draft['id'], **update_fields)
                                 updated_count += 1
-                                print(f"[SYNC] Updated draft #{existing_draft['id']}: {update_fields}", flush=True)
+                                logger.info(f"[SYNC] Updated draft #{existing_draft['id']}: {update_fields}")
                             else:
                                 skipped_count += 1
                             continue
@@ -1693,7 +1693,7 @@ def sync_expenses_from_poster():
                             )
                             if supply_draft:
                                 skipped_count += 1
-                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})")
+                                logger.debug(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})")
                                 continue
 
                             # Fallback: if poster_transaction_id link is missing, match by expense_type='supply' + amount
@@ -1711,14 +1711,14 @@ def sync_expenses_from_poster():
                                     poster_transaction_id=f"supply_{supply_num}"
                                 )
                                 skipped_count += 1
-                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: fallback matched draft #{supply_amount_draft['id']} by amount {amount}₸ (linked as supply_{supply_num})")
+                                logger.debug(f"   ⏭️ Skipping supply transaction #{txn_id}: fallback matched draft #{supply_amount_draft['id']} by amount {amount}₸ (linked as supply_{supply_num})")
                                 continue
 
                         # Detect if this is an income transaction by category name
                         is_income = txn_type == '1' or 'приход' in category_lower or 'поступлен' in category_lower
 
                         if is_income:
-                            print(f"   💰 Income detected: category='{category_name}', type={txn_type}")
+                            logger.debug(f"   💰 Income detected: category='{category_name}', type={txn_type}")
 
                         # Determine source (cash/kaspi/halyk) from account name
                         account_from_id = txn.get('account_from_id') or txn.get('account_from')
@@ -1727,7 +1727,7 @@ def sync_expenses_from_poster():
                         finance_acc = account_map.get(str(account_from_id), {})
                         finance_acc_name = (finance_acc.get('account_name') or finance_acc.get('name') or txn_account_name or '').lower()
 
-                        print(f"   Transaction #{txn_id}: account_from={account_from_id}, acc_name='{finance_acc_name}', desc='{description}'")
+                        logger.debug(f"   Transaction #{txn_id}: account_from={account_from_id}, acc_name='{finance_acc_name}', desc='{description}'")
 
                         source = 'cash'
                         if 'kaspi' in finance_acc_name:
@@ -1735,7 +1735,7 @@ def sync_expenses_from_poster():
                         elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
                             source = 'halyk'
 
-                        print(f"   -> source detected: {source}, is_income: {is_income}")
+                        logger.debug(f"   -> source detected: {source}, is_income: {is_income}")
 
                         # Create draft - mark as 'completed' since it's already in Poster
                         draft_id = db.create_expense_draft(
@@ -1756,7 +1756,7 @@ def sync_expenses_from_poster():
                         if draft_id:
                             synced_count += 1
                             txn_type_label = "income" if is_income else "expense"
-                            print(f"✅ Synced {txn_type_label} #{txn_id} from {account['account_name']}: {description} - {amount}₸")
+                            logger.info(f"✅ Synced {txn_type_label} #{txn_id} from {account['account_name']}: {description} - {amount}₸")
 
                     # Mark account as successfully synced ONLY after all transactions processed
                     synced_account_ids.add(str(account['id']))
@@ -1767,7 +1767,7 @@ def sync_expenses_from_poster():
             except Exception as e:
                 # Account NOT added to synced_account_ids — orphan detection will skip its drafts
                 errors.append(f"{account['account_name']}: {str(e)}")
-                print(f"Error syncing from {account['account_name']}: {e}")
+                logger.error(f"Error syncing from {account['account_name']}: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -1778,7 +1778,7 @@ def sync_expenses_from_poster():
             if draft_category and any(skip in draft_category for skip in skip_categories_cleanup):
                 db.delete_expense_draft(draft['id'])
                 deleted_count += 1
-                print(f"[SYNC] Deleted system category draft #{draft['id']}: category='{draft.get('category')}'")
+                logger.info(f"[SYNC] Deleted system category draft #{draft['id']}: category='{draft.get('category')}'")
 
         # Detect and remove drafts whose Poster transactions were deleted
         today_str = today.strftime('%Y-%m-%d')
@@ -1811,7 +1811,7 @@ def sync_expenses_from_poster():
                         continue  # Account wasn't synced (maybe error), don't delete
                 db.delete_expense_draft(draft['id'])
                 deleted_count += 1
-                print(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
+                logger.debug(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
 
         return synced_count, updated_count, skipped_count, deleted_count, errors
 
@@ -1917,7 +1917,7 @@ def api_poster_transactions():
                     await client.close()
 
             except Exception as e:
-                print(f"Error fetching from {account['account_name']}: {e}")
+                logger.error(f"Error fetching from {account['account_name']}: {e}")
 
         return all_transactions
 
@@ -2032,7 +2032,7 @@ def api_get_expenses():
             finally:
                 loop.close()
     except Exception as e:
-        print(f"Error loading expenses data: {e}")
+        logger.error(f"Error loading expenses data: {e}")
         import traceback
         traceback.print_exc()
 
@@ -2088,7 +2088,7 @@ def api_update_expense(draft_id):
     if 'completion_status' in data:
         update_fields['completion_status'] = data['completion_status']
 
-    success = db.update_expense_draft(draft_id, **update_fields)
+    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, **update_fields)
     return jsonify({'success': success})
 
 
@@ -2096,7 +2096,7 @@ def api_update_expense(draft_id):
 def api_delete_expense(draft_id):
     """Delete an expense draft"""
     db = get_database()
-    success = db.delete_expense_draft(draft_id)
+    success = db.delete_expense_draft(draft_id, telegram_user_id=g.user_id)
     return jsonify({'success': success})
 
 
@@ -2153,9 +2153,9 @@ def api_toggle_expense_type(draft_id):
         supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
         linked_supply = next((s for s in supply_drafts if s.get('linked_expense_draft_id') == draft_id), None)
         if linked_supply:
-            db.delete_supply_draft(linked_supply['id'])
+            db.delete_supply_draft(linked_supply['id'], telegram_user_id=g.user_id)
 
-    success = db.update_expense_draft(draft_id, expense_type=new_type)
+    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, expense_type=new_type)
     return jsonify({'success': success, 'supply_draft_id': supply_draft_id})
 
 
@@ -2166,7 +2166,7 @@ def api_update_completion_status(draft_id):
     data = request.get_json() or {}
     status = data.get('completion_status', 'pending')
 
-    success = db.update_expense_draft(draft_id, completion_status=status)
+    success = db.update_expense_draft(draft_id, telegram_user_id=g.user_id, completion_status=status)
     return jsonify({'success': success})
 
 
@@ -2291,15 +2291,15 @@ def api_sync_expenses_from_poster():
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
                     # Debug: log finance accounts
-                    print(f"[SYNC DEBUG] Finance accounts for {account['account_name']}:", flush=True)
+                    logger.debug(f"[SYNC] Finance accounts for {account['account_name']}:")
                     for acc in finance_accounts:
-                        print(f"  - account_id={acc.get('account_id')}, name='{acc.get('account_name') or acc.get('name')}'", flush=True)
+                        logger.info(f"  - account_id={acc.get('account_id')}, name='{acc.get('account_name') or acc.get('name')}'")
 
                     for idx, txn in enumerate(transactions):
                         # Debug: log first transaction structure
                         if idx == 0:
-                            print(f"[SYNC DEBUG] First transaction keys: {list(txn.keys())}", flush=True)
-                            print(f"[SYNC DEBUG] First transaction: {txn}", flush=True)
+                            logger.debug(f"[SYNC] First transaction keys: {list(txn.keys())}")
+                            logger.debug(f"[SYNC] First transaction: {txn}")
 
                         txn_type = str(txn.get('type'))
                         category_name = txn.get('name', '') or txn.get('category_name', '')
@@ -2335,7 +2335,7 @@ def api_sync_expenses_from_poster():
                         finance_acc_name_raw = (finance_acc.get('account_name') or finance_acc.get('name')) or txn_account_name
 
                         # Debug: log account lookup
-                        print(f"[SYNC DEBUG] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('account_name') or finance_acc.get('name', 'NOT FOUND')}'", flush=True)
+                        logger.debug(f"[SYNC] txn={txn_id}, account_from_id={account_from_id}, txn_account_name='{txn_account_name}', found_acc='{finance_acc.get('account_name') or finance_acc.get('name', 'NOT FOUND')}'")
 
                         # Check if already synced - find matching draft
                         # Support both formats: composite "accountId_txnId" and simple "txnId"
@@ -2374,7 +2374,7 @@ def api_sync_expenses_from_poster():
                             if update_fields:
                                 db.update_expense_draft(existing_draft['id'], **update_fields)
                                 updated += 1
-                                print(f"[SYNC] Updated draft #{existing_draft['id']}: {update_fields}", flush=True)
+                                logger.info(f"[SYNC] Updated draft #{existing_draft['id']}: {update_fields}")
                             else:
                                 skipped += 1
                             continue
@@ -2392,7 +2392,7 @@ def api_sync_expenses_from_poster():
                             )
                             if supply_draft:
                                 skipped += 1
-                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})", flush=True)
+                                logger.debug(f"   ⏭️ Skipping supply transaction #{txn_id}: matched draft #{supply_draft['id']} (supply #{supply_num})")
                                 continue
 
                             # Fallback: if poster_transaction_id link is missing, match by expense_type='supply' + amount
@@ -2410,7 +2410,7 @@ def api_sync_expenses_from_poster():
                                     poster_transaction_id=f"supply_{supply_num}"
                                 )
                                 skipped += 1
-                                print(f"   ⏭️ Skipping supply transaction #{txn_id}: fallback matched draft #{supply_amount_draft['id']} by amount {amount}₸ (linked as supply_{supply_num})", flush=True)
+                                logger.debug(f"   ⏭️ Skipping supply transaction #{txn_id}: fallback matched draft #{supply_amount_draft['id']} by amount {amount}₸ (linked as supply_{supply_num})")
                                 continue
 
                         # Determine source from finance account name (or direct txn account_name)
@@ -2421,7 +2421,7 @@ def api_sync_expenses_from_poster():
                         elif 'халык' in finance_acc_name or 'halyk' in finance_acc_name:
                             source = 'halyk'
 
-                        print(f"[SYNC DEBUG] txn={txn_id}, finance_acc_name='{finance_acc_name}', source='{source}'", flush=True)
+                        logger.debug(f"[SYNC] txn={txn_id}, finance_acc_name='{finance_acc_name}', source='{source}'")
 
                         # Create expense draft
                         db.create_expense_draft(
@@ -2457,7 +2457,7 @@ def api_sync_expenses_from_poster():
             if draft_category and any(skip in draft_category for skip in skip_categories_cleanup):
                 db.delete_expense_draft(draft['id'])
                 deleted += 1
-                print(f"[SYNC] Deleted system category draft #{draft['id']}: category='{draft.get('category')}'")
+                logger.info(f"[SYNC] Deleted system category draft #{draft['id']}: category='{draft.get('category')}'")
 
         # Detect and remove drafts whose Poster transactions were deleted
         today_str = today.strftime('%Y-%m-%d')
@@ -2485,7 +2485,7 @@ def api_sync_expenses_from_poster():
                         continue
                 db.delete_expense_draft(draft['id'])
                 deleted += 1
-                print(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
+                logger.debug(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
 
     try:
         loop.run_until_complete(sync_from_all_accounts())
@@ -2689,7 +2689,7 @@ def api_get_supply_drafts():
                     'is_primary': acc.get('is_primary', False)
                 })
     except Exception as e:
-        print(f"Error loading poster accounts: {e}")
+        logger.error(f"Error loading poster accounts: {e}")
 
     return jsonify({
         'drafts': drafts,
@@ -2739,7 +2739,7 @@ def api_update_supply_draft(draft_id):
         updates['source'] = data['source']
 
     if updates:
-        db.update_supply_draft(draft_id, **updates)
+        db.update_supply_draft(draft_id, telegram_user_id=g.user_id, **updates)
 
     return jsonify({'success': True})
 
@@ -2748,7 +2748,7 @@ def api_update_supply_draft(draft_id):
 def api_delete_supply_draft(draft_id):
     """Delete a supply draft"""
     db = get_database()
-    db.delete_supply_draft(draft_id)
+    db.delete_supply_draft(draft_id, telegram_user_id=g.user_id)
     return jsonify({'success': True})
 
 
@@ -2802,7 +2802,7 @@ def api_update_supply_draft_item(item_id):
         updates['item_name'] = data['ingredient_name']
 
     if updates:
-        db.update_supply_draft_item(item_id, **updates)
+        db.update_supply_draft_item(item_id, telegram_user_id=g.user_id, **updates)
 
     return jsonify({'success': True})
 
@@ -2811,7 +2811,7 @@ def api_update_supply_draft_item(item_id):
 def api_delete_supply_draft_item(item_id):
     """Delete supply draft item"""
     db = get_database()
-    db.delete_supply_draft_item(item_id)
+    db.delete_supply_draft_item(item_id, telegram_user_id=g.user_id)
     return jsonify({'success': True})
 
 
@@ -2957,9 +2957,9 @@ def process_drafts():
                     categories = await client.get_categories()
 
                     # Debug: print all categories from Poster
-                    print(f"[DEBUG] Categories from Poster for {account['account_name']}:", flush=True)
+                    logger.debug(f"Categories from Poster for {account['account_name']}:")
                     for cat in categories:
-                        print(f"  - id={cat.get('category_id')}, name='{cat.get('category_name')}', raw={cat}", flush=True)
+                        logger.info(f"  - id={cat.get('category_id')}, name='{cat.get('category_name')}', raw={cat}")
 
                     # Build category map (name -> id)
                     category_map = {}
@@ -2968,7 +2968,7 @@ def process_drafts():
                         if cat_name:
                             category_map[cat_name.lower()] = int(cat.get('category_id', 1))
 
-                    print(f"[DEBUG] Category map: {category_map}", flush=True)
+                    logger.debug(f"Category map: {category_map}")
 
                     # Define default category priority
                     default_categories = ['хозяйственные расходы', 'прочее', 'единовременный расход']
@@ -2981,10 +2981,10 @@ def process_drafts():
                         default_cat_id = list(category_map.values())[0]
 
                     # Debug: log available finance accounts for this Poster account
-                    print(f"[DEBUG] Finance accounts for {account['account_name']}:", flush=True)
+                    logger.debug(f"Finance accounts for {account['account_name']}:")
                     for acc in finance_accounts:
                         acc_name = (acc.get('account_name') or acc.get('name', ''))
-                        print(f"  - id={acc.get('account_id')}, name='{acc_name}'", flush=True)
+                        logger.info(f"  - id={acc.get('account_id')}, name='{acc_name}'")
 
                     for draft in account_transactions:
                         # Always auto-detect finance account based on source + this Poster account's finance accounts.
@@ -3014,18 +3014,18 @@ def process_drafts():
                         if not account_id and finance_accounts:
                             account_id = int(finance_accounts[0]['account_id'])
 
-                        print(f"[DEBUG] Draft '{draft.get('description')}' source='{draft['source']}' -> account_id={account_id}", flush=True)
+                        logger.debug(f"Draft '{draft.get('description')}' source='{draft['source']}' -> account_id={account_id}")
 
                         # Find category: exact match, partial match, or default
                         draft_category = (draft.get('category') or '').lower().strip()
                         cat_id = None
 
-                        print(f"[DEBUG] Looking for category: draft_category='{draft_category}', in_map={draft_category in category_map}", flush=True)
+                        logger.debug(f"Looking for category: draft_category='{draft_category}', in_map={draft_category in category_map}")
 
                         # 1. Exact match
                         if draft_category in category_map:
                             cat_id = category_map[draft_category]
-                            print(f"[DEBUG] Exact match found: {cat_id}", flush=True)
+                            logger.debug(f"Exact match found: {cat_id}")
 
                         # 2. Partial match (draft category contains Poster category or vice versa)
                         if not cat_id:
@@ -3057,7 +3057,7 @@ def process_drafts():
                         if not cat_id:
                             cat_id = default_cat_id
 
-                        print(f"[CATEGORY] draft='{draft.get('category')}' -> cat_id={cat_id}")
+                        logger.debug(f"[CATEGORY] draft='{draft.get('category')}' -> cat_id={cat_id}")
 
                         try:
                             # Check if this draft was synced from Poster (has poster_transaction_id)
@@ -3076,7 +3076,7 @@ def process_drafts():
                                     )
                                     total_success += 1
                                     all_processed_ids.append(draft['id'])
-                                    print(f"✅ Updated transaction #{original_txn_id} in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
+                                    logger.info(f"✅ Updated transaction #{original_txn_id} in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
                                 else:
                                     raise Exception(f"Invalid poster_transaction_id format: {poster_txn_id}")
                             else:
@@ -3102,9 +3102,9 @@ def process_drafts():
                                 total_success += 1
                                 all_processed_ids.append(draft['id'])
                                 type_label = "доход" if is_income else "расход"
-                                print(f"✅ Created {type_label} in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
+                                logger.info(f"✅ Created {type_label} in {account['account_name']}: {draft['description']} - {draft['amount']}₸")
                         except Exception as e:
-                            print(f"Error processing transaction in {account['account_name']}: {e}")
+                            logger.error(f"Error processing transaction in {account['account_name']}: {e}")
 
                 finally:
                     await client.close()
@@ -3357,10 +3357,10 @@ def view_all_supplies():
                         loop.close()
                     except Exception:
                         pass
-                    print(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
+                    logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
-        print(f"Error loading ingredients: {e}")
+        logger.error(f"Error loading ingredients: {e}")
 
     return render_template('supplies_all.html', drafts=drafts, items=items)
 
@@ -3411,7 +3411,7 @@ def update_supply_draft(draft_id):
         update_fields['source'] = str(data['source'])
 
     if update_fields:
-        success = db.update_supply_draft(draft_id, **update_fields)
+        success = db.update_supply_draft(draft_id, telegram_user_id=g.user_id, **update_fields)
 
         # Sync source to linked expense draft if changed
         if 'source' in update_fields:
@@ -3419,6 +3419,7 @@ def update_supply_draft(draft_id):
             if draft and draft.get('linked_expense_draft_id'):
                 db.update_expense_draft(
                     draft['linked_expense_draft_id'],
+                    telegram_user_id=g.user_id,
                     source=update_fields['source']
                 )
 
@@ -3461,7 +3462,7 @@ def add_supply_item(draft_id):
 def delete_supply_item(item_id):
     """Delete item from supply draft"""
     db = get_database()
-    success = db.delete_supply_draft_item(item_id)
+    success = db.delete_supply_draft_item(item_id, telegram_user_id=g.user_id)
     return jsonify({'success': success})
 
 
@@ -3678,10 +3679,10 @@ def view_supply(draft_id):
                         loop.close()
                     except Exception:
                         pass
-                    print(f"Error loading from account {acc['account_name']}: {e}")
+                    logger.error(f"Error loading from account {acc['account_name']}: {e}")
                     continue
     except Exception as e:
-        print(f"Error loading from Poster API: {e}")
+        logger.error(f"Error loading from Poster API: {e}")
         # Fallback to CSV
         items = load_items_from_csv()
 
@@ -3692,7 +3693,7 @@ def view_supply(draft_id):
 def delete_supply(draft_id):
     """Delete supply draft"""
     db = get_database()
-    success = db.delete_supply_draft(draft_id)
+    success = db.delete_supply_draft(draft_id, telegram_user_id=g.user_id)
     return jsonify({'success': success})
 
 
@@ -3721,7 +3722,7 @@ def update_supply_item(item_id):
         else:
             update_fields['total'] = data.get('quantity', 1) * update_fields['price_per_unit']
 
-    success = db.update_supply_draft_item(item_id, **update_fields) if update_fields else False
+    success = db.update_supply_draft_item(item_id, telegram_user_id=g.user_id, **update_fields) if update_fields else False
     return jsonify({'success': success})
 
 
@@ -4050,7 +4051,7 @@ def load_suppliers_from_csv():
                         'name': row['name']
                     })
         except Exception as e:
-            print(f"Error loading suppliers: {e}")
+            logger.error(f"Error loading suppliers: {e}")
 
     return suppliers
 
@@ -4200,7 +4201,7 @@ def api_shift_closing_poster_data():
                 # Торговля = cash + card (без бонусов)
                 trade_total = total_cash + total_card
 
-                print(f"[SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
+                logger.info(f"[SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
                       f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
 
@@ -4210,28 +4211,28 @@ def api_shift_closing_poster_data():
                 try:
                     target = datetime.strptime(date_param, '%Y%m%d')
                     prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
-                    print(f"[SHIFT] Calling getCashShifts for prev_day={prev_day}", flush=True)
+                    logger.debug(f"[SHIFT] Calling getCashShifts for prev_day={prev_day}")
                     cash_shifts = await client.get_cash_shifts(prev_day, prev_day)
-                    print(f"[SHIFT] getCashShifts raw response: {cash_shifts}", flush=True)
+                    logger.debug(f"[SHIFT] getCashShifts raw response: {cash_shifts}")
                     if cash_shifts:
                         last_shift = cash_shifts[-1]
                         # amount_end might be string or int — handle both
                         amount_end = int(float(last_shift.get('amount_end', 0)))
-                        print(f"[SHIFT] Last shift: id={last_shift.get('cash_shift_id')}, "
+                        logger.debug(f"[SHIFT] Last shift: id={last_shift.get('cash_shift_id')}, "
                               f"amount_start={last_shift.get('amount_start')}, "
                               f"amount_end={last_shift.get('amount_end')} (parsed: {amount_end}), "
                               f"date_start={last_shift.get('date_start')}, "
                               f"date_end={last_shift.get('date_end')}", flush=True)
                         if amount_end > 0:
                             poster_prev_shift_left = amount_end
-                            print(f"[SHIFT] ✅ poster_prev_shift_left={amount_end/100:,.0f}₸", flush=True)
+                            logger.debug(f"[SHIFT] ✅ poster_prev_shift_left={amount_end/100:,.0f}₸")
                         else:
-                            print(f"[SHIFT] ⚠️ amount_end=0 for prev day", flush=True)
+                            logger.warning(f"[SHIFT] ⚠️ amount_end=0 for prev day")
                     else:
-                        print(f"[SHIFT] ⚠️ No cash shifts found for {prev_day}", flush=True)
+                        logger.warning(f"[SHIFT] ⚠️ No cash shifts found for {prev_day}")
                 except Exception as e:
                     import traceback
-                    print(f"[SHIFT] getCashShifts error: {e}", flush=True)
+                    logger.debug(f"[SHIFT] getCashShifts error: {e}")
                     traceback.print_exc()
 
                 return {
@@ -4271,7 +4272,7 @@ def api_shift_closing_poster_data():
                 if cafe_closing and cafe_closing.get('kaspi_pizzburg'):
                     data['cafe_kaspi_pizzburg'] = float(cafe_closing['kaspi_pizzburg'])
         except Exception as e:
-            print(f"[SHIFT] Error looking up cafe kaspi_pizzburg: {e}", flush=True)
+            logger.error(f"[SHIFT] Error looking up cafe kaspi_pizzburg: {e}")
 
         # Look up cashier shift data for auto-fill
         try:
@@ -4289,7 +4290,7 @@ def api_shift_closing_poster_data():
                 data['cashier_expenses'] = float(cashier_data.get('expenses', 0))
                 data['cashier_data_submitted'] = True
         except Exception as e:
-            print(f"[SHIFT] Error looking up cashier shift data: {e}", flush=True)
+            logger.error(f"[SHIFT] Error looking up cashier shift data: {e}")
 
         return jsonify(data)
 
@@ -4793,7 +4794,7 @@ def api_cafe_poster_data():
                     bonus = 0
 
                 account_name = info.get('account_name', 'Cafe')
-                print(f"[CAFE SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
+                logger.info(f"[CAFE SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
                       f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}", flush=True)
 
@@ -4808,10 +4809,10 @@ def api_cafe_poster_data():
                         amount_end = int(float(last_shift.get('amount_end', 0)))
                         if amount_end > 0:
                             poster_prev_shift_left = amount_end
-                            print(f"[CAFE SHIFT] getCashShifts prev day ({prev_day}): "
+                            logger.debug(f"[CAFE SHIFT] getCashShifts prev day ({prev_day}): "
                                   f"amount_end={amount_end/100:,.0f}₸", flush=True)
                 except Exception as e:
-                    print(f"[CAFE SHIFT] getCashShifts error: {e}", flush=True)
+                    logger.debug(f"[CAFE SHIFT] getCashShifts error: {e}")
 
                 return {
                     'success': True,
@@ -4844,7 +4845,7 @@ def api_cafe_poster_data():
             if main_closing and main_closing.get('kaspi_cafe'):
                 data['main_kaspi_cafe'] = float(main_closing['kaspi_cafe'])
         except Exception as e:
-            print(f"[CAFE SHIFT] Error looking up main kaspi_cafe: {e}", flush=True)
+            logger.error(f"[CAFE SHIFT] Error looking up main kaspi_cafe: {e}")
 
         return jsonify(data)
 
@@ -5419,7 +5420,7 @@ def api_cafe_transfers():
                 'to': CAFE_ACCOUNTS['cash_left'],
                 'amount': int(round(abs(cashless_diff))),
             })
-            print(f"[CAFE TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
+            logger.info(f"[CAFE TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
         elif cashless_diff > 0.5:
             transfers.append({
@@ -5428,7 +5429,7 @@ def api_cafe_transfers():
                 'to': CAFE_ACCOUNTS['kaspi'],
                 'amount': int(round(cashless_diff)),
             })
-            print(f"[CAFE TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
+            logger.info(f"[CAFE TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
 
         if not transfers:
@@ -5463,7 +5464,7 @@ def api_cafe_transfers():
                         comment=''
                     )
                     results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
-                    print(f"[CAFE TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}", flush=True)
+                    logger.info(f"[CAFE TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}")
             finally:
                 await client.close()
             return results
@@ -5568,7 +5569,7 @@ def api_shift_closing_transfers():
                 'to': MAIN_ACCOUNTS['cash_left'],
                 'amount': int(round(abs(cashless_diff))),
             })
-            print(f"[MAIN TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
+            logger.info(f"[MAIN TRANSFER] Корр. безнала: Каспий→Оставил {int(round(abs(cashless_diff)))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
         elif cashless_diff > 0.5:
             transfers.append({
@@ -5577,7 +5578,7 @@ def api_shift_closing_transfers():
                 'to': MAIN_ACCOUNTS['kaspi'],
                 'amount': int(round(cashless_diff)),
             })
-            print(f"[MAIN TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
+            logger.info(f"[MAIN TRANSFER] Корр. безнала: Оставил→Каспий {int(round(cashless_diff))}₸ "
                   f"(diff={cashless_diff:+,.0f})", flush=True)
 
         if not transfers:
@@ -5606,7 +5607,7 @@ def api_shift_closing_transfers():
                         comment=''
                     )
                     results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
-                    print(f"[MAIN TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}", flush=True)
+                    logger.info(f"[MAIN TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}")
             finally:
                 await client.close()
             return results
@@ -5922,7 +5923,7 @@ def api_cashier_shift_data_save():
 
         db.save_cashier_shift_data(info['telegram_user_id'], date_str, save_data)
 
-        print(f"[CASHIER] Shift data saved for {date_str}: wolt={save_data['wolt']}, "
+        logger.info(f"[CASHIER] Shift data saved for {date_str}: wolt={save_data['wolt']}, "
               f"halyk={save_data['halyk']}, cash_bills={save_data['cash_bills']}, "
               f"cash_coins={save_data['cash_coins']}, expenses={save_data['expenses']}", flush=True)
 
@@ -6219,12 +6220,12 @@ if os.getenv('USE_WEBHOOK') == 'true' or os.getenv('RAILWAY_ENVIRONMENT'):
 
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 Starting Poster Helper Web Interface")
-    print("=" * 60)
-    print(f"📂 Data directory: {config.DATA_DIR}")
-    print(f"👤 Auth: web-session based (no hardcoded user ID)")
-    print(f"🌐 Access at: http://localhost:5000/aliases")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("🚀 Starting Poster Helper Web Interface")
+    logger.info("=" * 60)
+    logger.info(f"📂 Data directory: {config.DATA_DIR}")
+    logger.info(f"👤 Auth: web-session based (no hardcoded user ID)")
+    logger.info(f"🌐 Access at: http://localhost:5000/aliases")
+    logger.info("=" * 60)
 
     app.run(debug=True, port=5000, host='0.0.0.0')

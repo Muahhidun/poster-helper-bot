@@ -2788,12 +2788,13 @@ class UserDatabase:
         conn.close()
         return result
 
-    def update_expense_draft(self, draft_id: int, **kwargs) -> bool:
+    def update_expense_draft(self, draft_id: int, telegram_user_id: int = None, **kwargs) -> bool:
         """
         Обновить черновик расхода
 
         Args:
             draft_id: ID черновика
+            telegram_user_id: ID владельца (если передан — проверяет принадлежность)
             **kwargs: Поля для обновления (expense_type, category, amount, description, etc.)
 
         Returns:
@@ -2806,15 +2807,23 @@ class UserDatabase:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            # Build SET clause
+            # Build SET clause with optional ownership check
             if DB_TYPE == "sqlite":
                 set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
-                query = f"UPDATE expense_drafts SET {set_clause} WHERE id = ?"
-                cursor.execute(query, list(kwargs.values()) + [draft_id])
+                if telegram_user_id is not None:
+                    query = f"UPDATE expense_drafts SET {set_clause} WHERE id = ? AND telegram_user_id = ?"
+                    cursor.execute(query, list(kwargs.values()) + [draft_id, telegram_user_id])
+                else:
+                    query = f"UPDATE expense_drafts SET {set_clause} WHERE id = ?"
+                    cursor.execute(query, list(kwargs.values()) + [draft_id])
             else:
                 set_clause = ", ".join([f"{k} = %s" for k in kwargs.keys()])
-                query = f"UPDATE expense_drafts SET {set_clause} WHERE id = %s"
-                cursor.execute(query, list(kwargs.values()) + [draft_id])
+                if telegram_user_id is not None:
+                    query = f"UPDATE expense_drafts SET {set_clause} WHERE id = %s AND telegram_user_id = %s"
+                    cursor.execute(query, list(kwargs.values()) + [draft_id, telegram_user_id])
+                else:
+                    query = f"UPDATE expense_drafts SET {set_clause} WHERE id = %s"
+                    cursor.execute(query, list(kwargs.values()) + [draft_id])
 
             conn.commit()
             conn.close()
@@ -2824,16 +2833,22 @@ class UserDatabase:
             logger.error(f"Failed to update expense draft: {e}")
             return False
 
-    def delete_expense_draft(self, draft_id: int) -> bool:
-        """Удалить черновик"""
+    def delete_expense_draft(self, draft_id: int, telegram_user_id: int = None) -> bool:
+        """Удалить черновик (если telegram_user_id передан — проверяет принадлежность)"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             if DB_TYPE == "sqlite":
-                cursor.execute("DELETE FROM expense_drafts WHERE id = ?", (draft_id,))
+                if telegram_user_id is not None:
+                    cursor.execute("DELETE FROM expense_drafts WHERE id = ? AND telegram_user_id = ?", (draft_id, telegram_user_id))
+                else:
+                    cursor.execute("DELETE FROM expense_drafts WHERE id = ?", (draft_id,))
             else:
-                cursor.execute("DELETE FROM expense_drafts WHERE id = %s", (draft_id,))
+                if telegram_user_id is not None:
+                    cursor.execute("DELETE FROM expense_drafts WHERE id = %s AND telegram_user_id = %s", (draft_id, telegram_user_id))
+                else:
+                    cursor.execute("DELETE FROM expense_drafts WHERE id = %s", (draft_id,))
 
             conn.commit()
             conn.close()
@@ -2928,8 +2943,8 @@ class UserDatabase:
             logger.error(f"Failed to get expense draft by poster_transaction_id: {e}")
             return None
 
-    def delete_expense_drafts_bulk(self, draft_ids: list) -> int:
-        """Удалить несколько черновиков"""
+    def delete_expense_drafts_bulk(self, draft_ids: list, telegram_user_id: int = None) -> int:
+        """Удалить несколько черновиков (если telegram_user_id передан — только свои)"""
         if not draft_ids:
             return 0
 
@@ -2939,10 +2954,16 @@ class UserDatabase:
 
             if DB_TYPE == "sqlite":
                 placeholders = ",".join(["?" for _ in draft_ids])
-                cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders})", draft_ids)
+                if telegram_user_id is not None:
+                    cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders}) AND telegram_user_id = ?", draft_ids + [telegram_user_id])
+                else:
+                    cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders})", draft_ids)
             else:
                 placeholders = ",".join(["%s" for _ in draft_ids])
-                cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders})", draft_ids)
+                if telegram_user_id is not None:
+                    cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders}) AND telegram_user_id = %s", draft_ids + [telegram_user_id])
+                else:
+                    cursor.execute(f"DELETE FROM expense_drafts WHERE id IN ({placeholders})", draft_ids)
 
             deleted = cursor.rowcount
             conn.commit()
@@ -3994,12 +4015,13 @@ class UserDatabase:
             logger.error(f"Failed to create empty supply draft: {e}")
             return None
 
-    def update_supply_draft(self, supply_draft_id: int, **kwargs) -> bool:
+    def update_supply_draft(self, supply_draft_id: int, telegram_user_id: int = None, **kwargs) -> bool:
         """
         Обновить черновик поставки
 
         Args:
             supply_draft_id: ID черновика
+            telegram_user_id: ID владельца (если передан — проверяет принадлежность)
             **kwargs: Поля для обновления (supplier_name, supplier_id, invoice_date, total_sum, account_id, source)
         """
         if not kwargs:
@@ -4011,12 +4033,20 @@ class UserDatabase:
 
             if DB_TYPE == "sqlite":
                 set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
-                query = f"UPDATE supply_drafts SET {set_clause} WHERE id = ?"
-                cursor.execute(query, list(kwargs.values()) + [supply_draft_id])
+                if telegram_user_id is not None:
+                    query = f"UPDATE supply_drafts SET {set_clause} WHERE id = ? AND telegram_user_id = ?"
+                    cursor.execute(query, list(kwargs.values()) + [supply_draft_id, telegram_user_id])
+                else:
+                    query = f"UPDATE supply_drafts SET {set_clause} WHERE id = ?"
+                    cursor.execute(query, list(kwargs.values()) + [supply_draft_id])
             else:
                 set_clause = ", ".join([f"{k} = %s" for k in kwargs.keys()])
-                query = f"UPDATE supply_drafts SET {set_clause} WHERE id = %s"
-                cursor.execute(query, list(kwargs.values()) + [supply_draft_id])
+                if telegram_user_id is not None:
+                    query = f"UPDATE supply_drafts SET {set_clause} WHERE id = %s AND telegram_user_id = %s"
+                    cursor.execute(query, list(kwargs.values()) + [supply_draft_id, telegram_user_id])
+                else:
+                    query = f"UPDATE supply_drafts SET {set_clause} WHERE id = %s"
+                    cursor.execute(query, list(kwargs.values()) + [supply_draft_id])
 
             conn.commit()
             conn.close()
@@ -4084,16 +4114,22 @@ class UserDatabase:
             logger.error(f"Failed to add supply draft item: {e}")
             return None
 
-    def delete_supply_draft_item(self, item_id: int) -> bool:
-        """Удалить позицию из черновика поставки"""
+    def delete_supply_draft_item(self, item_id: int, telegram_user_id: int = None) -> bool:
+        """Удалить позицию из черновика поставки. Если telegram_user_id передан — проверяет через supply_drafts."""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             if DB_TYPE == "sqlite":
-                cursor.execute("DELETE FROM supply_draft_items WHERE id = ?", (item_id,))
+                if telegram_user_id is not None:
+                    cursor.execute("DELETE FROM supply_draft_items WHERE id = ? AND supply_draft_id IN (SELECT id FROM supply_drafts WHERE telegram_user_id = ?)", (item_id, telegram_user_id))
+                else:
+                    cursor.execute("DELETE FROM supply_draft_items WHERE id = ?", (item_id,))
             else:
-                cursor.execute("DELETE FROM supply_draft_items WHERE id = %s", (item_id,))
+                if telegram_user_id is not None:
+                    cursor.execute("DELETE FROM supply_draft_items WHERE id = %s AND supply_draft_id IN (SELECT id FROM supply_drafts WHERE telegram_user_id = %s)", (item_id, telegram_user_id))
+                else:
+                    cursor.execute("DELETE FROM supply_draft_items WHERE id = %s", (item_id,))
 
             conn.commit()
             conn.close()
@@ -4207,12 +4243,13 @@ class UserDatabase:
         conn.close()
         return draft
 
-    def update_supply_draft_item(self, item_id: int, **kwargs) -> bool:
+    def update_supply_draft_item(self, item_id: int, telegram_user_id: int = None, **kwargs) -> bool:
         """
         Обновить позицию в черновике поставки
 
         Args:
             item_id: ID позиции
+            telegram_user_id: ID владельца (если передан — проверяет через supply_drafts)
             **kwargs: Поля для обновления (poster_ingredient_id, poster_ingredient_name, quantity, etc.)
 
         Returns:
@@ -4227,12 +4264,20 @@ class UserDatabase:
 
             if DB_TYPE == "sqlite":
                 set_clause = ", ".join([f"{k} = ?" for k in kwargs.keys()])
-                query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = ?"
-                cursor.execute(query, list(kwargs.values()) + [item_id])
+                if telegram_user_id is not None:
+                    query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = ? AND supply_draft_id IN (SELECT id FROM supply_drafts WHERE telegram_user_id = ?)"
+                    cursor.execute(query, list(kwargs.values()) + [item_id, telegram_user_id])
+                else:
+                    query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = ?"
+                    cursor.execute(query, list(kwargs.values()) + [item_id])
             else:
                 set_clause = ", ".join([f"{k} = %s" for k in kwargs.keys()])
-                query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = %s"
-                cursor.execute(query, list(kwargs.values()) + [item_id])
+                if telegram_user_id is not None:
+                    query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = %s AND supply_draft_id IN (SELECT id FROM supply_drafts WHERE telegram_user_id = %s)"
+                    cursor.execute(query, list(kwargs.values()) + [item_id, telegram_user_id])
+                else:
+                    query = f"UPDATE supply_draft_items SET {set_clause} WHERE id = %s"
+                    cursor.execute(query, list(kwargs.values()) + [item_id])
 
             conn.commit()
             conn.close()
@@ -4242,35 +4287,22 @@ class UserDatabase:
             logger.error(f"Failed to update supply draft item: {e}")
             return False
 
-    def delete_supply_draft_item(self, item_id: int) -> bool:
-        """Удалить отдельную позицию из черновика поставки"""
+    def delete_supply_draft(self, supply_draft_id: int, telegram_user_id: int = None) -> bool:
+        """Удалить черновик поставки (вместе с позициями благодаря CASCADE). Если telegram_user_id передан — проверяет принадлежность."""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             if DB_TYPE == "sqlite":
-                cursor.execute("DELETE FROM supply_draft_items WHERE id = ?", (item_id,))
+                if telegram_user_id is not None:
+                    cursor.execute("DELETE FROM supply_drafts WHERE id = ? AND telegram_user_id = ?", (supply_draft_id, telegram_user_id))
+                else:
+                    cursor.execute("DELETE FROM supply_drafts WHERE id = ?", (supply_draft_id,))
             else:
-                cursor.execute("DELETE FROM supply_draft_items WHERE id = %s", (item_id,))
-
-            conn.commit()
-            conn.close()
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to delete supply draft item: {e}")
-            return False
-
-    def delete_supply_draft(self, supply_draft_id: int) -> bool:
-        """Удалить черновик поставки (вместе с позициями благодаря CASCADE)"""
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-
-            if DB_TYPE == "sqlite":
-                cursor.execute("DELETE FROM supply_drafts WHERE id = ?", (supply_draft_id,))
-            else:
-                cursor.execute("DELETE FROM supply_drafts WHERE id = %s", (supply_draft_id,))
+                if telegram_user_id is not None:
+                    cursor.execute("DELETE FROM supply_drafts WHERE id = %s AND telegram_user_id = %s", (supply_draft_id, telegram_user_id))
+                else:
+                    cursor.execute("DELETE FROM supply_drafts WHERE id = %s", (supply_draft_id,))
 
             conn.commit()
             conn.close()

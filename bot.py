@@ -18,7 +18,7 @@ from telegram.ext import (
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
     DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL,
-    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH
+    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH, LOG_LEVEL
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -55,7 +55,7 @@ import pytz
 # Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=getattr(logging, LOG_LEVEL, logging.INFO)
 )
 logger = logging.getLogger(__name__)
 
