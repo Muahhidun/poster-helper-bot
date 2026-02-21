@@ -65,67 +65,41 @@
 
 ---
 
-## ЭТАП 2: Удаление мёртвого кода
+## ~~ЭТАП 2: Удаление мёртвого кода~~ ГОТОВО
 
-### 2.1 Удалить неиспользуемые файлы
+### 2.1-2.5 ~~Удаление файлов и хендлеров~~ ГОТОВО
 
-| Файл | Строк | Статус | Примечание |
-|------|-------|--------|-----------|
-| `invoice_processor.py` | 384 | Нигде не импортируется | Удалить |
-| `invoice_ocr_gpt4_only.py` | 197 | Нигде не импортируется | Удалить |
-| `advanced_supply_parser.py` | 325 | Нигде не импортируется | Удалить |
+**Удалённые файлы (8 шт):**
+- [x] `invoice_processor.py` (384 строки)
+- [x] `invoice_ocr_gpt4_only.py` (197 строк)
+- [x] `advanced_supply_parser.py` (325 строк)
+- [x] `invoice_ocr.py` (302 строки)
+- [x] `receipt_handler.py` (223 строки)
+- [x] `receipt_ocr.py` (170 строк)
+- [x] `stt_service.py` (54 строки)
 
-- [ ] Удалить `invoice_processor.py`
-- [ ] Удалить `invoice_ocr_gpt4_only.py`
-- [ ] Удалить `advanced_supply_parser.py`
+**Удалённые хендлеры в bot.py:**
+- [x] `handle_voice` — голосовой ввод (Whisper)
+- [x] `handle_document` — Excel/Kaspi
+- [x] `handle_supply_photo` — OCR фото накладных
+- [x] `handle_delete_order_callback` — удаление заказа по чеку
+- [x] Callback обработчики `delete_order:`, `cancel_order_delete`, `delete_receipt_mode`, `cancel_receipt_delete`
+- [x] Кнопка "Удалить чек" из меню
+- [x] Регистрация voice и document handler-ов
+- [x] `handle_photo` упрощён — только expense_input фото
 
-### 2.2 Удалить функционал OCR накладных (фото → поставка)
+**Удалённые скрипты (19 шт):**
+- [x] `migrate_aliases_to_db.py`, `import_aliases_to_railway.py`, `add_pizzburg_cafe.py`
+- [x] `fix_poster_urls.py`, `get_pizzburg_cafe_ids.py`, `check_aliases.py`
+- [x] `check_suppliers.py`, `show_all_products.py`, `fetch_types.py`
+- [x] `get_sales_direct.py`, `add_partner.py`, `add_account_command.py`
+- [x] `railway_aliases.py`, `add_user_aliases.py`, `check_doner_sales_nov20.py`
+- [x] `check_subscriptions.py`, `invoice_manual_selection.py`, `poster_links.py`
+- [x] `test_migration.py`
 
-**Контекст:** Пользователь подтвердил что OCR накладных не нужен — ручной ввод через веб-интерфейс быстрее и точнее.
-
-**Файлы для удаления:**
-- [ ] `invoice_ocr.py` (302 строки) — GPT-4 Vision OCR, импортируется из `handle_photo` в bot.py
-- [ ] Убрать `handle_photo` обработчик в `bot.py` (или убрать OCR-часть, оставив другое)
-
-### 2.3 Удалить функционал чеков (receipt)
-
-- [ ] `receipt_handler.py` (223 строки) — импортируется из bot.py
-- [ ] `receipt_ocr.py` (170 строк) — зависимость receipt_handler
-- [ ] Убрать импорты и вызовы в `bot.py` (строки 1668, 4847)
-
-### 2.4 Удалить голосовой ввод (STT)
-
-- [ ] `stt_service.py` (54 строки) — Whisper API
-- [ ] Убрать `handle_voice` обработчик и импорт `from stt_service import get_stt_service` в `bot.py` (строка 25)
-
-### 2.5 Удалить обработчик Excel/Kaspi
-
-- [ ] Убрать `handle_document` обработчик в `bot.py` (строка 1836+) — Excel файлы Kaspi больше не актуальны
-- [ ] Убрать регистрацию хендлера (строка 6758)
-
-### 2.6 Удалить одноразовые утилитные скрипты
-
-- [ ] `migrate_aliases_to_db.py` — миграция завершена
-- [ ] `import_aliases_to_railway.py` — одноразовый
-- [ ] `add_pizzburg_cafe.py` — аккаунт уже добавлен
-- [ ] `fix_poster_urls.py` — баг исправлен
-- [ ] `get_pizzburg_cafe_ids.py` — отладочный
-- [ ] `check_aliases.py` — диагностика
-- [ ] `check_suppliers.py` — диагностика
-- [ ] `show_all_products.py` — разовое исследование
-- [ ] `fetch_types.py` — разовое исследование
-- [ ] `get_sales_direct.py` — тест API
-- [ ] `add_partner.py` — одноразовый
-- [ ] `add_account_command.py` — одноразовый
-
-### 2.7 Удалить устаревшую документацию
-
-- [ ] `ETAP1_COMPLETE.md` — исторический артефакт
-- [ ] `PR_DESCRIPTION.md` — разовый PR
-- [ ] `MANUAL_CHECK.md` — устарел
-- [ ] `RAILWAY_GRPC_FIX.md` — проблема решена
-- [ ] `MULTI_ACCOUNT_PLAN.md` — реализовано
-- [ ] `SALARY_FLOW_IMPLEMENTATION.md` — реализовано
+**Удалённая документация (6 шт):**
+- [x] `ETAP1_COMPLETE.md`, `PR_DESCRIPTION.md`, `MANUAL_CHECK.md`
+- [x] `RAILWAY_GRPC_FIX.md`, `MULTI_ACCOUNT_PLAN.md`, `SALARY_FLOW_IMPLEMENTATION.md`
 
 ### 2.8 Удалить mock данные из API
 

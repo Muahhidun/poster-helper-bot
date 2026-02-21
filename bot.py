@@ -22,7 +22,6 @@ from config import (
 )
 from database import get_database
 from poster_client import get_poster_client
-from stt_service import get_stt_service
 from parser_service import get_parser_service
 from simple_parser import get_simple_parser
 from matchers import get_category_matcher, get_account_matcher, get_supplier_matcher, get_ingredient_matcher, get_product_matcher
@@ -79,7 +78,7 @@ def get_main_menu_keyboard():
 def get_more_menu_keyboard():
     """Подменю 'Ещё' - ReplyKeyboard"""
     keyboard = [
-        [KeyboardButton("🏪 Закрыть кассу"), KeyboardButton("🗑️ Удалить чек")],
+        [KeyboardButton("🏪 Закрыть кассу")],
         [KeyboardButton("📊 Отчёт недели"), KeyboardButton("📈 Отчёт месяца")],
         [KeyboardButton("📝 Транзакции"), KeyboardButton("← Назад")]
     ]
@@ -1581,52 +1580,6 @@ async def check_discrepancy_command(update: Update, context: ContextTypes.DEFAUL
 
 # === Voice Handler ===
 
-@authorized_only
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle voice message"""
-    try:
-        # Log chat info for debugging
-        chat_type = update.message.chat.type
-        user_id = update.effective_user.id
-        logger.info(f"Voice message from user {user_id} in chat type: {chat_type}")
-
-        await update.message.reply_text("🎤 Распознаю голос...")
-
-        # Download voice file
-        voice_file = await update.message.voice.get_file()
-        voice_path = Path(f"storage/voice_{update.message.message_id}.ogg")
-        await voice_file.download_to_drive(voice_path)
-
-        # Transcribe using Whisper
-        stt_service = get_stt_service()
-        text = await stt_service.transcribe(voice_path)
-
-        # Clean up voice file
-        voice_path.unlink()
-
-        await update.message.reply_text(f"📝 Распознано:\n\"{text}\"")
-
-        # Process as text
-        await process_transaction_text(update, context, text)
-
-    except Exception as e:
-        logger.error(f"Voice handling failed: {e}")
-
-        # Check if it's OpenAI quota error
-        error_str = str(e)
-        if 'quota' in error_str.lower() or '429' in error_str:
-            await update.message.reply_text(
-                "❌ Закончилась квота OpenAI для распознавания голоса.\n\n"
-                "**Пожалуйста, отправьте текстом:**\n"
-                'Например: "Донерщик 7500 Максат"'
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Ошибка обработки голоса:\n{str(e)[:200]}\n\n"
-                f"Попробуйте отправить текстом."
-            )
-
-
 # === Photo Handler ===
 
 @authorized_only
@@ -1653,306 +1606,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_path.unlink()
             return
 
-        # Check if user is in supply input mode
-        supply_input = context.user_data.get('supply_input')
-        if supply_input and supply_input.get('mode') == 'waiting_invoice':
-            await handle_supply_photo(update, context, str(photo_path))
-            photo_path.unlink()
-            return
-
-        # Check if user is in receipt deletion mode
-        waiting_for_receipt = context.user_data.get('waiting_for_receipt_photo', False)
-
-        if waiting_for_receipt:
-            # User explicitly wants to delete a receipt - only use receipt OCR
-            from receipt_handler import process_receipt_photo, format_order_details
-            receipt_result = await process_receipt_photo(telegram_user_id, str(photo_path))
-
-            # Clear the flag
-            context.user_data.pop('waiting_for_receipt_photo', None)
-
-            # Clean up photo file
-            photo_path.unlink()
-
-            if not receipt_result.get('success'):
-                await update.message.reply_text(
-                    f"❌ Не удалось распознать чек:\n{receipt_result.get('error', 'Неизвестная ошибка')}\n\n"
-                    f"Попробуйте сфотографировать чек более чётко, чтобы были видны:\n"
-                    f"- Дата и время\n"
-                    f"- Сумма к оплате"
-                )
-                return
-
-            receipt_data = receipt_result['receipt_data']
-            orders = receipt_result['orders']
-
-            if not orders:
-                await update.message.reply_text(
-                    f"⚠️ Заказы не найдены\n\n"
-                    f"📅 Дата: {receipt_data['date']}\n"
-                    f"🕐 Время: {receipt_data['time']}\n"
-                    f"💰 Сумма: {receipt_data['amount']/100:,.0f}₸\n\n"
-                    f"Возможно:\n"
-                    f"- Заказ уже был удалён\n"
-                    f"- Неверная дата/время/сумма на чеке\n"
-                    f"- Заказ был создан в другой день"
-                )
-                return
-
-            # Показать найденные заказы с кнопками удаления
-            if len(orders) == 1:
-                order = orders[0]
-                message_text = (
-                    f"✅ Найден заказ по чеку:\n\n"
-                    f"{format_order_details(order)}\n\n"
-                    f"Удалить этот заказ?"
-                )
-                keyboard = [
-                    [
-                        InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_order:{order['transaction_id']}"),
-                        InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")
-                    ]
-                ]
-            else:
-                # Несколько заказов найдено
-                message_text = f"✅ Найдено {len(orders)} заказ(а/ов) по чеку:\n\n"
-                keyboard = []
-
-                for i, order in enumerate(orders, 1):
-                    message_text += f"{i}. {format_order_details(order)}\n\n"
-                    keyboard.append([
-                        InlineKeyboardButton(
-                            f"🗑️ Удалить #{order['transaction_id']}",
-                            callback_data=f"delete_order:{order['transaction_id']}"
-                        )
-                    ])
-
-                keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_order_delete")])
-                message_text += "\nВыберите заказ для удаления:"
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-            return
-
-        # Not in receipt mode - process as invoice (Document AI OCR + GPT-4)
-        logger.info("📸 Processing photo as invoice (Document AI OCR + GPT-4)...")
-
-        import invoice_ocr
-        import json
-
-        # Send initial processing message
-        step_msg = await update.message.reply_text("🤖 Распознаю накладную (Document AI OCR + GPT-4)...")
-
-        try:
-            # 1. Получить URL изображения из Telegram
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                url = f"https://api.telegram.org/bot{context.bot.token}/getFile?file_id={photo.file_id}"
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        raise Exception(f"Failed to get file info: {response.status}")
-                    data = await response.json()
-                    file_path = data['result']['file_path']
-                file_url = f"https://api.telegram.org/file/bot{context.bot.token}/{file_path}"
-
-            # 2. Распознать через Document AI + GPT-4
-            ocr_result = await invoice_ocr.recognize_invoice_from_url(file_url)
-
-            # Clean up photo file
-            photo_path.unlink()
-
-            if not ocr_result.get('success'):
-                await step_msg.edit_text(f"❌ Ошибка распознавания: {ocr_result.get('error')}")
-                return
-
-            # 3. Сформировать текст в формате текстовой поставки
-            items = ocr_result.get('items', [])
-            if not items:
-                await step_msg.edit_text("❌ Не найдено товаров в накладной")
-                return
-
-            # Формат: Поставка\nПоставщик [название]\nСо счета [счет]\n[Название] [кол-во] по [цена]
-            supply_text_lines = ["Поставка"]
-
-            # Поставщик (если распознан)
-            supplier_name = ocr_result.get('supplier_name')
-            if supplier_name:
-                supply_text_lines.append(f"Поставщик {supplier_name}")
-
-            # Счёт (по умолчанию Каспий)
-            supply_text_lines.append("Со счета Каспий")
-
-            # Товары
-            for item in items:
-                name = item['name']
-                quantity = item['quantity']
-                price = item['price']
-                supply_text_lines.append(f"{name} {quantity} по {price}")
-
-            supply_text = "\n".join(supply_text_lines)
-
-            # Показать распознанный текст
-            await step_msg.edit_text(
-                f"✅ Накладная распознана (GPT-4 Vision)!\n\n"
-                f"📦 Поставщик: {supplier_name or 'Не распознан'}\n"
-                f"📊 Товаров: {len(items)}\n\n"
-                f"Текст для обработки:\n```\n{supply_text[:1000]}\n```",
-                parse_mode='Markdown'
-            )
-
-            # 4. Передать в обработчик текстовых поставок
-            from parser_service import get_parser_service
-            from simple_parser import get_simple_parser
-
-            # Попробовать распарсить через парсер
-            parsed = None
-            try:
-                parser = get_parser_service()
-                parsed = await parser.parse_transaction(supply_text)
-            except Exception as e:
-                logger.warning(f"Claude parser failed: {e}, trying simple parser")
-
-            # Fallback to simple parser
-            if not parsed:
-                simple_parser = get_simple_parser()
-                parsed = simple_parser.parse_transaction(supply_text)
-
-            if not parsed or parsed.get('type') != 'supply':
-                await update.message.reply_text("❌ Не удалось распарсить текст поставки")
-                return
-
-            # Передать в process_supply
-            await process_supply(update, context, parsed)
-
-        except Exception as e:
-            logger.error(f"Invoice processing failed: {e}", exc_info=True)
-            await step_msg.edit_text(f"❌ Ошибка обработки накладной: {str(e)[:200]}")
+        # No active photo mode — ignore
+        photo_path.unlink()
+        await update.message.reply_text("Фото не обработано. Используйте веб-интерфейс для поставок и расходов.")
 
     except Exception as e:
         logger.error(f"Photo processing failed: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Ошибка обработки фото: {str(e)[:200]}")
-
-
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle document message (XLSX files for Kaspi statements)"""
-    try:
-        telegram_user_id = update.effective_user.id
-        document = update.message.document
-
-        if not document:
-            return
-
-        file_name = document.file_name or ""
-        logger.info(f"📄 Document received from user {telegram_user_id}: {file_name}")
-
-        # Проверяем расширение файла
-        is_xlsx = file_name.lower().endswith(('.xlsx', '.xls'))
-
-        if not is_xlsx:
-            await update.message.reply_text(
-                "❌ Поддерживаются только XLSX файлы (выписки Kaspi).\n\n"
-                "Для фото используйте обычную отправку изображений."
-            )
-            return
-
-        # Проверяем режим expense_input
-        expense_input = context.user_data.get('expense_input')
-
-        if not expense_input:
-            # Автоматически включаем режим для Kaspi
-            context.user_data['expense_input'] = {
-                'mode': 'waiting_photo',
-                'items': [],
-                'source': 'kaspi'
-            }
-            expense_input = context.user_data['expense_input']
-
-        await update.message.reply_text("📄 Обрабатываю выписку Kaspi...")
-
-        # Скачиваем файл
-        file = await document.get_file()
-        file_path = Path(f"storage/kaspi_{update.message.message_id}.xlsx")
-        await file.download_to_drive(file_path)
-
-        try:
-            from expense_input import (
-                parse_kaspi_xlsx,
-                ExpenseSession,
-                ExpenseType,
-                format_expense_list
-            )
-
-            # Парсим XLSX (с алиасами поставщиков)
-            items = parse_kaspi_xlsx(str(file_path), telegram_user_id=telegram_user_id)
-
-            if not items:
-                await update.message.reply_text(
-                    "❌ Не найдено расходов в выписке.\n\n"
-                    "Убедитесь что это выписка с расходами (Дебет), а не приходами."
-                )
-                return
-
-            # Сохраняем черновики в БД для веб-интерфейса
-            from database import get_database
-            db = get_database()
-            db.save_expense_drafts(
-                telegram_user_id=update.effective_user.id,
-                items=items,
-                source="kaspi",
-                source_account="Kaspi Pay"
-            )
-
-            # Сохраняем в сессию
-            expense_input['items'] = items
-            expense_input['mode'] = 'review'
-            expense_input['source'] = 'kaspi'
-
-            # Создаём сессию
-            session = ExpenseSession(
-                items=items,
-                source_account="Kaspi Pay"
-            )
-            expense_input['session'] = session
-
-            # Форматируем список
-            text = format_expense_list(session)
-
-            # Создаём inline кнопки для каждой позиции
-            keyboard = []
-            for i, item in enumerate(items[:15]):  # Ограничиваем 15 позициями для кнопок
-                type_label = "📦→💰" if item.expense_type == ExpenseType.SUPPLY else "💰→📦"
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"{i+1}. {type_label} {item.description[:20]}",
-                        callback_data=f"exp_toggle:{item.id}"
-                    )
-                ])
-
-            if len(items) > 15:
-                text += f"\n\n⚠️ Показаны кнопки для первых 15 из {len(items)} позиций"
-
-            # Кнопки действий
-            keyboard.append([
-                InlineKeyboardButton("✅ Создать транзакции", callback_data="exp_create_kaspi"),
-                InlineKeyboardButton("❌ Отмена", callback_data="exp_cancel")
-            ])
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await update.message.reply_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-
-        finally:
-            # Удаляем временный файл
-            if file_path.exists():
-                file_path.unlink()
-
-    except Exception as e:
-        logger.error(f"Document processing failed: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Ошибка обработки файла: {str(e)[:200]}")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2004,20 +1664,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "💰 **Расчёт зарплат**\n\n"
             "Сколько кассиров на смене сегодня?",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return
-
-    elif text == "🗑️ Удалить чек":
-        # Активировать режим удаления чека
-        context.user_data['waiting_for_receipt_photo'] = True
-        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel_receipt_delete")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "📸 **Режим удаления чека активирован**\n\n"
-            "Отправьте фото чека, который нужно удалить.\n\n"
-            "Бот распознает дату, время и сумму, найдёт заказ в Poster и предложит его удалить.",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -4424,107 +4070,6 @@ async def handle_supply_mode_start(update: Update, context: ContextTypes.DEFAULT
     )
 
 
-async def handle_supply_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_path: str):
-    """Обработка фото накладной в режиме поставок"""
-    from invoice_ocr import recognize_invoice
-    from database import get_database
-
-    telegram_user_id = update.effective_user.id
-    db = get_database()
-
-    try:
-        await update.message.reply_text("🔍 Распознаю накладную...")
-
-        # OCR накладной
-        ocr_result = await recognize_invoice(photo_path)
-
-        if not ocr_result.get('success'):
-            await update.message.reply_text(
-                f"❌ Ошибка распознавания: {ocr_result.get('error', 'Неизвестная ошибка')}\n\n"
-                "Попробуйте сфотографировать накладную более чётко."
-            )
-            return
-
-        supplier_name = ocr_result.get('supplier_name', 'Неизвестный поставщик')
-        invoice_date = ocr_result.get('invoice_date')
-        items = ocr_result.get('items', [])
-        total_sum = ocr_result.get('total_sum')
-        ocr_text = ocr_result.get('ocr_text', '')
-
-        if not items:
-            await update.message.reply_text("❌ Не найдено товаров в накладной")
-            return
-
-        # Получаем pending расходы для связывания
-        pending_supplies = db.get_pending_supply_items(telegram_user_id)
-
-        # Пытаемся найти соответствие по сумме
-        linked_expense_draft_id = None
-        if total_sum and pending_supplies:
-            for ps in pending_supplies:
-                # Ищем точное или близкое соответствие по сумме (±5%)
-                if abs(ps['amount'] - total_sum) <= total_sum * 0.05:
-                    linked_expense_draft_id = ps['id']
-                    break
-
-        # Сохраняем черновик поставки
-        supply_draft_id = db.save_supply_draft(
-            telegram_user_id=telegram_user_id,
-            supplier_name=supplier_name,
-            invoice_date=invoice_date,
-            items=items,
-            total_sum=total_sum,
-            linked_expense_draft_id=linked_expense_draft_id,
-            ocr_text=ocr_text
-        )
-
-        if not supply_draft_id:
-            await update.message.reply_text("❌ Ошибка сохранения черновика поставки")
-            return
-
-        # Формируем ответ
-        text = f"✅ **Накладная распознана**\n\n"
-        text += f"📦 Поставщик: {supplier_name}\n"
-        text += f"📅 Дата: {invoice_date or 'не распознана'}\n"
-        text += f"📊 Товаров: {len(items)}\n"
-
-        if total_sum:
-            text += f"💰 Сумма: {total_sum:,.0f}₸\n"
-
-        if linked_expense_draft_id:
-            text += f"\n🔗 Связано с расходом из листа кассира\n"
-
-        text += f"\n**Товары:**\n"
-        for i, item in enumerate(items[:8], 1):
-            name = item.get('name', '?')[:25]
-            qty = item.get('quantity', 0)
-            unit = item.get('unit', 'шт')
-            price = item.get('price', 0)
-            text += f"{i}. {name} — {qty} {unit} × {price:,.0f}₸\n"
-
-        if len(items) > 8:
-            text += f"... и ещё {len(items) - 8} позиций\n"
-
-        text += f"\n📝 Черновик #{supply_draft_id} сохранён.\n"
-        text += "Откройте веб-интерфейс /supplies для редактирования."
-
-        # Кнопки действий
-        keyboard = [
-            [
-                InlineKeyboardButton("📦 Создать поставку", callback_data=f"supply_create:{supply_draft_id}"),
-                InlineKeyboardButton("🗑️ Удалить", callback_data=f"supply_delete:{supply_draft_id}")
-            ]
-        ]
-
-        await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка обработки фото поставки: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Ошибка: {str(e)[:200]}")
 
 
 async def handle_supply_input_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
@@ -4836,41 +4381,6 @@ async def handle_cash_closing_confirm(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(f"❌ Ошибка:\n{str(e)[:300]}")
 
 
-async def handle_delete_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, transaction_id: int):
-    """Обработка удаления заказа по ID"""
-    query = update.callback_query
-    telegram_user_id = update.effective_user.id
-
-    await query.edit_message_text(f"🗑️ Удаляю заказ #{transaction_id}...")
-
-    try:
-        from receipt_handler import delete_order_by_id
-
-        success = await delete_order_by_id(telegram_user_id, transaction_id)
-
-        if success:
-            await query.edit_message_text(
-                f"✅ Заказ #{transaction_id} успешно удалён!\n\n"
-                f"Чек был удалён из системы Poster.\n"
-                f"Обновлены:\n"
-                f"- Отчёты\n"
-                f"- Кассовая смена\n"
-                f"- Товары вернулись на склад"
-            )
-        else:
-            await query.edit_message_text(
-                f"❌ Не удалось удалить заказ #{transaction_id}\n\n"
-                f"Возможно:\n"
-                f"- Заказ уже был удалён\n"
-                f"- Проблема с доступом к API\n"
-                f"- Неверный ID заказа"
-            )
-
-    except Exception as e:
-        logger.error(f"Ошибка удаления заказа {transaction_id}: {e}", exc_info=True)
-        await query.edit_message_text(
-            f"❌ Ошибка при удалении заказа:\n{str(e)[:200]}"
-        )
 
 
 async def handle_confirm_supply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, supply_id: int):
@@ -5248,23 +4758,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "close_cash_register":
         await handle_close_cash_register_callback(update, context)
         return
-    elif query.data == "delete_receipt_mode":
-        # Активировать режим удаления чека
-        context.user_data['waiting_for_receipt_photo'] = True
-        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel_receipt_delete")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "📸 **Режим удаления чека активирован**\n\n"
-            "Отправьте фото чека, который нужно удалить.\n\n"
-            "Бот распознает дату, время и сумму, найдёт заказ в Poster и предложит его удалить.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return
-    elif query.data == "cancel_receipt_delete":
-        context.user_data.pop('waiting_for_receipt_photo', None)
-        await query.edit_message_text("❌ Режим удаления чека отменён.")
-        return
     elif query.data.startswith("close_cash_dept:"):
         # Выбран отдел для закрытия
         dept = query.data.split(":")[1]
@@ -5391,13 +4884,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔍 Введите название ингредиента:\n\n"
             "Например: чеддер весовой, пломбир, молоко и т.д."
         )
-    elif query.data.startswith("delete_order:"):
-        # Delete order by ID
-        transaction_id = int(query.data.split(":")[1])
-        await handle_delete_order_callback(update, context, transaction_id)
-    elif query.data == "cancel_order_delete":
-        await query.edit_message_text("❌ Удаление отменено.")
-        return
     elif query.data.startswith("confirm_supply:"):
         # Confirm supply by ID
         supply_id = int(query.data.split(":")[1])
@@ -6753,9 +6239,7 @@ def initialize_application():
     app.add_handler(CommandHandler("edit_template", edit_template_command))
     app.add_handler(CommandHandler("delete_template", delete_template_command))
 
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
