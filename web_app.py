@@ -457,96 +457,6 @@ def validate_api_request():
             g.user_id = session['telegram_user_id']
 
 
-@app.route('/api/dashboard')
-def api_dashboard():
-    """Dashboard data for Mini App"""
-    # TODO: Implement statistics service
-    # For now, return mock data
-    return jsonify({
-        'supplies_count': 45,
-        'items_count': 312,
-        'avg_accuracy': 89.4,
-        'accuracy_trend': [
-            {'date': '2024-10-29', 'accuracy': 85.2},
-            {'date': '2024-10-30', 'accuracy': 87.1},
-            {'date': '2024-10-31', 'accuracy': 88.5},
-            {'date': '2024-11-01', 'accuracy': 90.2},
-            {'date': '2024-11-02', 'accuracy': 89.8},
-            {'date': '2024-11-03', 'accuracy': 91.3},
-            {'date': '2024-11-04', 'accuracy': 89.4},
-        ],
-        'top_problematic': [
-            {'item': 'Сухари панировочные', 'count': 5},
-            {'item': 'Перчатки виниловые', 'count': 3},
-        ]
-    })
-
-
-@app.route('/api/supplies')
-def api_supplies():
-    """List supplies with pagination for Mini App"""
-    # TODO: Implement in database.py
-    # For now, return mock data
-    return jsonify({
-        'supplies': [
-            {
-                'id': 1,
-                'created_at': '2024-11-04T18:34:00',
-                'supplier_name': 'YAPOSHA MARKET',
-                'items_count': 7,
-                'total_amount': 34350,
-                'avg_confidence': 85.7
-            },
-            {
-                'id': 2,
-                'created_at': '2024-11-04T14:22:00',
-                'supplier_name': 'Inarini',
-                'items_count': 12,
-                'total_amount': 89200,
-                'avg_confidence': 100.0
-            }
-        ],
-        'total': 2,
-        'page': 1,
-        'pages': 1
-    })
-
-
-@app.route('/api/supplies/<int:supply_id>')
-def api_supply_detail(supply_id):
-    """Get supply details for Mini App"""
-    # TODO: Implement in database.py
-    # For now, return mock data
-    return jsonify({
-        'id': supply_id,
-        'created_at': '2024-11-04T18:34:00',
-        'supplier_name': 'YAPOSHA MARKET ЕКИБАСТУЗ',
-        'account_name': 'Каспий',
-        'storage_name': 'Основной склад',
-        'total_amount': 34350,
-        'poster_supply_id': 15238,
-        'items': [
-            {
-                'original_text': 'Соус сырный (на бургер) 1кг',
-                'matched_item_name': 'Соус сырный 1кг',
-                'quantity': 2,
-                'unit': 'шт',
-                'price': 1750,
-                'total': 3500,
-                'confidence_score': 92.5
-            },
-            {
-                'original_text': 'Оливкое масло 5л',
-                'matched_item_name': 'Оливковое масло 5л',
-                'quantity': 1,
-                'unit': 'шт',
-                'price': 9000,
-                'total': 9000,
-                'confidence_score': 77.3
-            }
-        ]
-    })
-
 
 @app.route('/api/aliases')
 def api_aliases():
@@ -1262,31 +1172,27 @@ def list_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        # Load categories from each account with poster_account info
-                        cats = await client.get_categories()
+                        # Parallel: fetch categories, accounts, and transactions simultaneously
+                        cats, accs, transactions = await asyncio.gather(
+                            client.get_categories(),
+                            client.get_accounts(),
+                            client.get_transactions(date_from_str, date_to_str)
+                        )
+
                         logger.debug(f"Loaded {len(cats)} categories from {acc['account_name']}")
                         for c in cats:
-                            # Only include expense categories (type=1), not income (type=0)
                             cat_type = c.get('type', '1')
                             if str(cat_type) != '1':
                                 continue
-                            cat_name = (c.get('category_name') or c.get('name') or '').lower()
-                            # Add poster account info
                             c['poster_account_id'] = acc['id']
                             c['poster_account_name'] = acc['account_name']
-                            # Add all categories (not deduplicated) so user can filter by department
                             all_categories.append(c)
-                            logger.debug(f"  Category: {c.get('category_name') or c.get('name')} (type={cat_type})")
 
-                        # Load finance accounts with poster_account info
-                        accs = await client.get_accounts()
                         for a in accs:
                             a['poster_account_id'] = acc['id']
                             a['poster_account_name'] = acc['account_name']
                         all_accounts.extend(accs)
 
-                        # Load transactions for sync check
-                        transactions = await client.get_transactions(date_from_str, date_to_str)
                         for t in transactions:
                             t['poster_account_id'] = acc['id']
                             t['poster_account_name'] = acc['account_name']
@@ -1590,18 +1496,13 @@ def sync_expenses_from_poster():
                 )
 
                 try:
-                    # Fetch today's transactions
-                    transactions = await client.get_transactions(date_str, date_str)
-                    logger.info(f"📅 Fetched {len(transactions)} transactions for {date_str} from {account['account_name']}")
-
-                    # Also fetch finance accounts for mapping account_id -> account name
-                    finance_accounts = await client.get_accounts()
+                    # Parallel: fetch transactions and accounts simultaneously
+                    transactions, finance_accounts = await asyncio.gather(
+                        client.get_transactions(date_str, date_str),
+                        client.get_accounts()
+                    )
+                    logger.info(f"Fetched {len(transactions)} transactions for {date_str} from {account['account_name']}")
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
-
-                    # Debug: print account map
-                    logger.debug(f"📊 Finance accounts for {account['account_name']}:")
-                    for acc in finance_accounts:
-                        logger.info(f"   - ID {acc.get('account_id')}: {acc.get('account_name') or acc.get('name')}")
 
                     for txn in transactions:
                         # Accept both expense (type=0) and income (type=1) transactions
@@ -1875,8 +1776,11 @@ def api_poster_transactions():
                 )
 
                 try:
-                    transactions = await client.get_transactions(date_str, date_str)
-                    finance_accounts = await client.get_accounts()
+                    # Parallel: fetch transactions and accounts simultaneously
+                    transactions, finance_accounts = await asyncio.gather(
+                        client.get_transactions(date_str, date_str),
+                        client.get_accounts()
+                    )
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
                     for txn in transactions:
@@ -1998,8 +1902,13 @@ def api_get_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        # Load categories
-                        cats = await client.get_categories()
+                        # Parallel: fetch categories, accounts, and transactions simultaneously
+                        cats, accs, transactions = await asyncio.gather(
+                            client.get_categories(),
+                            client.get_accounts(),
+                            client.get_transactions(date_from_str, date_to_str)
+                        )
+
                         for c in cats:
                             cat_type = c.get('type', '1')
                             if str(cat_type) != '1':
@@ -2008,15 +1917,11 @@ def api_get_expenses():
                             c['poster_account_name'] = acc['account_name']
                             all_categories.append(c)
 
-                        # Load finance accounts
-                        accs = await client.get_accounts()
                         for a in accs:
                             a['poster_account_id'] = acc['id']
                             a['poster_account_name'] = acc['account_name']
                         all_accounts.extend(accs)
 
-                        # Load transactions for sync check
-                        transactions = await client.get_transactions(date_from_str, date_to_str)
                         for t in transactions:
                             t['poster_account_id'] = acc['id']
                             t['poster_account_name'] = acc['account_name']
@@ -2286,11 +2191,13 @@ def api_sync_expenses_from_poster():
                 )
 
                 try:
-                    transactions = await client.get_transactions(date_str, date_str)
-                    finance_accounts = await client.get_accounts()
+                    # Parallel: fetch transactions and accounts simultaneously
+                    transactions, finance_accounts = await asyncio.gather(
+                        client.get_transactions(date_str, date_str),
+                        client.get_accounts()
+                    )
                     account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
-                    # Debug: log finance accounts
                     logger.debug(f"[SYNC] Finance accounts for {account['account_name']}:")
                     for acc in finance_accounts:
                         logger.info(f"  - account_id={acc.get('account_id')}, name='{acc.get('account_name') or acc.get('name')}'")
@@ -3792,23 +3699,32 @@ def process_supply(draft_id):
                 )
 
                 try:
-                    # Get suppliers list for this account
-                    suppliers = await client.get_suppliers()
+                    # Parallel: fetch all reference data simultaneously (5 independent calls)
+                    async def _get_storages_safe():
+                        try:
+                            return await client.get_storages()
+                        except Exception:
+                            return []
+
+                    suppliers, finance_accounts, storages, account_ingredients, account_products = await asyncio.gather(
+                        client.get_suppliers(),
+                        client.get_accounts(),
+                        _get_storages_safe(),
+                        client.get_ingredients(),
+                        client.get_products()
+                    )
+
+                    # Process suppliers
                     supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
                     supplier_id = None
-
                     for s in suppliers:
                         if supplier_name.lower() in s.get('supplier_name', '').lower():
                             supplier_id = int(s['supplier_id'])
                             break
-
                     if not supplier_id and suppliers:
                         supplier_id = int(suppliers[0]['supplier_id'])
 
-                    # Get finance accounts for this Poster account
-                    finance_accounts = await client.get_accounts()
-
-                    # Use account_id from draft if set, otherwise auto-detect
+                    # Process finance accounts
                     account_id = draft.get('account_id')
                     if not account_id:
                         source = draft.get('source', 'cash')
@@ -3830,23 +3746,14 @@ def process_supply(draft_id):
                                 if 'закуп' in acc_name or 'оставил' in acc_name:
                                     account_id = int(acc['account_id'])
                                     break
-
                     if not account_id and finance_accounts:
                         account_id = int(finance_accounts[0]['account_id'])
 
+                    # Process storages
+                    api_default_storage_id = int(storages[0]['storage_id']) if storages else 1
+
                     # Prepare ingredients for this account
                     ingredients = []
-
-                    # Get correct default storage for this account from Poster API
-                    try:
-                        storages = await client.get_storages()
-                        api_default_storage_id = int(storages[0]['storage_id']) if storages else 1
-                    except Exception:
-                        api_default_storage_id = 1
-
-                    # Fetch actual ingredients/products from this account to validate IDs
-                    account_ingredients = await client.get_ingredients()
-                    account_products = await client.get_products()
 
                     # Build SEPARATE lookups for ingredients and products (different ID namespaces in Poster)
                     valid_ingredient_ids = {}  # ingredient_id -> (name, type_str)
@@ -4177,11 +4084,26 @@ def api_shift_closing_poster_data():
             account_name = primary_account.get('account_name', 'unknown')
 
             try:
-                # 1. Get sales data from dash.getTransactions (correct source for payment breakdown)
-                result = await client._request('GET', 'dash.getTransactions', params={
-                    'dateFrom': date_param,
-                    'dateTo': date_param
-                })
+                # Parallel: fetch sales data and previous day's cash shift simultaneously
+                target = datetime.strptime(date_param, '%Y%m%d')
+                prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
+
+                async def _fetch_sales():
+                    return await client._request('GET', 'dash.getTransactions', params={
+                        'dateFrom': date_param,
+                        'dateTo': date_param
+                    })
+
+                async def _fetch_cash_shifts():
+                    try:
+                        return await client.get_cash_shifts(prev_day, prev_day)
+                    except Exception as e:
+                        logger.debug(f"[SHIFT] getCashShifts error: {e}")
+                        return None
+
+                result, cash_shifts = await asyncio.gather(_fetch_sales(), _fetch_cash_shifts())
+
+                # Process sales data
                 transactions = result.get('response', [])
                 closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
 
@@ -4194,46 +4116,25 @@ def api_shift_closing_poster_data():
                     total_card += int(tx.get('payed_card', 0))
                     total_sum += int(tx.get('payed_sum', 0))
 
-                # Бонусы (онлайн-оплата) = Оборот - (наличные + карта)
-                # Same formula as cash_shift_closing.py
                 bonus = total_sum - total_cash - total_card
-
-                # Торговля = cash + card (без бонусов)
                 trade_total = total_cash + total_card
 
                 logger.info(f"[SHIFT] {account_name}: оборот={total_sum/100:,.0f}₸, "
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
                       f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}")
 
-                # 2. Get shift_start from Poster getCashShifts API
-                # This is the "Фактический баланс" (actual closing balance) from the previous day's shift
+                # Process cash shifts (previous day's closing balance)
                 poster_prev_shift_left = None
-                try:
-                    target = datetime.strptime(date_param, '%Y%m%d')
-                    prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
-                    logger.debug(f"[SHIFT] Calling getCashShifts for prev_day={prev_day}")
-                    cash_shifts = await client.get_cash_shifts(prev_day, prev_day)
-                    logger.debug(f"[SHIFT] getCashShifts raw response: {cash_shifts}")
-                    if cash_shifts:
-                        last_shift = cash_shifts[-1]
-                        # amount_end might be string or int — handle both
-                        amount_end = int(float(last_shift.get('amount_end', 0)))
-                        logger.debug(f"[SHIFT] Last shift: id={last_shift.get('cash_shift_id')}, "
-                              f"amount_start={last_shift.get('amount_start')}, "
-                              f"amount_end={last_shift.get('amount_end')} (parsed: {amount_end}), "
-                              f"date_start={last_shift.get('date_start')}, "
-                              f"date_end={last_shift.get('date_end')}")
-                        if amount_end > 0:
-                            poster_prev_shift_left = amount_end
-                            logger.debug(f"[SHIFT] ✅ poster_prev_shift_left={amount_end/100:,.0f}₸")
-                        else:
-                            logger.warning(f"[SHIFT] ⚠️ amount_end=0 for prev day")
-                    else:
-                        logger.warning(f"[SHIFT] ⚠️ No cash shifts found for {prev_day}")
-                except Exception as e:
-                    import traceback
-                    logger.debug(f"[SHIFT] getCashShifts error: {e}")
-                    traceback.print_exc()
+                if cash_shifts:
+                    last_shift = cash_shifts[-1]
+                    amount_end = int(float(last_shift.get('amount_end', 0)))
+                    logger.debug(f"[SHIFT] Last shift: id={last_shift.get('cash_shift_id')}, "
+                          f"amount_end={amount_end}, "
+                          f"date_end={last_shift.get('date_end')}")
+                    if amount_end > 0:
+                        poster_prev_shift_left = amount_end
+                else:
+                    logger.warning(f"[SHIFT] No cash shifts found for {prev_day}")
 
                 return {
                     'success': True,
@@ -4772,11 +4673,26 @@ def api_cafe_poster_data():
             )
 
             try:
-                # 1. Sales data from dash.getTransactions
-                result = await client._request('GET', 'dash.getTransactions', params={
-                    'dateFrom': date_param,
-                    'dateTo': date_param
-                })
+                # Parallel: fetch sales data and previous day's cash shift simultaneously
+                target = datetime.strptime(date_param, '%Y%m%d')
+                prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
+
+                async def _fetch_sales():
+                    return await client._request('GET', 'dash.getTransactions', params={
+                        'dateFrom': date_param,
+                        'dateTo': date_param
+                    })
+
+                async def _fetch_cash_shifts():
+                    try:
+                        return await client.get_cash_shifts(prev_day, prev_day)
+                    except Exception as e:
+                        logger.debug(f"[CAFE SHIFT] getCashShifts error: {e}")
+                        return None
+
+                result, cash_shifts = await asyncio.gather(_fetch_sales(), _fetch_cash_shifts())
+
+                # Process sales data
                 transactions = result.get('response', [])
                 closed_transactions = [tx for tx in transactions if tx.get('status') == '2']
 
@@ -4798,21 +4714,13 @@ def api_cafe_poster_data():
                       f"нал={total_cash/100:,.0f}₸, карта={total_card/100:,.0f}₸, "
                       f"бонусы={bonus/100:,.0f}₸, заказов={len(closed_transactions)}")
 
-                # 2. Get shift_start from getCashShifts
+                # Process cash shifts
                 poster_prev_shift_left = None
-                try:
-                    target = datetime.strptime(date_param, '%Y%m%d')
-                    prev_day = (target - timedelta(days=1)).strftime('%Y%m%d')
-                    cash_shifts = await client.get_cash_shifts(prev_day, prev_day)
-                    if cash_shifts:
-                        last_shift = cash_shifts[-1]
-                        amount_end = int(float(last_shift.get('amount_end', 0)))
-                        if amount_end > 0:
-                            poster_prev_shift_left = amount_end
-                            logger.debug(f"[CAFE SHIFT] getCashShifts prev day ({prev_day}): "
-                                  f"amount_end={amount_end/100:,.0f}₸")
-                except Exception as e:
-                    logger.debug(f"[CAFE SHIFT] getCashShifts error: {e}")
+                if cash_shifts:
+                    last_shift = cash_shifts[-1]
+                    amount_end = int(float(last_shift.get('amount_end', 0)))
+                    if amount_end > 0:
+                        poster_prev_shift_left = amount_end
 
                 return {
                     'success': True,

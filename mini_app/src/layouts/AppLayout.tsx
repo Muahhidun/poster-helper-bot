@@ -2,7 +2,6 @@ import { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import {
-  LayoutDashboard,
   Receipt,
   Package,
   Clock,
@@ -14,8 +13,7 @@ interface AppLayoutProps {
 }
 
 const navItems = [
-  { path: '/', label: 'Главная', icon: LayoutDashboard },
-  { path: '/expenses', label: 'Расходы', icon: Receipt },
+  { path: '/', label: 'Расходы', icon: Receipt },
   { path: '/supplies', label: 'Поставки', icon: Package },
   { path: '/shift-closing', label: 'Смена', icon: Clock },
 ]
@@ -40,7 +38,8 @@ export function AppLayout({ children }: AppLayoutProps) {
           {navItems.map((item) => {
             const Icon = item.icon
             const isActive = location.pathname === item.path ||
-              (item.path !== '/' && location.pathname.startsWith(item.path))
+              (item.path !== '/' && location.pathname.startsWith(item.path)) ||
+              (item.path === '/' && location.pathname === '/expenses')
 
             return (
               <NavLink
@@ -90,7 +89,8 @@ export function AppLayout({ children }: AppLayoutProps) {
           {navItems.map((item) => {
             const Icon = item.icon
             const isActive = location.pathname === item.path ||
-              (item.path !== '/' && location.pathname.startsWith(item.path))
+              (item.path !== '/' && location.pathname.startsWith(item.path)) ||
+              (item.path === '/' && location.pathname === '/expenses')
 
             return (
               <NavLink

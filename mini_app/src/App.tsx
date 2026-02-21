@@ -6,11 +6,8 @@ import { initApiClient } from './api/client'
 import { AppLayout } from './layouts/AppLayout'
 
 // Pages
-import { Dashboard } from './pages/Dashboard'
 import { Expenses } from './pages/Expenses'
 import { SupplyDrafts } from './pages/SupplyDrafts'
-import { SupplyHistory } from './pages/SupplyHistory'
-import { SupplyDetail } from './pages/SupplyDetail'
 import { CreateSupply } from './pages/CreateSupply'
 import { Aliases } from './pages/Aliases'
 import { AliasForm } from './pages/AliasForm'
@@ -56,12 +53,10 @@ function AppContent() {
   return (
     <AppLayout>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Expenses />} />
         <Route path="/expenses" element={<Expenses />} />
         <Route path="/supplies" element={<SupplyDrafts />} />
-        <Route path="/supplies/history" element={<SupplyHistory />} />
         <Route path="/supplies/new" element={<CreateSupply />} />
-        <Route path="/supplies/:id" element={<SupplyDetail />} />
         <Route path="/aliases" element={<Aliases />} />
         <Route path="/aliases/new" element={<AliasForm />} />
         <Route path="/aliases/:id/edit" element={<AliasForm />} />

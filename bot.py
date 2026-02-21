@@ -1389,13 +1389,29 @@ async def staff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             role_labels = {'owner': 'Владелец', 'admin': 'Админ', 'cashier': 'Кассир'}
             import os
             base_url = os.environ.get('WEBHOOK_URL', 'https://your-app.railway.app')
-            await update.message.reply_text(
+            # Delete user's command message (contains password in plaintext)
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            pwd_msg = await update.message.chat.send_message(
                 f"✅ Аккаунт создан (ID {user_id})\n\n"
                 f"Роль: {role_labels.get(role, role)}\n"
                 f"Логин: {username}\n"
                 f"Пароль: {password}\n\n"
-                f"Ссылка для входа: {base_url}/login"
+                f"Ссылка для входа: {base_url}/login\n\n"
+                f"⚠️ Это сообщение будет удалено через 60 секунд. Запишите пароль!"
             )
+            # Schedule auto-delete after 60 seconds
+            async def _delete_pwd_msg():
+                import asyncio
+                await asyncio.sleep(60)
+                try:
+                    await pwd_msg.delete()
+                except Exception:
+                    pass
+            import asyncio
+            asyncio.create_task(_delete_pwd_msg())
         else:
             await update.message.reply_text("❌ Ошибка создания. Возможно, логин уже занят.")
         return
@@ -1421,7 +1437,24 @@ async def staff_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             success = db.reset_web_user_password(user_id, telegram_user_id, new_password)
             if success:
-                await update.message.reply_text(f"✅ Пароль для ID {user_id} обновлён.")
+                # Delete user's command message (contains password in plaintext)
+                try:
+                    await update.message.delete()
+                except Exception:
+                    pass
+                pwd_msg = await update.message.chat.send_message(
+                    f"✅ Пароль для ID {user_id} обновлён.\n\n"
+                    f"⚠️ Это сообщение будет удалено через 60 секунд."
+                )
+                async def _delete_reset_msg():
+                    import asyncio
+                    await asyncio.sleep(60)
+                    try:
+                        await pwd_msg.delete()
+                    except Exception:
+                        pass
+                import asyncio
+                asyncio.create_task(_delete_reset_msg())
             else:
                 await update.message.reply_text(f"Аккаунт ID {user_id} не найден.")
         except ValueError:
