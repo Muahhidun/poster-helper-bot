@@ -49,8 +49,11 @@ def _kz_now():
 def run_async(coro):
     """Run an async coroutine from sync Flask code.
     Creates a new event loop, runs the coroutine, and cleans up."""
-
-    return run_async(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 app = Flask(__name__)
 
