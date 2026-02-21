@@ -18,7 +18,7 @@ from telegram.ext import (
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
     DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL,
-    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH, LOG_LEVEL
+    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH, LOG_LEVEL, MIN_MATCH_CONFIDENCE
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -2133,7 +2133,7 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
         account_id = account_matcher.match(account_text)
 
         if not account_id:
-            account_id = 4  # Default: Оставил в кассе
+            account_id = DEFAULT_ACCOUNT_FROM_ID
 
         account_name = account_matcher.get_account_name(account_id)
 
@@ -2209,8 +2209,8 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
                 best_match = product_match
                 is_product_match = True
 
-            # Check if match is good enough (score >= 75 or exact match)
-            if not best_match or best_match[3] < 75:
+            # Check if match is good enough (score >= MIN_MATCH_CONFIDENCE or exact match)
+            if not best_match or best_match[3] < MIN_MATCH_CONFIDENCE:
                 # Need manual selection
                 unmatched_items.append(item)
                 continue
@@ -2540,7 +2540,7 @@ async def process_multiple_expenses(update: Update, context: ContextTypes.DEFAUL
         account_id = account_matcher.match(account_text)
 
         if not account_id:
-            account_id = 4  # Default: Оставил в кассе
+            account_id = DEFAULT_ACCOUNT_FROM_ID
 
         account_name = account_matcher.get_account_name(account_id)
 
@@ -2725,7 +2725,7 @@ async def handle_supplier_selection(update: Update, context: ContextTypes.DEFAUL
     account_id = account_matcher.match(account_text)
 
     if not account_id:
-        account_id = 4  # Default: Оставил в кассе
+        account_id = DEFAULT_ACCOUNT_FROM_ID
 
     account_name = account_matcher.get_account_name(account_id)
 

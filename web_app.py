@@ -3940,7 +3940,7 @@ def search_suppliers():
 @app.route('/shift-closing')
 def shift_closing():
     """Show shift closing page"""
-    return render_template('shift_closing.html')
+    return render_template('shift_closing.html', default_cash_to_leave=config.DEFAULT_CASH_TO_LEAVE)
 
 
 # ========================================
@@ -4116,7 +4116,7 @@ def api_shift_closing_calculate():
         cash_coins = float(data.get('cash_coins', 0))
         shift_start = float(data.get('shift_start', 0))
         expenses = float(data.get('expenses', 0))
-        cash_to_leave = float(data.get('cash_to_leave', 15000))
+        cash_to_leave = float(data.get('cash_to_leave', config.DEFAULT_CASH_TO_LEAVE))
 
         # Poster data (from API, in tiyins - convert to tenge)
         poster_trade = float(data.get('poster_trade', 0)) / 100  # С учётом скидок

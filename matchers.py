@@ -4,7 +4,7 @@ import logging
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 from rapidfuzz import fuzz, process
-from config import CATEGORY_ALIASES_CSV, ACCOUNTS_CSV
+from config import CATEGORY_ALIASES_CSV, ACCOUNTS_CSV, MIN_MATCH_CONFIDENCE
 import config
 
 logger = logging.getLogger(__name__)
@@ -467,7 +467,7 @@ class IngredientMatcher:
 
         logger.info(f"Loaded {len(self.aliases)} ingredient aliases from CSV for user {self.telegram_user_id}")
 
-    def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int, str]]:
+    def match(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE) -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match ingredient by text (aliases, exact, or fuzzy)
 
@@ -586,7 +586,7 @@ class IngredientMatcher:
         logger.warning(f"Ingredient not matched: '{text}'")
         return None
 
-    def match_with_priority(self, text: str, score_cutoff: int = 75, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
+    def match_with_priority(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match ingredient with priority: search in primary account first, then secondary accounts
 
@@ -931,7 +931,7 @@ class ProductMatcher:
 
         logger.info(f"Loaded {len(self.aliases)} product aliases from CSV for user {self.telegram_user_id}")
 
-    def match(self, text: str, score_cutoff: int = 75) -> Optional[Tuple[int, str, str, int, str]]:
+    def match(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE) -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match product by text (aliases, exact, or fuzzy)
 
@@ -1012,7 +1012,7 @@ class ProductMatcher:
         logger.warning(f"Product not matched: '{text}'")
         return None
 
-    def match_with_priority(self, text: str, score_cutoff: int = 75, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
+    def match_with_priority(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match product with priority: search in primary account first, then secondary accounts
 

@@ -70,6 +70,11 @@ DEFAULT_ACCOUNT_FROM_ID = int(os.getenv("DEFAULT_ACCOUNT_FROM_ID", "4"))
 CURRENCY = os.getenv("CURRENCY", "KZT")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Almaty")
 
+# Business defaults
+DEFAULT_CASH_TO_LEAVE = int(os.getenv("DEFAULT_CASH_TO_LEAVE", "15000"))
+MIN_MATCH_CONFIDENCE = int(os.getenv("MIN_MATCH_CONFIDENCE", "75"))
+MAX_INLINE_BUTTONS = int(os.getenv("MAX_INLINE_BUTTONS", "15"))
+
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 

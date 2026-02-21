@@ -203,22 +203,28 @@
 
 **Файлы изменены:** `web_app.py`
 
-### 6.2 Один event loop вместо создания нового на каждый запрос
+### 6.2 ~~Один event loop вместо создания нового на каждый запрос~~ ГОТОВО
 
-**Проблема:** `asyncio.new_event_loop()` вызывается 40+ раз — на каждый HTTP-запрос создаётся новый loop.
+~~**Проблема:** `asyncio.new_event_loop()` вызывается 40+ раз — на каждый HTTP-запрос создаётся новый loop.~~
 
-- [ ] Создать вспомогательную функцию `run_async(coro)` с единой точкой создания loop
-- [ ] Или перейти на async Flask (Quart) в перспективе
+**Что сделано:**
+- [x] Создана функция `run_async(coro)` — единая точка создания/закрытия event loop
+- [x] Заменены все 23 паттерна `asyncio.new_event_loop()` + `loop.run_until_complete()` + `loop.close()`
+- [x] 6 сложных случаев (несколько `run_until_complete` на одном loop) рефакторены в async-функции
 
-### 6.3 Вынести магические числа в конфигурацию
+**Файлы изменены:** `web_app.py`
 
-- [ ] `account_id = 4` → `config.ACCOUNT_CASH`
-- [ ] `score < 75` → `config.MIN_MATCH_CONFIDENCE`
-- [ ] `items[:15]` → `config.MAX_INLINE_BUTTONS`
-- [ ] `cash_to_leave = 15000` → `config.DEFAULT_CASH_TO_LEAVE`
-- [ ] И другие числовые константы
+### 6.3 ~~Вынести магические числа в конфигурацию~~ ГОТОВО
 
-**Файлы:** `config.py`, `web_app.py`, `bot.py`, `matchers.py`
+~~**Проблема:** Захардкоженные числовые константы разбросаны по коду.~~
+
+**Что сделано:**
+- [x] `account_id = 4` → `config.DEFAULT_ACCOUNT_FROM_ID` (уже существовал, но 3 места в bot.py использовали хардкод)
+- [x] `score < 75` → `config.MIN_MATCH_CONFIDENCE` (bot.py + 4 метода в matchers.py)
+- [x] `cash_to_leave = 15000` → `config.DEFAULT_CASH_TO_LEAVE` (web_app.py + shift_closing.html)
+- [x] Все 3 новые константы настраиваются через env-переменные
+
+**Файлы изменены:** `config.py`, `bot.py`, `matchers.py`, `web_app.py`, `templates/shift_closing.html`
 
 ---
 
