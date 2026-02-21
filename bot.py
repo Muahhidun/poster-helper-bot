@@ -18,7 +18,7 @@ from telegram.ext import (
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
     DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL,
-    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH
+    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH, LOG_LEVEL
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -29,7 +29,6 @@ from daily_transactions import DailyTransactionScheduler, is_daily_transactions_
 from alias_generator import AliasGenerator
 from sync_ingredients import sync_ingredients
 from sync_products import sync_products
-from add_account_command import add_second_account_command
 import salary_flow_handlers
 from shipment_templates import (
     templates_command,
@@ -55,7 +54,7 @@ import pytz
 # Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=getattr(logging, LOG_LEVEL, logging.INFO)
 )
 logger = logging.getLogger(__name__)
 
@@ -284,33 +283,7 @@ def migrate_csv_aliases_to_db():
             logger.info(f"   → CSV путь: {csv_path}, exists={csv_path.exists()}")
 
             if not csv_path.exists():
-                # CSV файла нет (Railway) - импортируем хардкод алиасы для пользователя 167084307
-                if telegram_user_id == 167084307:
-                    logger.info(f"   → User 167084307 detected - trying Railway aliases import...")
-                    try:
-                        from railway_aliases import RAILWAY_ALIASES
-                        logger.info(f"   → Loaded RAILWAY_ALIASES, count={len(RAILWAY_ALIASES)}")
-
-                        aliases_to_import = []
-                        for alias_text, item_id, item_name, source in RAILWAY_ALIASES:
-                            aliases_to_import.append({
-                                'alias_text': alias_text,
-                                'poster_item_id': item_id,
-                                'poster_item_name': item_name,
-                                'source': source,
-                                'notes': 'Auto-imported on Railway'
-                            })
-
-                        logger.info(f"   → Prepared {len(aliases_to_import)} aliases for import")
-
-                        if aliases_to_import:
-                            count = db.bulk_add_aliases(telegram_user_id, aliases_to_import)
-                            logger.info(f"   ✅ User {telegram_user_id}: Imported {count} Railway aliases")
-                            total_imported += count
-                    except Exception as e:
-                        logger.error(f"   ❌ Failed to import Railway aliases: {e}", exc_info=True)
-                else:
-                    logger.info(f"   → User {telegram_user_id} != 167084307 - skipping Railway import")
+                logger.info(f"   → CSV not found for user {telegram_user_id} - skipping")
                 continue
 
             # Читаем CSV
@@ -621,54 +594,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /cancel - Отменить текущее действие",
         parse_mode="Markdown"
     )
-
-
-@authorized_only
-async def reload_aliases_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительно переимпортировать алиасы из railway_aliases.py"""
-    telegram_user_id = update.effective_user.id
-
-    # Только для пользователя 167084307
-    if telegram_user_id != 167084307:
-        await update.message.reply_text("❌ Эта команда доступна только администратору")
-        return
-
-    await update.message.reply_text("🔄 Переимпорт алиасов...")
-
-    try:
-        from railway_aliases import RAILWAY_ALIASES
-        from database import get_database
-
-        db = get_database()
-
-        # Удаляем старые алиасы
-        conn = db._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM ingredient_aliases WHERE telegram_user_id = %s", (telegram_user_id,))
-        conn.commit()
-        conn.close()
-
-        # Импортируем новые
-        aliases_to_import = []
-        for alias_text, item_id, item_name, source in RAILWAY_ALIASES:
-            aliases_to_import.append({
-                'alias_text': alias_text,
-                'poster_item_id': item_id,
-                'poster_item_name': item_name,
-                'source': source,
-                'notes': 'Manual reload via /reload_aliases'
-            })
-
-        count = db.bulk_add_aliases(telegram_user_id, aliases_to_import)
-
-        await update.message.reply_text(
-            f"✅ Переимпортировано {count} алиасов!\n\n"
-            f"Теперь matcher будет использовать их для сопоставления товаров."
-        )
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка переимпорта: {e}")
-        logger.error(f"Reload aliases error: {e}", exc_info=True)
 
 
 @authorized_only
@@ -2374,14 +2299,7 @@ async def process_supply(update: Update, context: ContextTypes.DEFAULT_TYPE, par
         skipped_no_candidates = parsed.get('skipped_items', [])
 
         if skipped_with_candidates or skipped_no_candidates:
-            from invoice_manual_selection import show_skipped_items_ui
-            await show_skipped_items_ui(
-                update,
-                context,
-                skipped_with_candidates,
-                skipped_no_candidates,
-                supply_draft_result={'drafts': []}  # Placeholder
-            )
+            logger.warning(f"Skipped items found but manual selection UI is not available (removed)")
 
     except Exception as e:
         logger.error(f"Supply processing failed: {e}", exc_info=True)
@@ -4700,20 +4618,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await salary_flow_handlers.handle_assistant_time(update, context, "14:00")
         return
 
-    # Обработка ручного выбора товаров из накладной
-    if query.data.startswith("invoice_select:"):
-        from invoice_manual_selection import handle_candidate_selection
-        await handle_candidate_selection(update, context)
-        return
-    elif query.data.startswith("invoice_skip:"):
-        from invoice_manual_selection import handle_skip_item
-        await handle_skip_item(update, context)
-        return
-    elif query.data == "invoice_finish":
-        from invoice_manual_selection import finalize_manual_selection
-        await finalize_manual_selection(update, context)
-        return
-
     # Обработка пропущенных ежедневных транзакций
     if query.data.startswith("create_missed_daily_"):
         telegram_user_id = int(query.data.split("_")[-1])
@@ -6209,7 +6113,6 @@ def initialize_application():
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("subscription", subscription_command))
     app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
-    app.add_handler(CommandHandler("reload_aliases", reload_aliases_command))
     app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("force_sync", force_sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
@@ -6219,8 +6122,6 @@ def initialize_application():
     app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
     app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
     app.add_handler(CommandHandler("price_check", price_check_command))
-    app.add_handler(CommandHandler("add_cafe", add_second_account_command))
-
     # Cafe access token management
     app.add_handler(CommandHandler("cafe_token", cafe_token_command))
 

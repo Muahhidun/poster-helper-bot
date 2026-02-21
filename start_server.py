@@ -9,10 +9,10 @@ import threading
 from flask import Flask, request
 from telegram import Update
 from bot import initialize_application
-from config import WEBHOOK_URL, WEBHOOK_PATH, TELEGRAM_BOT_TOKEN
+from config import WEBHOOK_URL, WEBHOOK_PATH, TELEGRAM_BOT_TOKEN, LOG_LEVEL
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)

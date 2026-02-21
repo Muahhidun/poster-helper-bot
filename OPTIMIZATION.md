@@ -33,25 +33,18 @@
 
 **Файлы изменены:** `web_app.py`
 
-### 1.3 Добавить проверку владельца при удалении/обновлении
+### 1.3 ~~Добавить проверку владельца при удалении/обновлении~~ ГОТОВО
 
-**Проблема:** 7 из 11 delete-эндпоинтов не проверяют чей это черновик. Любой авторизованный пользователь может удалить чужие данные по ID.
+~~**Проблема:** 11 эндпоинтов (7 delete + 4 update) не проверяли чей это черновик.~~
 
-**Уязвимые эндпоинты:**
-- [ ] `/expenses/delete/<id>` (строка 1486) — `delete_expense_draft(draft_id)` без user_id
-- [ ] `/expenses/delete` bulk (строка 1494) — `delete_expense_drafts_bulk(draft_ids)` без user_id
-- [ ] `/api/expenses/<id>` DELETE (строка 2104) — без user_id
-- [ ] `/api/supply-drafts/<id>` DELETE (строка 2756) — без user_id
-- [ ] `/api/supply-drafts/items/<id>` DELETE (строка 2819) — без user_id
-- [ ] `/supplies/delete-item/<id>` (строка 3469) — без user_id
-- [ ] `/supplies/delete/<id>` (строка 3700) — без user_id
+**Что сделано:**
+- [x] Добавлен опциональный `telegram_user_id` параметр в 7 методов database.py: `delete_expense_draft()`, `delete_expense_drafts_bulk()`, `delete_supply_draft()`, `delete_supply_draft_item()`, `update_expense_draft()`, `update_supply_draft()`, `update_supply_draft_item()`
+- [x] Когда `telegram_user_id` передан — добавляется `AND telegram_user_id = ?` в WHERE (или подзапрос для supply_draft_items через parent supply_drafts)
+- [x] Все 15 пользовательских эндпоинтов в web_app.py передают `g.user_id`
+- [x] Внутренние/фоновые вызовы (sync, bot) продолжают работать без user_id (обратная совместимость)
+- [x] Удалён дубликат метода `delete_supply_draft_item` (был определён дважды)
 
-**Что сделать:**
-- [ ] Добавить `telegram_user_id` параметр в методы `delete_expense_draft()`, `delete_expense_drafts_bulk()`, `delete_supply_draft()`, `delete_supply_draft_item()` в database.py
-- [ ] Добавить `AND telegram_user_id = ?` в SQL-запросы удаления
-- [ ] Передавать user_id из сессии в каждом эндпоинте
-
-**Файлы:** `web_app.py`, `database.py`
+**Файлы изменены:** `web_app.py`, `database.py`
 
 ### 1.4 Убрать отправку пароля открытым текстом
 
@@ -129,17 +122,19 @@
 
 ---
 
-## ЭТАП 4: Замена print на logging
+## ~~ЭТАП 4: Замена print на logging~~ ГОТОВО
 
-### 4.1 Заменить debug print на logging
+### 4.1 ~~Заменить debug print на logging~~ ГОТОВО
 
-**Проблема:** 40+ мест с `print(f"[DEBUG] ...")` и `print(f"...")` в web_app.py. Засоряет логи Railway, нет уровней.
+~~**Проблема:** 94 места с `print(...)` в web_app.py. Засоряет логи Railway, нет уровней.~~
 
-- [ ] Заменить все `print(...)` в web_app.py на `logger.debug()` / `logger.info()` / `logger.error()`
-- [ ] Аналогично в bot.py — заменить print на logging
-- [ ] Настроить уровень логирования через env-переменную `LOG_LEVEL`
+**Что сделано:**
+- [x] Заменены все 94 `print(...)` в web_app.py на `logger.debug()` / `logger.info()` / `logger.warning()` / `logger.error()`
+- [x] bot.py — уже использовал logging, замен не требовалось (0 print-ов)
+- [x] Уровень `LOG_LEVEL` настраивается через env-переменную (config.py, default=INFO)
+- [x] `bot.py` и `start_server.py` используют `LOG_LEVEL` из config
 
-**Файлы:** `web_app.py`, `bot.py`, `database.py`
+**Файлы изменены:** `web_app.py`, `bot.py`, `start_server.py`
 
 ---
 
