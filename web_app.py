@@ -34,6 +34,12 @@ def _kz_now():
     return datetime(kz_struct.tm_year, kz_struct.tm_mon, kz_struct.tm_mday,
                     kz_struct.tm_hour, kz_struct.tm_min, kz_struct.tm_sec)
 
+def run_async(coro):
+    """Run an async coroutine from sync Flask code.
+    Creates a new event loop, runs the coroutine, and cleans up."""
+
+    return run_async(coro)
+
 app = Flask(__name__)
 
 # Generate or use SECRET_KEY for Flask sessions
@@ -563,61 +569,46 @@ def search_items():
                         poster_base_url=acc['poster_base_url']
                     )
 
-                    # Run async method in sync context
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                    async def _fetch_items():
+                        try:
+                            result_items = []
+                            if source in ['all', 'ingredient']:
+                                ingredients = await poster_client.get_ingredients()
+                                logger.debug(f"Account {acc['account_name']}: got {len(ingredients)} ingredients")
+                                for ing in ingredients:
+                                    name = ing.get('ingredient_name', '')
+                                    poster_ing_type = str(ing.get('type', '1'))
+                                    item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
+                                    result_items.append({
+                                        'id': int(ing.get('ingredient_id', 0)),
+                                        'name': name,
+                                        'type': item_type,
+                                        'poster_account_id': acc['id'],
+                                        'poster_account_name': acc['account_name']
+                                    })
 
-                    if source in ['all', 'ingredient']:
-                        ingredients = loop.run_until_complete(poster_client.get_ingredients())
-                        logger.debug(f"Account {acc['account_name']}: got {len(ingredients)} ingredients")
-                        for ing in ingredients:
-                            # Include all ingredients (including deleted ones)
-                            # User may need to see deleted ingredients to understand what was available
-                            name = ing.get('ingredient_name', '')
+                            if source in ['all', 'product', 'ingredient']:
+                                products = await poster_client.get_products()
+                                for prod in products:
+                                    category = prod.get('category_name', '')
+                                    if not category.startswith('Напитки'):
+                                        continue
+                                    name = prod.get('product_name', '')
+                                    result_items.append({
+                                        'id': int(prod.get('product_id', 0)),
+                                        'name': name,
+                                        'type': 'product',
+                                        'poster_account_id': acc['id'],
+                                        'poster_account_name': acc['account_name']
+                                    })
+                            return result_items
+                        finally:
+                            await poster_client.close()
 
-                            # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
-                            poster_ing_type = str(ing.get('type', '1'))
-                            item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
-
-                            # Don't deduplicate - show from all accounts with account tag
-                            items.append({
-                                'id': int(ing.get('ingredient_id', 0)),
-                                'name': name,
-                                'type': item_type,
-                                'poster_account_id': acc['id'],
-                                'poster_account_name': acc['account_name']
-                            })
-
-                    # Also fetch products (товары) - only drinks like Ayran, Coca-Cola, etc.
-                    # that can be supplied to warehouse. Skip tech cards (pizzas, burgers, etc.)
-                    if source in ['all', 'product', 'ingredient']:
-                        products = loop.run_until_complete(poster_client.get_products())
-                        for prod in products:
-                            # Include all products (including deleted ones)
-                            # Only include products from "Напитки" category for supplies
-                            # Tech cards (Pizzas, Burgers, Doner etc.) should not appear in supplies
-                            # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
-                            category = prod.get('category_name', '')
-                            if not category.startswith('Напитки'):
-                                continue
-
-                            name = prod.get('product_name', '')
-
-                            # Products use product_id in Poster
-                            items.append({
-                                'id': int(prod.get('product_id', 0)),
-                                'name': name,
-                                'type': 'product',
-                                'poster_account_id': acc['id'],
-                                'poster_account_name': acc['account_name']
-                            })
-
-                    # Close the poster client to avoid unclosed session warning
-                    loop.run_until_complete(poster_client.close())
-                    loop.close()
+                    items.extend(run_async(_fetch_items()))
                 except Exception as e:
                     try:
-                        loop.close()
+                        pass
                     except Exception:
                         pass
                     logger.error(f"Error loading from account {acc['account_name']}: {e}")
@@ -1141,8 +1132,6 @@ def list_expenses():
         poster_accounts = db.get_accounts(g.user_id)
 
         if poster_accounts:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
 
             # Build poster_accounts_list for template
             for acc in poster_accounts:
@@ -1203,10 +1192,7 @@ def list_expenses():
 
                 return all_categories, all_accounts, all_transactions
 
-            try:
-                categories, accounts, poster_transactions = loop.run_until_complete(load_data())
-            finally:
-                loop.close()
+            categories, accounts, poster_transactions = run_async(load_data())
     except Exception as e:
         logger.error(f"Error loading categories/accounts: {e}")
         import traceback
@@ -1346,8 +1332,6 @@ def search_categories():
             return jsonify([])
 
         account = poster_accounts[0]
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def get_categories():
             client = PosterClient(
@@ -1361,10 +1345,7 @@ def search_categories():
             finally:
                 await client.close()
 
-        try:
-            categories = loop.run_until_complete(get_categories())
-        finally:
-            loop.close()
+        categories = run_async(get_categories())
 
         # Filter by query
         matches = [
@@ -1469,8 +1450,6 @@ def sync_expenses_from_poster():
     today = _kz_now()
     date_str = today.strftime('%Y%m%d')
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     async def fetch_and_sync():
         synced_count = 0
@@ -1716,10 +1695,7 @@ def sync_expenses_from_poster():
 
         return synced_count, updated_count, skipped_count, deleted_count, errors
 
-    try:
-        synced, updated, skipped, deleted, errors = loop.run_until_complete(fetch_and_sync())
-    finally:
-        loop.close()
+    synced, updated, skipped, deleted, errors = run_async(fetch_and_sync())
 
     msg_parts = []
     if synced > 0:
@@ -1759,8 +1735,6 @@ def api_poster_transactions():
     today = _kz_now()
     date_str = today.strftime("%Y%m%d")
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     async def fetch_all_transactions():
         all_transactions = []
@@ -1826,7 +1800,7 @@ def api_poster_transactions():
         return all_transactions
 
     try:
-        transactions = loop.run_until_complete(fetch_all_transactions())
+        transactions = run_async(fetch_all_transactions())
 
         return jsonify({
             'success': True,
@@ -1839,8 +1813,6 @@ def api_poster_transactions():
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)})
-    finally:
-        loop.close()
 
 
 # ==================== EXPENSES API ====================
@@ -1872,8 +1844,6 @@ def api_get_expenses():
         poster_accounts = db.get_accounts(g.user_id)
 
         if poster_accounts:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
 
             # Build poster_accounts_list
             for acc in poster_accounts:
@@ -1932,10 +1902,7 @@ def api_get_expenses():
 
                 return all_categories, all_accounts, all_transactions
 
-            try:
-                categories, accounts, poster_transactions = loop.run_until_complete(load_data())
-            finally:
-                loop.close()
+            categories, accounts, poster_transactions = run_async(load_data())
     except Exception as e:
         logger.error(f"Error loading expenses data: {e}")
         import traceback
@@ -2161,8 +2128,6 @@ def api_sync_expenses_from_poster():
     today = _kz_now()
     date_str = today.strftime("%Y%m%d")
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     synced = 0
     updated = 0
@@ -2395,11 +2360,9 @@ def api_sync_expenses_from_poster():
                 logger.debug(f"[SYNC] Deleted orphan draft #{draft['id']}: poster_txn={ptid} (deleted in Poster)")
 
     try:
-        loop.run_until_complete(sync_from_all_accounts())
+        run_async(sync_from_all_accounts())
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'synced': synced, 'updated': updated, 'deleted': deleted, 'skipped': skipped, 'errors': errors})
-    finally:
-        loop.close()
 
     msg_parts = []
     if synced > 0:
@@ -2437,8 +2400,6 @@ def api_process_expenses():
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'No Poster accounts'})
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     created = 0
     errors = []
@@ -2520,11 +2481,9 @@ def api_process_expenses():
                 errors.append(f"Draft {draft['id']}: {str(e)}")
 
     try:
-        loop.run_until_complete(process_drafts())
+        run_async(process_drafts())
     except Exception as e:
         return jsonify({'success': False, 'error': str(e), 'created': created, 'errors': errors})
-    finally:
-        loop.close()
 
     return jsonify({
         'success': True,
@@ -2746,8 +2705,6 @@ def api_create_supply_in_poster(draft_id):
     if not account:
         account = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
     try:
         from poster_client import PosterClient
@@ -2779,10 +2736,7 @@ def api_create_supply_in_poster(draft_id):
             finally:
                 await client.close()
 
-        try:
-            result = loop.run_until_complete(create_supply())
-        finally:
-            loop.close()
+        result = run_async(create_supply())
 
         if result.get('success'):
             # Mark draft as processed
@@ -2792,7 +2746,6 @@ def api_create_supply_in_poster(draft_id):
             return jsonify({'success': False, 'error': result.get('error', 'Unknown error')})
 
     except Exception as e:
-        loop.close()
         return jsonify({'success': False, 'error': str(e)})
 
 
@@ -2842,8 +2795,6 @@ def process_drafts():
             transactions_by_account[acc_id].append(t)
 
         # Run async code in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def create_all_transactions():
             total_success = 0
@@ -3018,10 +2969,7 @@ def process_drafts():
 
             return total_success, all_processed_ids
 
-        try:
-            success, processed_ids = loop.run_until_complete(create_all_transactions())
-        finally:
-            loop.close()
+        success, processed_ids = run_async(create_all_transactions())
 
         # Mark as in Poster (stay visible with green status)
         if processed_ids:
@@ -3113,73 +3061,58 @@ def list_supplies():
                         poster_base_url=acc['poster_base_url']
                     )
 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
 
-                    # Load storages for this account
-                    storages = loop.run_until_complete(poster_client.get_storages())
-                    # Build storage map: storage_id -> storage_name
-                    storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
-                    # Get first storage ID as default
-                    default_storage_id = int(storages[0]['storage_id']) if storages else 1
-                    logger.info(f"Storages for {acc.get('account_name', '')}: {storage_map}, default={default_storage_id}")
+                    async def _fetch_supply_items():
+                        try:
+                            # Parallel: fetch storages, ingredients, and products
+                            storages, ingredients, products = await asyncio.gather(
+                                poster_client.get_storages(),
+                                poster_client.get_ingredients(),
+                                poster_client.get_products()
+                            )
+                            result_items = []
+                            storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
+                            default_storage_id = int(storages[0]['storage_id']) if storages else 1
+                            logger.info(f"Storages for {acc.get('account_name', '')}: {storage_map}, default={default_storage_id}")
 
-                    ingredients = loop.run_until_complete(poster_client.get_ingredients())
-                    for ing in ingredients:
-                        # Skip deleted ingredients
-                        if str(ing.get('delete', '0')) == '1':
-                            continue
-                        name = ing.get('ingredient_name', '')
-                        # Always use default (main) storage for the establishment
-                        storage_id = default_storage_id
-                        storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
-                        # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
-                        poster_ing_type = str(ing.get('type', '1'))
-                        item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
-                        # Don't deduplicate - show from all accounts with account tag
-                        items.append({
-                            'id': int(ing.get('ingredient_id', 0)),
-                            'name': name,
-                            'type': item_type,
-                            'poster_account_id': acc['id'],
-                            'poster_account_name': acc.get('account_name', ''),
-                            'storage_id': storage_id,
-                            'storage_name': storage_name
-                        })
+                            for ing in ingredients:
+                                if str(ing.get('delete', '0')) == '1':
+                                    continue
+                                name = ing.get('ingredient_name', '')
+                                sid = default_storage_id
+                                sname = storage_map.get(sid, f'Storage {sid}')
+                                poster_ing_type = str(ing.get('type', '1'))
+                                item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
+                                result_items.append({
+                                    'id': int(ing.get('ingredient_id', 0)),
+                                    'name': name, 'type': item_type,
+                                    'poster_account_id': acc['id'],
+                                    'poster_account_name': acc.get('account_name', ''),
+                                    'storage_id': sid, 'storage_name': sname
+                                })
 
-                    # Also fetch products (товары) - only drinks like Ayran, Coca-Cola, etc.
-                    # Skip tech cards (pizzas, burgers, doner, etc.)
-                    products = loop.run_until_complete(poster_client.get_products())
-                    for prod in products:
-                        # Skip deleted products
-                        if str(prod.get('delete', '0')) == '1':
-                            continue
-                        # Only include products from "Напитки" category for supplies
-                        # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
-                        category = prod.get('category_name', '')
-                        if not category.startswith('Напитки'):
-                            continue
-                        name = prod.get('product_name', '')
-                        # Always use default (main) storage for the establishment
-                        storage_id = default_storage_id
-                        storage_name = storage_map.get(storage_id, f'Storage {storage_id}')
-                        items.append({
-                            'id': int(prod.get('product_id', 0)),
-                            'name': name,
-                            'type': 'product',
-                            'poster_account_id': acc['id'],
-                            'poster_account_name': acc.get('account_name', ''),
-                            'storage_id': storage_id,
-                            'storage_name': storage_name
-                        })
+                            for prod in products:
+                                if str(prod.get('delete', '0')) == '1':
+                                    continue
+                                category = prod.get('category_name', '')
+                                if not category.startswith('Напитки'):
+                                    continue
+                                name = prod.get('product_name', '')
+                                sid = default_storage_id
+                                sname = storage_map.get(sid, f'Storage {sid}')
+                                result_items.append({
+                                    'id': int(prod.get('product_id', 0)),
+                                    'name': name, 'type': 'product',
+                                    'poster_account_id': acc['id'],
+                                    'poster_account_name': acc.get('account_name', ''),
+                                    'storage_id': sid, 'storage_name': sname
+                                })
+                            return result_items
+                        finally:
+                            await poster_client.close()
 
-                    loop.run_until_complete(poster_client.close())
-                    loop.close()
+                    items.extend(run_async(_fetch_supply_items()))
                 except Exception as e:
-                    try:
-                        loop.close()
-                    except Exception:
-                        pass
                     logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
@@ -3234,21 +3167,20 @@ def view_all_supplies():
                         poster_base_url=acc['poster_base_url']
                     )
 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
 
-                    ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                    async def _fetch_ings():
+                        try:
+                            return await poster_client.get_ingredients()
+                        finally:
+                            await poster_client.close()
+
+                    ingredients = run_async(_fetch_ings())
                     for ing in ingredients:
-                        # Skip deleted ingredients
                         if str(ing.get('delete', '0')) == '1':
                             continue
                         name = ing.get('ingredient_name', '')
-
-                        # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
                         poster_ing_type = str(ing.get('type', '1'))
                         item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
-
-                        # Don't deduplicate - show from all accounts with account tag
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
@@ -3256,14 +3188,7 @@ def view_all_supplies():
                             'poster_account_id': acc['id'],
                             'poster_account_name': acc.get('account_name', '')
                         })
-
-                    loop.run_until_complete(poster_client.close())
-                    loop.close()
                 except Exception as e:
-                    try:
-                        loop.close()
-                    except Exception:
-                        pass
                     logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
@@ -3420,8 +3345,6 @@ def process_all_supplies():
                 if not account:
                     account = accounts[0]
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
 
                 async def create_supply_in_poster():
                     client = PosterClient(
@@ -3499,10 +3422,7 @@ def process_all_supplies():
                     finally:
                         await client.close()
 
-                try:
-                    supply_id = loop.run_until_complete(create_supply_in_poster())
-                finally:
-                    loop.close()
+                supply_id = run_async(create_supply_in_poster())
 
                 if supply_id:
                     results.append({
@@ -3557,21 +3477,17 @@ def view_supply(draft_id):
                         poster_base_url=acc['poster_base_url']
                     )
 
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
 
-                    ingredients = loop.run_until_complete(poster_client.get_ingredients())
+                    async def _fetch_ings():
+                        return await poster_client.get_ingredients()
+
+                    ingredients = run_async(_fetch_ings())
                     for ing in ingredients:
-                        # Skip deleted ingredients
                         if str(ing.get('delete', '0')) == '1':
                             continue
                         name = ing.get('ingredient_name', '')
-
-                        # Poster ingredient type: "1"=ingredient, "2"=semi-product (полуфабрикат)
                         poster_ing_type = str(ing.get('type', '1'))
                         item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
-
-                        # Don't deduplicate - show from all accounts with account tag
                         items.append({
                             'id': int(ing.get('ingredient_id', 0)),
                             'name': name,
@@ -3579,13 +3495,7 @@ def view_supply(draft_id):
                             'poster_account_id': acc['id'],
                             'poster_account_name': acc['account_name']
                         })
-
-                    loop.close()
                 except Exception as e:
-                    try:
-                        loop.close()
-                    except Exception:
-                        pass
                     logger.error(f"Error loading from account {acc['account_name']}: {e}")
                     continue
     except Exception as e:
@@ -3676,8 +3586,6 @@ def process_supply(draft_id):
             acc_id = item.get('poster_account_id') or primary_account['id']
             items_by_account[acc_id].append(item)
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def create_supplies_in_poster():
             created_supplies = []
@@ -3895,10 +3803,7 @@ def process_supply(draft_id):
 
             return created_supplies
 
-        try:
-            created_supplies = loop.run_until_complete(create_supplies_in_poster())
-        finally:
-            loop.close()
+        created_supplies = run_async(create_supplies_in_poster())
 
         if created_supplies:
             # Mark draft as processed
@@ -4059,8 +3964,6 @@ def api_shift_closing_poster_data():
         primary_account = next((a for a in accounts if a.get('is_primary')), accounts[0])
 
         from datetime import datetime, timedelta
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def get_poster_data_primary():
             if date is None:
@@ -4151,10 +4054,7 @@ def api_shift_closing_poster_data():
             finally:
                 await client.close()
 
-        try:
-            data = loop.run_until_complete(get_poster_data_primary())
-        finally:
-            loop.close()
+        data = run_async(get_poster_data_primary())
 
         # Look up Cafe's kaspi_pizzburg for auto-fill into kaspi_cafe
         try:
@@ -4651,8 +4551,6 @@ def api_cafe_poster_data():
 
     try:
         from poster_client import PosterClient
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def get_cafe_poster_data():
             if date is None:
@@ -4736,10 +4634,7 @@ def api_cafe_poster_data():
             finally:
                 await client.close()
 
-        try:
-            data = loop.run_until_complete(get_cafe_poster_data())
-        finally:
-            loop.close()
+        data = run_async(get_cafe_poster_data())
 
         # Look up main shift closing's kaspi_cafe for auto-fill into kaspi_pizzburg
         try:
@@ -5146,8 +5041,6 @@ def api_cafe_salaries_create():
 
         current_time = kz_now.strftime("%Y-%m-%d %H:%M:%S")
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def create():
             poster_client = PosterClient(
@@ -5223,10 +5116,7 @@ def api_cafe_salaries_create():
 
             return created, skipped
 
-        try:
-            created, skipped = loop.run_until_complete(create())
-        finally:
-            loop.close()
+        created, skipped = run_async(create())
 
         if not created and skipped:
             skipped_desc = ', '.join(f"{s['role']} {s['name']}" for s in skipped)
@@ -5349,8 +5239,6 @@ def api_cafe_transfers():
 
         # Create transfers in Poster
         from poster_client import PosterClient
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def create_transfers():
             client = PosterClient(
@@ -5381,10 +5269,7 @@ def api_cafe_transfers():
                 await client.close()
             return results
 
-        try:
-            results = loop.run_until_complete(create_transfers())
-        finally:
-            loop.close()
+        results = run_async(create_transfers())
 
         # Mark as created
         db.set_transfers_created(
@@ -5498,8 +5383,6 @@ def api_shift_closing_transfers():
 
         # Create transfers in Poster (using primary account)
         from poster_client import PosterClient
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def create_transfers():
             client = PosterClient(telegram_user_id=user_id)
@@ -5524,10 +5407,7 @@ def api_shift_closing_transfers():
                 await client.close()
             return results
 
-        try:
-            results = loop.run_until_complete(create_transfers())
-        finally:
-            loop.close()
+        results = run_async(create_transfers())
 
         # Mark as created
         db.set_transfers_created(user_id, date)
@@ -5631,8 +5511,6 @@ def api_cashier_salaries_calculate():
         from cashier_salary import CashierSalaryCalculator
         from doner_salary import DonerSalaryCalculator
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def calc():
             # Calculate cashier salary
@@ -5667,10 +5545,7 @@ def api_cashier_salaries_calculate():
                 'assistant_salary': assistant_salary,
             }
 
-        try:
-            result = loop.run_until_complete(calc())
-        finally:
-            loop.close()
+        result = run_async(calc())
 
         return jsonify({'success': True, **result})
 
@@ -5715,8 +5590,6 @@ def api_cashier_salaries_create():
         from cashier_salary import CashierSalaryCalculator
         from doner_salary import DonerSalaryCalculator
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         async def create():
             # Create cashier salary transactions
@@ -5736,10 +5609,7 @@ def api_cashier_salaries_create():
 
             return cashier_result, doner_result
 
-        try:
-            cashier_result, doner_result = loop.run_until_complete(create())
-        finally:
-            loop.close()
+        cashier_result, doner_result = run_async(create())
 
         if not cashier_result.get('success') or not doner_result.get('success'):
             errors = []
@@ -5931,8 +5801,6 @@ def _sync_expenses_for_user(db, sync_user_id):
         today = _kz_now()
         date_str = today.strftime("%Y%m%d")
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
         synced = 0
         updated = 0
@@ -6095,10 +5963,7 @@ def _sync_expenses_for_user(db, sync_user_id):
                     db.delete_expense_draft(draft['id'])
                     deleted += 1
 
-        try:
-            loop.run_until_complete(_sync())
-        finally:
-            loop.close()
+        run_async(_sync())
 
         if synced > 0 or updated > 0 or deleted > 0:
             logger.info(f"[BG SYNC] User {sync_user_id}: +{synced} new, ~{updated} updated, -{deleted} deleted")
