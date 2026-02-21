@@ -55,6 +55,22 @@ def run_async(coro):
     finally:
         loop.close()
 
+# Simple in-memory cache for Poster API data (categories/accounts change rarely)
+_poster_cache = {}
+_CACHE_TTL = 300  # 5 minutes
+
+def _cache_get(key):
+    """Get cached value if not expired."""
+    entry = _poster_cache.get(key)
+    if entry and (_time.time() - entry['ts']) < _CACHE_TTL:
+        return entry['val']
+    return None
+
+def _cache_set(key, val):
+    """Store value in cache."""
+    _poster_cache[key] = {'val': val, 'ts': _time.time()}
+
+
 app = Flask(__name__)
 
 # Rate limiter
@@ -1165,19 +1181,15 @@ def list_expenses():
                     'is_primary': acc.get('is_primary', False)
                 })
 
+            # Check cache for categories and accounts
+            cache_key = f"cats_accs_{g.user_id}"
+            cached = _cache_get(cache_key)
+
             async def load_data():
-                all_categories = []
-                all_accounts = []
-                all_transactions = []
-                seen_category_names = set()  # For deduplication
+                date_str = selected_date.replace("-", "")
 
-                # Get date range for transactions (last 30 days)
-                date_to = datetime.now()
-                date_from = date_to - timedelta(days=30)
-                date_from_str = date_from.strftime("%Y%m%d")
-                date_to_str = date_to.strftime("%Y%m%d")
-
-                for acc in poster_accounts:
+                async def fetch_for_account(acc, need_cats_accs):
+                    """Fetch data for one Poster account."""
                     client = PosterClient(
                         telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
@@ -1185,17 +1197,31 @@ def list_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        # Parallel: fetch categories, accounts, and transactions simultaneously
-                        cats, accs, transactions = await asyncio.gather(
-                            client.get_categories(),
-                            client.get_accounts(),
-                            client.get_transactions(date_from_str, date_to_str)
-                        )
+                        if need_cats_accs:
+                            cats, accs, transactions = await asyncio.gather(
+                                client.get_categories(),
+                                client.get_accounts(),
+                                client.get_transactions(date_str, date_str)
+                            )
+                        else:
+                            cats, accs = [], []
+                            transactions = await client.get_transactions(date_str, date_str)
+                        return acc, cats, accs, transactions
+                    finally:
+                        await client.close()
 
-                        logger.debug(f"Loaded {len(cats)} categories from {acc['account_name']}")
+                need_cats_accs = cached is None
+                results = await asyncio.gather(
+                    *[fetch_for_account(acc, need_cats_accs) for acc in poster_accounts]
+                )
+
+                all_categories = []
+                all_accounts = []
+                all_transactions = []
+                for acc, cats, accs, transactions in results:
+                    if need_cats_accs:
                         for c in cats:
-                            cat_type = c.get('type', '1')
-                            if str(cat_type) != '1':
+                            if str(c.get('type', '1')) != '1':
                                 continue
                             c['poster_account_id'] = acc['id']
                             c['poster_account_name'] = acc['account_name']
@@ -1206,17 +1232,23 @@ def list_expenses():
                             a['poster_account_name'] = acc['account_name']
                         all_accounts.extend(accs)
 
-                        for t in transactions:
-                            t['poster_account_id'] = acc['id']
-                            t['poster_account_name'] = acc['account_name']
-                        all_transactions.extend(transactions)
+                    for t in transactions:
+                        t['poster_account_id'] = acc['id']
+                        t['poster_account_name'] = acc['account_name']
+                    all_transactions.extend(transactions)
 
-                    finally:
-                        await client.close()
+                if need_cats_accs:
+                    _cache_set(cache_key, {'categories': all_categories, 'accounts': all_accounts})
 
                 return all_categories, all_accounts, all_transactions
 
-            categories, accounts, poster_transactions = run_async(load_data())
+            result_cats, result_accs, poster_transactions = run_async(load_data())
+            if cached:
+                categories = cached['categories']
+                accounts = cached['accounts']
+            else:
+                categories = result_cats
+                accounts = result_accs
     except Exception as e:
         logger.error(f"Error loading categories/accounts: {e}")
         import traceback
@@ -1761,66 +1793,68 @@ def api_poster_transactions():
 
 
     async def fetch_all_transactions():
-        all_transactions = []
+        from poster_client import PosterClient
 
-        for account in poster_accounts:
+        async def fetch_for_account(account):
+            client = PosterClient(
+                telegram_user_id=g.user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
             try:
-                from poster_client import PosterClient
-                client = PosterClient(
-                    telegram_user_id=g.user_id,
-                    poster_token=account['poster_token'],
-                    poster_user_id=account['poster_user_id'],
-                    poster_base_url=account['poster_base_url']
+                transactions, finance_accounts = await asyncio.gather(
+                    client.get_transactions(date_str, date_str),
+                    client.get_accounts()
                 )
+                account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+                result = []
 
-                try:
-                    # Parallel: fetch transactions and accounts simultaneously
-                    transactions, finance_accounts = await asyncio.gather(
-                        client.get_transactions(date_str, date_str),
-                        client.get_accounts()
-                    )
-                    account_map = {str(acc['account_id']): acc for acc in finance_accounts}
+                for txn in transactions:
+                    txn_type = str(txn.get('type'))
+                    category_name = txn.get('name', '') or txn.get('category_name', '')
+                    if 'перевод' in category_name.lower():
+                        continue
+                    if txn_type not in ('0', '1'):
+                        continue
 
-                    for txn in transactions:
-                        txn_type = str(txn.get('type'))
-                        # Skip transfers
-                        category_name = txn.get('name', '') or txn.get('category_name', '')
-                        if 'перевод' in category_name.lower():
-                            continue
-                        # Only expenses and income
-                        if txn_type not in ('0', '1'):
-                            continue
+                    txn_id = txn.get('transaction_id')
+                    amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
+                    amount = abs(float(amount_raw)) / 100
+                    comment = txn.get('comment', '') or ''
+                    description = comment if comment else category_name
 
-                        txn_id = txn.get('transaction_id')
-                        amount_raw = txn.get('amount_from', 0) or txn.get('amount', 0)
-                        amount = abs(float(amount_raw)) / 100
-                        comment = txn.get('comment', '') or ''
-                        description = comment if comment else category_name
+                    account_from_id = txn.get('account_from_id') or txn.get('account_from')
+                    finance_acc = account_map.get(str(account_from_id), {})
+                    finance_acc_name = (finance_acc.get('account_name') or finance_acc.get('name', ''))
 
-                        account_from_id = txn.get('account_from_id') or txn.get('account_from')
-                        finance_acc = account_map.get(str(account_from_id), {})
-                        finance_acc_name = (finance_acc.get('account_name') or finance_acc.get('name', ''))
-
-                        all_transactions.append({
-                            'id': f"{account['id']}_{txn_id}",
-                            'poster_account_id': account['id'],
-                            'poster_account_name': account['account_name'],
-                            'transaction_id': txn_id,
-                            'amount': amount,
-                            'description': description,
-                            'category': category_name,
-                            'account_id': account_from_id,
-                            'account_name': finance_acc_name,
-                            'type': txn_type,
-                            'is_income': txn_type == '1'
-                        })
-
-                finally:
-                    await client.close()
-
+                    result.append({
+                        'id': f"{account['id']}_{txn_id}",
+                        'poster_account_id': account['id'],
+                        'poster_account_name': account['account_name'],
+                        'transaction_id': txn_id,
+                        'amount': amount,
+                        'description': description,
+                        'category': category_name,
+                        'account_id': account_from_id,
+                        'account_name': finance_acc_name,
+                        'type': txn_type,
+                        'is_income': txn_type == '1'
+                    })
+                return result
             except Exception as e:
                 logger.error(f"Error fetching from {account['account_name']}: {e}")
+                return []
+            finally:
+                await client.close()
 
+        # Fetch ALL accounts in parallel
+        results = await asyncio.gather(
+            *[fetch_for_account(acc) for acc in poster_accounts]
+        )
+        all_transactions = []
+        for txns in results:
+            all_transactions.extend(txns)
         return all_transactions
 
     try:
@@ -1877,18 +1911,13 @@ def api_get_expenses():
                     'is_primary': acc.get('is_primary', False)
                 })
 
+            cache_key_api = f"cats_accs_{g.user_id}"
+            cached_api = _cache_get(cache_key_api)
+
             async def load_data():
-                all_categories = []
-                all_accounts = []
-                all_transactions = []
+                date_str = filter_date.replace("-", "")
 
-                # Get date range for transactions (last 30 days)
-                date_to = datetime.now()
-                date_from = date_to - timedelta(days=30)
-                date_from_str = date_from.strftime("%Y%m%d")
-                date_to_str = date_to.strftime("%Y%m%d")
-
-                for acc in poster_accounts:
+                async def fetch_for_account(acc, need_cats_accs):
                     client = PosterClient(
                         telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
@@ -1896,16 +1925,31 @@ def api_get_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        # Parallel: fetch categories, accounts, and transactions simultaneously
-                        cats, accs, transactions = await asyncio.gather(
-                            client.get_categories(),
-                            client.get_accounts(),
-                            client.get_transactions(date_from_str, date_to_str)
-                        )
+                        if need_cats_accs:
+                            cats, accs, transactions = await asyncio.gather(
+                                client.get_categories(),
+                                client.get_accounts(),
+                                client.get_transactions(date_str, date_str)
+                            )
+                        else:
+                            cats, accs = [], []
+                            transactions = await client.get_transactions(date_str, date_str)
+                        return acc, cats, accs, transactions
+                    finally:
+                        await client.close()
 
+                need_cats_accs = cached_api is None
+                results = await asyncio.gather(
+                    *[fetch_for_account(acc, need_cats_accs) for acc in poster_accounts]
+                )
+
+                all_categories = []
+                all_accounts = []
+                all_transactions = []
+                for acc, cats, accs, transactions in results:
+                    if need_cats_accs:
                         for c in cats:
-                            cat_type = c.get('type', '1')
-                            if str(cat_type) != '1':
+                            if str(c.get('type', '1')) != '1':
                                 continue
                             c['poster_account_id'] = acc['id']
                             c['poster_account_name'] = acc['account_name']
@@ -1916,17 +1960,23 @@ def api_get_expenses():
                             a['poster_account_name'] = acc['account_name']
                         all_accounts.extend(accs)
 
-                        for t in transactions:
-                            t['poster_account_id'] = acc['id']
-                            t['poster_account_name'] = acc['account_name']
-                        all_transactions.extend(transactions)
+                    for t in transactions:
+                        t['poster_account_id'] = acc['id']
+                        t['poster_account_name'] = acc['account_name']
+                    all_transactions.extend(transactions)
 
-                    finally:
-                        await client.close()
+                if need_cats_accs:
+                    _cache_set(cache_key_api, {'categories': all_categories, 'accounts': all_accounts})
 
                 return all_categories, all_accounts, all_transactions
 
-            categories, accounts, poster_transactions = run_async(load_data())
+            result_cats, result_accs, poster_transactions = run_async(load_data())
+            if cached_api:
+                categories = cached_api['categories']
+                accounts = cached_api['accounts']
+            else:
+                categories = result_cats
+                accounts = result_accs
     except Exception as e:
         logger.error(f"Error loading expenses data: {e}")
         import traceback
@@ -5834,8 +5884,10 @@ def _sync_expenses_for_user(db, sync_user_id):
                         poster_base_url=account['poster_base_url']
                     )
                     try:
-                        transactions = await client.get_transactions(date_str, date_str)
-                        finance_accounts = await client.get_accounts()
+                        transactions, finance_accounts = await asyncio.gather(
+                            client.get_transactions(date_str, date_str),
+                            client.get_accounts()
+                        )
                         account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
                         for txn in transactions:
