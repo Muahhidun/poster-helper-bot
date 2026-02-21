@@ -1442,6 +1442,19 @@ class UserDatabase:
 
     # === Poster Accounts Methods ===
 
+    def get_all_user_ids_with_accounts(self) -> list:
+        """Get all distinct telegram_user_ids that have poster accounts"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT telegram_user_id FROM poster_accounts")
+            rows = cursor.fetchall()
+            conn.close()
+            return [row[0] for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to get user IDs with accounts: {e}")
+            return []
+
     def get_accounts(self, telegram_user_id: int) -> list:
         """Get all Poster accounts for a user"""
         conn = self._get_connection()
