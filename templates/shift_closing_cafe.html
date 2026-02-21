@@ -122,9 +122,33 @@ body{background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Tex
 .sc-banner-sal.error{background:#ff3b3020;color:#ff3b30}
 
 @media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}.sc-day-value{font-size:32px}.sc-collection span:last-child{font-size:18px}}
+
+{% if user_role == 'owner' %}
+.owner-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 16px;height:48px;display:flex;align-items:center;position:sticky;top:0;z-index:100}
+.owner-nav .nav-inner{max-width:480px;width:100%;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
+.owner-nav .nav-brand{font-size:15px;font-weight:700;color:#1c1c1e;text-decoration:none}
+.owner-nav .nav-links{display:flex;gap:2px;list-style:none;margin:0;padding:0}
+.owner-nav .nav-links a{padding:6px 10px;border-radius:6px;color:#8e8e93;text-decoration:none;font-size:12px;font-weight:600;transition:all .15s}
+.owner-nav .nav-links a:hover{background:#f3f4f6;color:#1c1c1e}
+.owner-nav .nav-links a.active{background:#007aff15;color:#007aff}
+{% endif %}
     </style>
 </head>
 <body>
+{% if user_role == 'owner' %}
+<nav class="owner-nav">
+    <div class="nav-inner">
+        <a href="/" class="nav-brand">PizzBurg</a>
+        <ul class="nav-links">
+            <li><a href="{{ url_for('list_expenses') }}">Расходы</a></li>
+            <li><a href="{{ url_for('list_supplies') }}">Поставки</a></li>
+            <li><a href="{{ url_for('shift_closing') }}">Смена</a></li>
+            <li><a href="{{ url_for('cashier_shift_closing') }}">Кассир</a></li>
+            <li><a href="{{ url_for('cafe_shift_closing') }}" class="active">Кафе</a></li>
+        </ul>
+    </div>
+</nav>
+{% endif %}
 <div class="sc">
     <div class="sc-title">{{ account_name }}</div>
     <div class="sc-title-sub">Закрытие смены</div>
