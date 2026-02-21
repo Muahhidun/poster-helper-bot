@@ -610,11 +610,11 @@ function pi(id) {
     return parseFloat(el.value.replace(/\s/g, '').replace(/,/g, '.')) || 0;
 }
 
-// Get today in KZ timezone (UTC+5) as YYYY-MM-DD
+// Get today in KZ timezone (UTC+5 Asia/Almaty) as YYYY-MM-DD
 function getTodayStr() {
     // "Business day" logic: before 6:00 AM KZ time, the business day is still yesterday
     const now = new Date();
-    const kz = new Date(now.getTime() + (5 * 60 - now.getTimezoneOffset()) * 60000);
+    const kz = new Date(now.getTime() + 5 * 3600000); // UTC+5 Asia/Almaty
     const kzHour = kz.getUTCHours();
     if (kzHour < 6) {
         // Before 6 AM — business day is yesterday
@@ -1063,7 +1063,7 @@ function renderDateButtons(dates) {
         const d = new Date();
         d.setDate(d.getDate() - i);
         // Format as YYYY-MM-DD in KZ timezone
-        const kz = new Date(d.getTime() + (5 * 60 - d.getTimezoneOffset()) * 60000);
+        const kz = new Date(d.getTime() + 5 * 3600000); // UTC+5 Asia/Almaty
         const ds = kz.toISOString().slice(0, 10);
         if (allDates.indexOf(ds) === -1) allDates.push(ds);
     }
@@ -1075,7 +1075,7 @@ function renderDateButtons(dates) {
     // Compute yesterday's date string
     const yd = new Date();
     yd.setDate(yd.getDate() - 1);
-    const ykz = new Date(yd.getTime() + (5 * 60 - yd.getTimezoneOffset()) * 60000);
+    const ykz = new Date(yd.getTime() + 5 * 3600000); // UTC+5 Asia/Almaty
     const yesterday = ykz.toISOString().slice(0, 10);
 
     // Track which dates have saved data
