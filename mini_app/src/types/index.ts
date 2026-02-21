@@ -78,58 +78,6 @@ declare global {
 }
 
 // API response types
-export interface DashboardData {
-  supplies_count: number
-  items_count: number
-  avg_accuracy: number
-  accuracy_trend: Array<{
-    date: string
-    accuracy: number
-  }>
-  top_problematic: Array<{
-    item: string
-    count: number
-  }>
-}
-
-export interface Supply {
-  id: number
-  created_at: string
-  supplier_name: string
-  account_name?: string
-  storage_name?: string
-  items_count: number
-  total_amount: number
-  avg_confidence: number
-}
-
-export interface SupplyItem {
-  original_text: string
-  matched_item_name: string
-  quantity: number
-  unit: string
-  price: number
-  total: number
-  confidence_score: number
-}
-
-export interface SupplyDetail {
-  id: number
-  created_at: string
-  supplier_name: string
-  account_name: string
-  storage_name: string
-  total_amount: number
-  poster_supply_id?: number
-  items: SupplyItem[]
-}
-
-export interface SuppliesResponse {
-  supplies: Supply[]
-  total: number
-  page: number
-  pages: number
-}
 
 export interface Alias {
   id: number

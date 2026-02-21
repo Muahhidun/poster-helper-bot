@@ -1,7 +1,4 @@
 import type {
-  DashboardData,
-  SuppliesResponse,
-  SupplyDetail,
   AliasesResponse,
   CreateAliasRequest,
   UpdateAliasRequest,
@@ -63,20 +60,6 @@ class ApiClient {
     }
 
     return response.json()
-  }
-
-  // Dashboard
-  async getDashboard(): Promise<DashboardData> {
-    return this.request<DashboardData>('/api/dashboard')
-  }
-
-  // Supply history
-  async getSupplies(page = 1, limit = 20): Promise<SuppliesResponse> {
-    return this.request<SuppliesResponse>(`/api/supplies?page=${page}&limit=${limit}`)
-  }
-
-  async getSupply(id: number): Promise<SupplyDetail> {
-    return this.request<SupplyDetail>(`/api/supplies/${id}`)
   }
 
   // Aliases
