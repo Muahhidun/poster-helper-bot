@@ -1006,7 +1006,7 @@ function loadShiftReport() {
     const day_result = calc.day_result || 0;
     const shift_left = calc.shift_left || (cash_to_leave + cash_coins);
     const cashless_diff = calc.cashless_diff || (fact_cashless - poster_card);
-    const collection = calc.collection || (cash_bills - cash_to_leave + expenses - cashless_diff);
+    const collection = calc.collection || (cash_bills - cash_to_leave + expenses + cashless_diff);
 
     const dayLabel = day_result > 0 ? 'излишек' : day_result < 0 ? 'недостача' : 'ровно';
     const daySign = day_result > 0 ? '+' : '';
