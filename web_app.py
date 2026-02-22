@@ -4209,10 +4209,11 @@ def api_shift_closing_calculate(validated=None):
         # 7. Разница безнала
         cashless_diff = fact_cashless - poster_card
 
-        # 8. Инкассация = Бумажные - оставить бумажными + расходы - разница безнала
-        # Если безнал факт < Poster (diff<0): в кассе больше наличных → инкассируем больше
-        # Если безнал факт > Poster (diff>0): в кассе меньше наличных → инкассируем меньше
-        collection = cash_bills - cash_to_leave + expenses - cashless_diff
+        # 8. Инкассация = Бумажные - оставить бумажными + расходы + разница безнала
+        # cashless_diff > 0 (факт > Poster): Poster считает что наличных больше → инкассируем больше чтобы выровнять
+        # cashless_diff < 0 (факт < Poster): Poster считает что наличных меньше → инкассируем меньше
+        # Вместе с корр. переводом: инкассация компенсирует разницу, перевод выравнивает счета
+        collection = cash_bills - cash_to_leave + expenses + cashless_diff
 
         return jsonify({
             'success': True,
@@ -4754,7 +4755,7 @@ def api_cafe_calculate():
         day_result = fact_adjusted - poster_total
         shift_left = cash_to_leave + cash_coins
         cashless_diff = fact_cashless - poster_card
-        collection = cash_bills - cash_to_leave + expenses - cashless_diff
+        collection = cash_bills - cash_to_leave + expenses + cashless_diff
 
         return jsonify({
             'success': True,
