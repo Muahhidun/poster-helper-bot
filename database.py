@@ -812,6 +812,9 @@ class UserDatabase:
         # Run migration to add salaries columns to shift_closings (cafe salaries)
         self._migrate_cafe_salaries()
 
+        # Run migration to create daily_transactions_log table
+        self._migrate_daily_transactions_log()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -901,6 +904,42 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Cafe salaries migration error: {e}")
+
+    def _migrate_daily_transactions_log(self):
+        """Create daily_transactions_log table to track when daily transactions were created per date"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS daily_transactions_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        count INTEGER DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date)
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS daily_transactions_log (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        date DATE NOT NULL,
+                        count INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date)
+                    )
+                """)
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ daily_transactions_log table: ready")
+
+        except Exception as e:
+            logger.error(f"daily_transactions_log migration error: {e}")
 
     def _migrate_cafe_access(self):
         """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
@@ -3368,6 +3407,57 @@ class UserDatabase:
             logger.error(f"Failed to set cafe salaries: {e}")
             import traceback
             traceback.print_exc()
+            return False
+
+    # ==================== Daily Transactions Log Methods ====================
+
+    def is_daily_transactions_created(self, telegram_user_id: int, date: str) -> bool:
+        """Check if daily transactions were already created for this user and date"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+
+            cursor.execute(f"""
+                SELECT count FROM daily_transactions_log
+                WHERE telegram_user_id = {placeholder} AND date = {placeholder}
+            """, (telegram_user_id, date))
+
+            row = cursor.fetchone()
+            conn.close()
+            return row is not None and (row[0] if isinstance(row, tuple) else row['count']) > 0
+
+        except Exception as e:
+            logger.error(f"Failed to check daily_transactions_log: {e}")
+            return False
+
+    def set_daily_transactions_created(self, telegram_user_id: int, date: str, count: int) -> bool:
+        """Mark daily transactions as created for this user and date"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+
+            if DB_TYPE == "sqlite":
+                cursor.execute(f"""
+                    INSERT OR REPLACE INTO daily_transactions_log
+                    (telegram_user_id, date, count, created_at)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, CURRENT_TIMESTAMP)
+                """, (telegram_user_id, date, count))
+            else:
+                cursor.execute(f"""
+                    INSERT INTO daily_transactions_log (telegram_user_id, date, count)
+                    VALUES ({placeholder}, {placeholder}, {placeholder})
+                    ON CONFLICT (telegram_user_id, date)
+                    DO UPDATE SET count = {placeholder}, created_at = CURRENT_TIMESTAMP
+                """, (telegram_user_id, date, count, count))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to set daily_transactions_log: {e}")
             return False
 
     # ==================== Cafe Access Token Methods ====================

@@ -1233,6 +1233,32 @@ document.addEventListener('DOMContentLoaded', function() {
             this.textContent = '⏳...';
 
             try {
+                // Read latest values from DOM inputs (in case change event hasn't fired yet)
+                const tbody = document.querySelector(`.items-tbody[data-draft-id="${draftId}"]`);
+                if (tbody) {
+                    tbody.querySelectorAll('tr[data-item-id]').forEach(row => {
+                        const itemId = parseInt(row.dataset.itemId);
+                        const item = items.find(i => i.id === itemId);
+                        if (item) {
+                            const qty = parseFloat(row.querySelector('.qty')?.value) || 0;
+                            const price = parseFloat(row.querySelector('.price')?.value) || 0;
+                            item.quantity = qty;
+                            item.price_per_unit = price;
+                        }
+                    });
+                }
+
+                // Flush all item data to server before processing
+                // (prevents race condition when user edits price and immediately clicks "Создать")
+                const updatePromises = items.map(item =>
+                    fetch(`/supplies/update-item/${item.id}`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ quantity: item.quantity, price_per_unit: item.price_per_unit })
+                    })
+                );
+                await Promise.all(updatePromises);
+
                 const response = await fetch(`/supplies/process/${draftId}`, { method: 'POST' });
                 const result = await response.json();
 
