@@ -413,6 +413,16 @@ class PosterClient:
                 if item.get('packing'):
                     data[f'ingredient[{idx}][packing]'] = item['packing']
 
+            # Payment transaction — without this, Poster creates supply with 0₸ payment
+            total_amount = round(sum(
+                item['num'] * item['price']
+                for item in ingredients
+            ), 2)
+            data['transactions[0][account_id]'] = account_id
+            data['transactions[0][date]'] = date
+            data['transactions[0][amount]'] = total_amount
+            data['transactions[0][delete]'] = 0
+
             return data
 
         def _build_legacy_data(type_map):
