@@ -36,7 +36,7 @@
         </div>
 
         <!-- Section: Наличка (Cash) -->
-        <div class="account-section" data-account-type="cash">
+        <div class="account-section fade-in-up" data-account-type="cash">
             <div class="section-header-wrapper">
                 <h2 class="section-header">💵 Наличка</h2>
                 <div class="reconciliation-row" data-source="cash">
@@ -156,7 +156,7 @@
         </div>
 
         <!-- Section: Kaspi Pay -->
-        <div class="account-section" data-account-type="kaspi">
+        <div class="account-section fade-in-up" data-account-type="kaspi">
             <div class="section-header-wrapper">
                 <h2 class="section-header">📱 Kaspi Pay</h2>
                 <div class="reconciliation-row" data-source="kaspi">
@@ -275,7 +275,7 @@
         </div>
 
         <!-- Section: Халык -->
-        <div class="account-section" data-account-type="halyk">
+        <div class="account-section fade-in-up" data-account-type="halyk">
             <div class="section-header-wrapper">
                 <h2 class="section-header">🏦 Халык</h2>
                 <div class="reconciliation-row" data-source="halyk">
@@ -3081,15 +3081,15 @@ document.getElementById('sync-poster-btn').addEventListener('click', async funct
             if (result.deleted > 0) parts.push(`удалено: ${result.deleted}`);
             if (result.skipped > 0) parts.push(`без изменений: ${result.skipped}`);
             const msg = parts.length > 0 ? parts.join(', ') : 'Нет транзакций за сегодня';
-            alert(`✅ Синхронизация: ${msg}`);
+            showToast(`Синхронизация: ${msg}`, 'success');
             // Always reload to show fresh data
-            location.reload();
+            setTimeout(function() { location.reload(); }, 800);
         } else {
-            alert(`❌ Ошибка: ${result.error || 'Неизвестная ошибка'}`);
+            showToast(`Ошибка: ${result.error || 'Неизвестная ошибка'}`, 'error');
         }
     } catch (error) {
         console.error('Sync error:', error);
-        alert('❌ Ошибка синхронизации: ' + error.message);
+        showToast('Ошибка синхронизации: ' + error.message, 'error');
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
@@ -3545,7 +3545,7 @@ function copyChecklistToClipboard() {
         setTimeout(() => { status.textContent = ''; }, 2000);
     }).catch(err => {
         console.error('Failed to copy:', err);
-        alert('Не удалось скопировать в буфер обмена');
+        showToast('Не удалось скопировать в буфер обмена', 'error');
     });
 }
 

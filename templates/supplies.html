@@ -13,7 +13,7 @@
 
     <div class="supplies-list" id="supplies-list">
         {% for draft in drafts %}
-        <div class="supply-card" data-id="{{ draft.id }}">
+        <div class="supply-card fade-in-up" data-id="{{ draft.id }}">
             <div class="supply-header">
                 <div class="supply-info">
                     <div class="supplier-row">
@@ -945,7 +945,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (result.success) {
                 window.location.reload();
             } else {
-                alert('Ошибка: ' + (result.error || 'Unknown'));
+                showToast('Ошибка: ' + (result.error || 'Unknown'), 'error');
             }
         } catch (e) {
             console.error('Error:', e);
@@ -1125,7 +1125,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const lastSupply = lastSupplyByDraft[draftId];
 
             if (!lastSupply || !lastSupply.items.length) {
-                alert('Нет данных о последней поставке');
+                showToast('Нет данных о последней поставке', 'warning');
                 return;
             }
 
@@ -1217,13 +1217,13 @@ document.addEventListener('DOMContentLoaded', function() {
             const items = supplyItems[draftId] || [];
 
             if (items.length === 0) {
-                alert('Добавьте хотя бы один товар');
+                showToast('Добавьте хотя бы один товар', 'warning');
                 return;
             }
 
             const unmatched = items.filter(i => !i.poster_ingredient_id);
             if (unmatched.length > 0) {
-                alert(`Не все товары привязаны к ингредиентам (${unmatched.length} из ${items.length})`);
+                showToast(`Не все товары привязаны к ингредиентам (${unmatched.length} из ${items.length})`, 'warning');
                 return;
             }
 
@@ -1267,16 +1267,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     const msg = supplies.map(s =>
                         `✅ ${s.account_name || 'Poster'}: #${s.supply_id} (${s.items_count} товаров, ${s.total}₸)`
                     ).join('\n');
-                    alert('Поставки созданы!\n\n' + msg);
+                    showToast('Поставки созданы!\n\n' + msg, 'success', 6000);
                     this.closest('.supply-card').remove();
                     updateTotals();
                 } else {
-                    alert('Ошибка: ' + result.error);
+                    showToast('Ошибка: ' + result.error, 'error');
                     this.disabled = false;
                     this.textContent = '✅ Создать';
                 }
             } catch (e) {
-                alert('Ошибка: ' + e.message);
+                showToast('Ошибка: ' + e.message, 'error');
                 this.disabled = false;
                 this.textContent = '✅ Создать';
             }
