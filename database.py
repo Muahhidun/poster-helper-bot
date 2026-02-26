@@ -3412,7 +3412,8 @@ class UserDatabase:
     # ==================== Daily Transactions Log Methods ====================
 
     def is_daily_transactions_created(self, telegram_user_id: int, date: str) -> bool:
-        """Check if daily transactions were already created for this user and date"""
+        """Check if daily transactions were already created for this user and date.
+        Also returns True for count=-1 (claim in progress) to prevent race conditions."""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -3425,10 +3426,41 @@ class UserDatabase:
 
             row = cursor.fetchone()
             conn.close()
-            return row is not None and (row[0] if isinstance(row, tuple) else row['count']) > 0
+            if row is None:
+                return False
+            count = row[0] if isinstance(row, tuple) else row['count']
+            # count > 0 = done, count = -1 = claim in progress
+            return count != 0
 
         except Exception as e:
             logger.error(f"Failed to check daily_transactions_log: {e}")
+            return False
+
+    def is_daily_transactions_created_for_date(self, date: str) -> bool:
+        """Check if daily transactions were already created by ANY user for this date.
+        Prevents multi-user duplication when multiple users share the same Poster account.
+        Also detects claims (count=-1) to prevent race conditions."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+
+            cursor.execute(f"""
+                SELECT telegram_user_id, count FROM daily_transactions_log
+                WHERE date = {placeholder} AND count != 0
+                LIMIT 1
+            """, (date,))
+
+            row = cursor.fetchone()
+            conn.close()
+            if row is not None:
+                uid = row[0] if isinstance(row, tuple) else row['telegram_user_id']
+                logger.info(f"Daily transactions already created for {date} by user {uid}")
+                return True
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to check daily_transactions_log for date: {e}")
             return False
 
     def set_daily_transactions_created(self, telegram_user_id: int, date: str, count: int) -> bool:

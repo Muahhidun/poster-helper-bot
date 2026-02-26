@@ -50,7 +50,8 @@ class DailyTransactionScheduler:
         Возвращает comments (set) и category_ids (set) для проверки дублей.
         """
         try:
-            today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
+            # ВАЖНО: finance.getTransactions ожидает формат YYYYMMDD (не YYYY-MM-DD!)
+            today = datetime.now(KZ_TZ).strftime("%Y%m%d")
             result = await poster_client._request('GET', 'finance.getTransactions', params={
                 'dateFrom': today,
                 'dateTo': today
@@ -94,16 +95,30 @@ class DailyTransactionScheduler:
         Создать все ежедневные транзакции в 12:00.
         Только для аккаунта Pizzburg (зарплаты Кафе убраны — создаются при закрытии смены).
 
-        Защита от дублей:
-        1. Флаг в БД (daily_transactions_log) — предотвращает повторный запуск при рестартах
-        2. Per-account проверка в Poster API — пропускает уже существующие транзакции
+        Защита от дублей (3 уровня):
+        1. Глобальный флаг в БД — если ЛЮБОЙ пользователь уже создал транзакции за сегодня, пропускаем
+           (решает проблему: 2 пользователя с одним Poster аккаунтом)
+        2. Per-user флаг в БД — если этот пользователь уже создал, пропускаем
+           (решает проблему: повторный запуск при рестартах)
+        3. Per-account проверка в Poster API — пропускает уже существующие транзакции
+           (решает проблему: транзакции созданы вручную или другим способом)
         """
         try:
             from database import get_database
             db = get_database()
             today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
 
-            # 1. Проверка флага в БД — защита от повторного запуска
+            # 1. ГЛОБАЛЬНАЯ проверка — если ЛЮБОЙ пользователь уже создал за сегодня
+            if db.is_daily_transactions_created_for_date(today):
+                logger.info(f"⏭️ Daily transactions уже созданы за {today} другим пользователем (глобальный флаг)")
+                return {
+                    'success': True,
+                    'count': 0,
+                    'transactions': [],
+                    'already_exists': True
+                }
+
+            # 2. Per-user проверка — если этот пользователь уже создал
             if db.is_daily_transactions_created(self.telegram_user_id, today):
                 logger.info(f"⏭️ Daily transactions уже созданы за {today} для {self.telegram_user_id} (флаг в БД)")
                 return {
@@ -112,6 +127,11 @@ class DailyTransactionScheduler:
                     'transactions': [],
                     'already_exists': True
                 }
+
+            # 3. CLAIM: установить флаг ДО создания (count=-1 = "в процессе")
+            # Это предотвращает race condition когда 2 пользователя стартуют одновременно
+            db.set_daily_transactions_created(self.telegram_user_id, today, -1)
+            logger.info(f"🔒 Claim установлен для {self.telegram_user_id} за {today}")
 
             accounts = db.get_accounts(self.telegram_user_id)
 
@@ -140,7 +160,7 @@ class DailyTransactionScheduler:
                 )
 
                 try:
-                    # 2. Получить существующие транзакции ЭТОГО аккаунта для per-transaction дедупликации
+                    # 4. Получить существующие транзакции ЭТОГО аккаунта для per-transaction дедупликации
                     account_existing = await self._get_account_existing_data(poster_client)
 
                     # Выбрать конфигурацию в зависимости от аккаунта
@@ -157,9 +177,8 @@ class DailyTransactionScheduler:
                 finally:
                     await poster_client.close()
 
-            # 3. Установить флаг в БД — транзакции созданы за эту дату
-            if all_transactions:
-                db.set_daily_transactions_created(self.telegram_user_id, today, len(all_transactions))
+            # 5. Обновить флаг с реальным количеством (claim → done)
+            db.set_daily_transactions_created(self.telegram_user_id, today, len(all_transactions))
 
             logger.info(f"✅ Создано {len(all_transactions)} ежедневных транзакций для пользователя {self.telegram_user_id}")
             for tx in all_transactions:
@@ -186,6 +205,18 @@ class DailyTransactionScheduler:
             existing_data = {'comments': set(), 'category_ids': set()}
         existing_comments = existing_data.get('comments', set())
         existing_category_ids = existing_data.get('category_ids', set())
+
+        # Ранний выход: если большинство ожидаемых маркеров уже найдены в Poster,
+        # значит транзакции уже созданы (возможно другим пользователем или вручную)
+        expected_markers = ["Заготовка", "Мадира", "Нургуль", "Курьеры", "Караганда",
+                           "Фарш", "Кюрдамир", "Реклама", "Астана", "Комиссия", "Забрал"]
+        found_markers = sum(1 for m in expected_markers if self._comment_exists(m, existing_comments))
+        if found_markers >= 7:
+            logger.info(
+                f"⏭️ Pizzburg: {found_markers}/{len(expected_markers)} маркеров уже найдено в Poster — "
+                f"транзакции уже существуют, пропускаю создание"
+            )
+            return []
 
         def _should_skip(comment: str = None, category_id: int = None) -> bool:
             """Проверить дубликат по комментарию (substring) или category_id.
