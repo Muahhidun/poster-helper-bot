@@ -3998,6 +3998,142 @@ def search_suppliers():
 
 
 # ========================================
+# Daily Transactions Config (Ежедневные транзакции)
+# ========================================
+
+@app.route('/daily-transactions')
+def daily_transactions_page():
+    """Show daily transactions config page (owner only)"""
+    db = get_database()
+    # Seed defaults if empty
+    db.seed_daily_transaction_configs(g.user_id)
+    configs = db.get_daily_transaction_configs(g.user_id)
+    return render_template('daily_transactions.html', configs=configs)
+
+
+@app.route('/api/daily-transactions', methods=['GET'])
+def api_get_daily_transactions():
+    """Get all daily transaction configs"""
+    db = get_database()
+    configs = db.get_daily_transaction_configs(g.user_id)
+    return jsonify({'success': True, 'configs': configs})
+
+
+@app.route('/api/daily-transactions', methods=['POST'])
+def api_create_daily_transaction():
+    """Create a new daily transaction config"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data'}), 400
+
+    required = ['category_id', 'account_from_id', 'amount']
+    for field in required:
+        if field not in data and data.get('transaction_type') != 2:
+            return jsonify({'error': f'Missing field: {field}'}), 400
+
+    db = get_database()
+    new_id = db.create_daily_transaction_config(g.user_id, data)
+    if new_id:
+        return jsonify({'success': True, 'id': new_id}), 201
+    return jsonify({'error': 'Failed to create'}), 500
+
+
+@app.route('/api/daily-transactions/<int:config_id>', methods=['PUT'])
+def api_update_daily_transaction(config_id):
+    """Update a daily transaction config"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data'}), 400
+
+    db = get_database()
+    if db.update_daily_transaction_config(config_id, data):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Failed to update'}), 500
+
+
+@app.route('/api/daily-transactions/<int:config_id>', methods=['DELETE'])
+def api_delete_daily_transaction(config_id):
+    """Delete a daily transaction config"""
+    db = get_database()
+    if db.delete_daily_transaction_config(config_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Failed to delete'}), 500
+
+
+@app.route('/api/daily-transactions/<int:config_id>/toggle', methods=['PATCH'])
+def api_toggle_daily_transaction(config_id):
+    """Toggle enable/disable for a daily transaction config"""
+    data = request.get_json()
+    is_enabled = 1 if data.get('is_enabled', True) else 0
+    db = get_database()
+    if db.update_daily_transaction_config(config_id, {'is_enabled': is_enabled}):
+        return jsonify({'success': True, 'is_enabled': is_enabled})
+    return jsonify({'error': 'Failed to toggle'}), 500
+
+
+@app.route('/api/daily-transactions/poster-data')
+def api_daily_transactions_poster_data():
+    """Get Poster categories and finance accounts for dropdowns"""
+    import asyncio
+    from poster_client import PosterClient
+    db = get_database()
+    accounts = db.get_accounts(g.user_id)
+
+    if not accounts:
+        return jsonify({'categories': [], 'finance_accounts': [], 'poster_accounts': []})
+
+    async def fetch_poster_data():
+        all_categories = []
+        all_finance_accounts = []
+        poster_accounts = []
+
+        for acc in accounts:
+            poster_accounts.append({
+                'id': acc['id'],
+                'account_name': acc['account_name']
+            })
+
+            client = PosterClient(
+                telegram_user_id=g.user_id,
+                poster_token=acc['poster_token'],
+                poster_user_id=acc['poster_user_id'],
+                poster_base_url=acc['poster_base_url']
+            )
+            try:
+                categories = await client.get_categories()
+                for cat in categories:
+                    all_categories.append({
+                        'id': int(cat.get('category_id', 0)),
+                        'name': cat.get('category_name') or cat.get('name', ''),
+                        'account_name': acc['account_name']
+                    })
+
+                fin_accounts = await client.get_accounts()
+                for fa in fin_accounts:
+                    all_finance_accounts.append({
+                        'id': int(fa.get('account_id', 0)),
+                        'name': fa.get('account_name') or fa.get('name', ''),
+                        'account_name': acc['account_name']
+                    })
+            finally:
+                await client.close()
+
+        return all_categories, all_finance_accounts, poster_accounts
+
+    loop = asyncio.new_event_loop()
+    try:
+        categories, finance_accounts, poster_accounts = loop.run_until_complete(fetch_poster_data())
+    finally:
+        loop.close()
+
+    return jsonify({
+        'categories': categories,
+        'finance_accounts': finance_accounts,
+        'poster_accounts': poster_accounts
+    })
+
+
+# ========================================
 # Shift Closing Web Interface (Закрытие смены)
 # ========================================
 

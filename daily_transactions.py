@@ -50,7 +50,8 @@ class DailyTransactionScheduler:
         Возвращает comments (set) и category_ids (set) для проверки дублей.
         """
         try:
-            today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
+            # ВАЖНО: finance.getTransactions ожидает формат YYYYMMDD (не YYYY-MM-DD!)
+            today = datetime.now(KZ_TZ).strftime("%Y%m%d")
             result = await poster_client._request('GET', 'finance.getTransactions', params={
                 'dateFrom': today,
                 'dateTo': today
@@ -94,16 +95,30 @@ class DailyTransactionScheduler:
         Создать все ежедневные транзакции в 12:00.
         Только для аккаунта Pizzburg (зарплаты Кафе убраны — создаются при закрытии смены).
 
-        Защита от дублей:
-        1. Флаг в БД (daily_transactions_log) — предотвращает повторный запуск при рестартах
-        2. Per-account проверка в Poster API — пропускает уже существующие транзакции
+        Защита от дублей (3 уровня):
+        1. Глобальный флаг в БД — если ЛЮБОЙ пользователь уже создал транзакции за сегодня, пропускаем
+           (решает проблему: 2 пользователя с одним Poster аккаунтом)
+        2. Per-user флаг в БД — если этот пользователь уже создал, пропускаем
+           (решает проблему: повторный запуск при рестартах)
+        3. Per-account проверка в Poster API — пропускает уже существующие транзакции
+           (решает проблему: транзакции созданы вручную или другим способом)
         """
         try:
             from database import get_database
             db = get_database()
             today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
 
-            # 1. Проверка флага в БД — защита от повторного запуска
+            # 1. ГЛОБАЛЬНАЯ проверка — если ЛЮБОЙ пользователь уже создал за сегодня
+            if db.is_daily_transactions_created_for_date(today):
+                logger.info(f"⏭️ Daily transactions уже созданы за {today} другим пользователем (глобальный флаг)")
+                return {
+                    'success': True,
+                    'count': 0,
+                    'transactions': [],
+                    'already_exists': True
+                }
+
+            # 2. Per-user проверка — если этот пользователь уже создал
             if db.is_daily_transactions_created(self.telegram_user_id, today):
                 logger.info(f"⏭️ Daily transactions уже созданы за {today} для {self.telegram_user_id} (флаг в БД)")
                 return {
@@ -112,6 +127,11 @@ class DailyTransactionScheduler:
                     'transactions': [],
                     'already_exists': True
                 }
+
+            # 3. CLAIM: установить флаг ДО создания (count=-1 = "в процессе")
+            # Это предотвращает race condition когда 2 пользователя стартуют одновременно
+            db.set_daily_transactions_created(self.telegram_user_id, today, -1)
+            logger.info(f"🔒 Claim установлен для {self.telegram_user_id} за {today}")
 
             accounts = db.get_accounts(self.telegram_user_id)
 
@@ -127,9 +147,28 @@ class DailyTransactionScheduler:
 
             all_transactions = []
 
+            # Загрузить конфигурацию из БД (если пуста — seed defaults)
+            db.seed_daily_transaction_configs(self.telegram_user_id)
+            tx_configs = db.get_daily_transaction_configs(self.telegram_user_id)
+
+            # Группировать конфиги по account_name
+            configs_by_account: Dict[str, list] = {}
+            for cfg in tx_configs:
+                if not cfg.get('is_enabled'):
+                    continue
+                acc_name = cfg.get('account_name', 'Pizzburg')
+                if acc_name not in configs_by_account:
+                    configs_by_account[acc_name] = []
+                configs_by_account[acc_name].append(cfg)
+
             # Создать транзакции для каждого аккаунта
             for account in accounts:
                 account_name = account['account_name']
+                account_configs = configs_by_account.get(account_name, [])
+
+                if not account_configs:
+                    logger.info(f"⏭️ Нет включённых транзакций для аккаунта '{account_name}'")
+                    continue
 
                 # Создать PosterClient для этого аккаунта
                 poster_client = PosterClient(
@@ -140,26 +179,20 @@ class DailyTransactionScheduler:
                 )
 
                 try:
-                    # 2. Получить существующие транзакции ЭТОГО аккаунта для per-transaction дедупликации
+                    # 4. Получить существующие транзакции для per-transaction дедупликации
                     account_existing = await self._get_account_existing_data(poster_client)
 
-                    # Выбрать конфигурацию в зависимости от аккаунта
-                    if account_name == 'Pizzburg':
-                        logger.info(f"📦 Создаю ежедневные транзакции для аккаунта '{account_name}'...")
-                        transactions = await self._create_transactions_pizzburg(poster_client, current_time, account_existing)
-                        all_transactions.extend([f"[{account_name}] {tx}" for tx in transactions])
-                    elif account_name == 'Pizzburg-cafe':
-                        # Зарплаты Кафе НЕ создаём — их создаёт админ при закрытии смены
-                        logger.info(f"⏭️ Пропускаю '{account_name}' — зарплаты создаются при закрытии смены")
-                    else:
-                        logger.warning(f"Нет конфигурации для аккаунта '{account_name}'")
+                    logger.info(f"📦 Создаю {len(account_configs)} ежедневных транзакций для '{account_name}'...")
+                    transactions = await self._create_transactions_from_config(
+                        poster_client, current_time, account_configs, account_existing
+                    )
+                    all_transactions.extend([f"[{account_name}] {tx}" for tx in transactions])
 
                 finally:
                     await poster_client.close()
 
-            # 3. Установить флаг в БД — транзакции созданы за эту дату
-            if all_transactions:
-                db.set_daily_transactions_created(self.telegram_user_id, today, len(all_transactions))
+            # 5. Обновить флаг с реальным количеством (claim → done)
+            db.set_daily_transactions_created(self.telegram_user_id, today, len(all_transactions))
 
             logger.info(f"✅ Создано {len(all_transactions)} ежедневных транзакций для пользователя {self.telegram_user_id}")
             for tx in all_transactions:
@@ -178,8 +211,11 @@ class DailyTransactionScheduler:
                 'error': str(e)
             }
 
-    async def _create_transactions_pizzburg(self, poster_client: PosterClient, current_time: str, existing_data: dict = None) -> List[str]:
-        """Транзакции для аккаунта Pizzburg (основной).
+    async def _create_transactions_from_config(
+        self, poster_client: PosterClient, current_time: str,
+        configs: List[Dict], existing_data: dict = None
+    ) -> List[str]:
+        """Создать транзакции из конфигурации в БД.
         Пропускает транзакции, которые уже существуют (по комментарию или category_id)."""
         transactions_created = []
         if existing_data is None:
@@ -187,190 +223,84 @@ class DailyTransactionScheduler:
         existing_comments = existing_data.get('comments', set())
         existing_category_ids = existing_data.get('category_ids', set())
 
-        def _should_skip(comment: str = None, category_id: int = None) -> bool:
-            """Проверить дубликат по комментарию (substring) или category_id.
-            Для транзакций с пустым комментарием используем category_id."""
+        # Ранний выход: если большинство комментариев из конфига уже найдены в Poster
+        config_comments = [c.get('comment', '') for c in configs if c.get('comment')]
+        if config_comments:
+            found = sum(1 for c in config_comments if self._comment_exists(c, existing_comments))
+            threshold = max(3, len(config_comments) // 2)
+            if found >= threshold:
+                logger.info(
+                    f"⏭️ {found}/{len(config_comments)} маркеров уже найдено в Poster — "
+                    f"транзакции уже существуют, пропускаю создание"
+                )
+                return []
+
+        # Кэш для автоопределения категорий (category_id=0)
+        auto_category_cache: Dict[str, int] = {}
+
+        for cfg in configs:
+            comment = cfg.get('comment', '')
+            category_id = cfg.get('category_id', 0)
+            category_name = cfg.get('category_name', '')
+            tx_type = cfg.get('transaction_type', 0)
+
+            # Дедупликация: по комментарию (substring) или category_id
             if comment and self._comment_exists(comment, existing_comments):
                 logger.info(f"⏭️ Пропускаю (уже есть): '{comment}'")
-                return True
-            if category_id is not None and str(category_id) in existing_category_ids:
+                continue
+            if not comment and category_id > 0 and str(category_id) in existing_category_ids:
                 logger.info(f"⏭️ Пропускаю (category {category_id} уже есть)")
-                return True
-            return False
+                continue
 
-        # === СЧЕТ "Оставил в кассе" (ID=4) ===
+            # Автоопределение category_id по category_name (для записей с id=0)
+            actual_category_id = category_id
+            if category_id == 0 and category_name and tx_type != 2:
+                cache_key = category_name.lower()
+                if cache_key in auto_category_cache:
+                    actual_category_id = auto_category_cache[cache_key]
+                else:
+                    # Поиск по ключевым словам из category_name
+                    keywords = [w.lower() for w in category_name.split() if len(w) > 2]
+                    if keywords:
+                        found_id = await self._find_category_id(poster_client, *keywords)
+                        if found_id:
+                            actual_category_id = found_id
+                            auto_category_cache[cache_key] = found_id
+                        else:
+                            logger.warning(f"⚠️ Категория '{category_name}' не найдена, пропускаю")
+                            continue
 
-        # ПРИМЕЧАНИЕ: Транзакции кассиров и донерщиков теперь создаются автоматически в 21:30
-        # на основе продаж за день (см. cashier_salary.py и doner_salary.py)
+            # Создать транзакцию
+            try:
+                tx_kwargs = {
+                    'transaction_type': tx_type,
+                    'category_id': actual_category_id,
+                    'account_from_id': cfg.get('account_from_id', 4),
+                    'amount': cfg.get('amount', 1),
+                    'date': current_time,
+                    'comment': comment,
+                }
+                if tx_type == 2 and cfg.get('account_to_id'):
+                    tx_kwargs['account_to_id'] = cfg['account_to_id']
 
-        # 1× Повара (ID=17) - 1₸, комментарий "Заготовка"
-        if not _should_skip("Заготовка"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=17,  # Повара
-                account_from_id=4,
-                amount=1,
-                date=current_time,
-                comment="Заготовка"
-            )
-            transactions_created.append(f"Повара: {tx_id}")
-
-        # 1× Повара (ID=17) - 1₸, комментарий "Мадира Т"
-        if not _should_skip("Мадира Т"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=17,  # Повара
-                account_from_id=4,
-                amount=1,
-                date=current_time,
-                comment="Мадира Т"
-            )
-            transactions_created.append(f"Повара (Мадира Т): {tx_id}")
-
-        # 1× Повара (ID=17) - 1₸, комментарий "Нургуль Т"
-        if not _should_skip("Нургуль Т"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=17,  # Повара
-                account_from_id=4,
-                amount=1,
-                date=current_time,
-                comment="Нургуль Т"
-            )
-            transactions_created.append(f"Повара (Нургуль Т): {tx_id}")
-
-        # 1× Кухрабочая (ID=18) - 1₸ (пустой комментарий → проверяем по category_id)
-        if not _should_skip(category_id=18):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=18,  # КухРабочая
-                account_from_id=4,
-                amount=1,
-                date=current_time,
-                comment=""
-            )
-            transactions_created.append(f"Кухрабочая: {tx_id}")
-
-        # 1× Курьер (ID=15) - 1₸, комментарий "Курьеры"
-        if not _should_skip("Курьеры"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=15,  # Курьер
-                account_from_id=4,
-                amount=1,
-                date=current_time,
-                comment="Курьеры"
-            )
-            transactions_created.append(f"Курьер: {tx_id}")
-
-        # 1× Зарплаты - 1₸, комментарий "Мадина админ" (ID категории определяется автоматически)
-        if not _should_skip("Мадина админ"):
-            zarplaty_id = await self._find_category_id(poster_client, 'зарплат')
-            if zarplaty_id is None:
-                zarplaty_id = await self._find_category_id(poster_client, 'зарпл')
-            if zarplaty_id is None:
-                # Системные категории Poster имеют английские имена
-                zarplaty_id = await self._find_category_id(poster_client, 'labour_cost')
-            if zarplaty_id:
-                tx_id = await poster_client.create_transaction(
-                    transaction_type=0,
-                    category_id=zarplaty_id,
-                    account_from_id=4,
-                    amount=1,
-                    date=current_time,
-                    comment="Мадина админ"
-                )
-                transactions_created.append(f"Зарплаты (Мадина админ): {tx_id}")
-            else:
-                try:
-                    categories = await poster_client.get_categories()
-                    cat_names = [f"{c.get('category_name') or c.get('name')} (ID={c.get('category_id')})" for c in categories]
-                    logger.warning(f"⚠️ Категория 'Зарплаты' не найдена в Pizzburg. Доступные: {cat_names}")
-                except Exception:
-                    logger.warning("⚠️ Категория 'Зарплаты' не найдена в Pizzburg")
-
-        # 3× Логистика - Доставка продуктов (ID=24) с разными комментариями
-        logistics_configs = [
-            {"comment": "Караганда", "amount": 1},
-            {"comment": "Фарш", "amount": 700},
-            {"comment": "Кюрдамир", "amount": 1000}
-        ]
-        for config in logistics_configs:
-            if not _should_skip(config["comment"]):
-                tx_id = await poster_client.create_transaction(
-                    transaction_type=0,
-                    category_id=24,  # Логистика - Доставка продуктов
-                    account_from_id=4,
-                    amount=config["amount"],
-                    date=current_time,
-                    comment=config["comment"]
-                )
-                transactions_created.append(f"Логистика ({config['comment']}): {tx_id}")
-
-        # === СЧЕТ "Kaspi Pay" (ID=1) ===
-
-        # 1× Маркетинг (ID=7) - 4100₸, комментарий "Реклама"
-        if not _should_skip("Реклама"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=7,  # Маркетинг
-                account_from_id=1,  # Kaspi Pay
-                amount=4100,
-                date=current_time,
-                comment="Реклама"
-            )
-            transactions_created.append(f"Маркетинг: {tx_id}")
-
-        # 1× Логистика - Доставка продуктов (ID=24) - 1₸, комментарий "Астана"
-        if not _should_skip("Астана"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=24,  # Логистика - Доставка продуктов
-                account_from_id=1,  # Kaspi Pay
-                amount=1,
-                date=current_time,
-                comment="Астана"
-            )
-            transactions_created.append(f"Логистика (Астана): {tx_id}")
-
-        # 1× Банковские услуги и комиссии (ID=5) - 1₸, комментарий "Комиссия"
-        if not _should_skip("Комиссия"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=0,
-                category_id=5,  # Банковские услуги и комиссии
-                account_from_id=1,  # Kaspi Pay
-                amount=1,
-                date=current_time,
-                comment="Комиссия"
-            )
-            transactions_created.append(f"Банковские услуги: {tx_id}")
-
-        # === ПЕРЕВОДЫ ===
-
-        # Переводы Kaspi→Wolt, Kaspi→Халык, Инкассация→Оставил в кассе
-        # убраны — теперь создаются при закрытии смены с реальными суммами
-
-        # Оставил в кассе (на закупы) → Деньги дома (отложенные) - 1₸, комментарий "Забрал - Имя"
-        if not _should_skip("Забрал - Имя"):
-            tx_id = await poster_client.create_transaction(
-                transaction_type=2,  # transfer
-                category_id=0,  # не используется для переводов
-                account_from_id=4,  # Оставил в кассе (на закупы)
-                account_to_id=5,  # Деньги дома (отложенные)
-                amount=1,
-                date=current_time,
-                comment="Забрал - Имя"
-            )
-            transactions_created.append(f"Перевод Оставил в кассе → Деньги дома: {tx_id}")
+                tx_id = await poster_client.create_transaction(**tx_kwargs)
+                label = category_name or f"cat={actual_category_id}"
+                if comment:
+                    label = f"{label} ({comment})"
+                transactions_created.append(f"{label}: {tx_id}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка создания транзакции '{comment}': {e}")
 
         return transactions_created
 
 
 # Конфигурация для пользователей
 # Ключ: telegram_user_id, значение: включены ли авто-транзакции
+# ВАЖНО: если оба пользователя привязаны к одному Poster аккаунту,
+# включать нужно только ОДНОГО — иначе будут дубли транзакций
 DAILY_TRANSACTIONS_ENABLED = {
-    167084307: True,  # Основной аккаунт
-    8010984368: True,  # Второй аккаунт
+    167084307: True,   # Основной аккаунт — создаёт ежедневные транзакции
+    8010984368: False,  # Второй аккаунт — отключен (тот же Poster, дубли)
 }
 
 
