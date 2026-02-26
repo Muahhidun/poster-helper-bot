@@ -112,6 +112,9 @@
                 <li>
                     <a href="{{ url_for('cafe_shift_closing') }}" {% if request.endpoint == 'cafe_shift_closing' %}class="active"{% endif %}>Кафе</a>
                 </li>
+                <li>
+                    <a href="{{ url_for('daily_transactions_page') }}" {% if request.endpoint == 'daily_transactions_page' %}class="active"{% endif %}>Авто</a>
+                </li>
             </ul>
         </div>
     </nav>

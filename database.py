@@ -815,6 +815,9 @@ class UserDatabase:
         # Run migration to create daily_transactions_log table
         self._migrate_daily_transactions_log()
 
+        # Run migration to create daily_transactions_config table
+        self._migrate_daily_transactions_config()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -940,6 +943,62 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"daily_transactions_log migration error: {e}")
+
+    def _migrate_daily_transactions_config(self):
+        """Create daily_transactions_config table for user-editable daily transaction rules"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS daily_transactions_config (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        account_name TEXT NOT NULL DEFAULT 'Pizzburg',
+                        transaction_type INTEGER NOT NULL DEFAULT 0,
+                        category_id INTEGER NOT NULL DEFAULT 0,
+                        category_name TEXT DEFAULT '',
+                        account_from_id INTEGER NOT NULL,
+                        account_from_name TEXT DEFAULT '',
+                        account_to_id INTEGER,
+                        account_to_name TEXT DEFAULT '',
+                        amount INTEGER NOT NULL DEFAULT 1,
+                        comment TEXT DEFAULT '',
+                        is_enabled INTEGER NOT NULL DEFAULT 1,
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS daily_transactions_config (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        account_name TEXT NOT NULL DEFAULT 'Pizzburg',
+                        transaction_type INTEGER NOT NULL DEFAULT 0,
+                        category_id INTEGER NOT NULL DEFAULT 0,
+                        category_name TEXT DEFAULT '',
+                        account_from_id INTEGER NOT NULL,
+                        account_from_name TEXT DEFAULT '',
+                        account_to_id INTEGER,
+                        account_to_name TEXT DEFAULT '',
+                        amount INTEGER NOT NULL DEFAULT 1,
+                        comment TEXT DEFAULT '',
+                        is_enabled INTEGER NOT NULL DEFAULT 1,
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ daily_transactions_config table: ready")
+
+        except Exception as e:
+            logger.error(f"daily_transactions_config migration error: {e}")
 
     def _migrate_cafe_access(self):
         """Create cafe_access_tokens table and add poster_account_id to shift_closings + kaspi_pizzburg column"""
@@ -3491,6 +3550,197 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to set daily_transactions_log: {e}")
             return False
+
+    # ==================== Daily Transactions Config Methods ====================
+
+    def get_daily_transaction_configs(self, telegram_user_id: int) -> list:
+        """Get all daily transaction configs for user, ordered by sort_order"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, telegram_user_id, account_name, transaction_type,
+                           category_id, category_name, account_from_id, account_from_name,
+                           account_to_id, account_to_name, amount, comment,
+                           is_enabled, sort_order, created_at, updated_at
+                    FROM daily_transactions_config
+                    WHERE telegram_user_id = ?
+                    ORDER BY sort_order, id
+                """, (telegram_user_id,))
+                rows = cursor.fetchall()
+                columns = ['id', 'telegram_user_id', 'account_name', 'transaction_type',
+                           'category_id', 'category_name', 'account_from_id', 'account_from_name',
+                           'account_to_id', 'account_to_name', 'amount', 'comment',
+                           'is_enabled', 'sort_order', 'created_at', 'updated_at']
+                result = [dict(zip(columns, row)) for row in rows]
+            else:
+                from psycopg2.extras import RealDictCursor
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, telegram_user_id, account_name, transaction_type,
+                           category_id, category_name, account_from_id, account_from_name,
+                           account_to_id, account_to_name, amount, comment,
+                           is_enabled, sort_order, created_at, updated_at
+                    FROM daily_transactions_config
+                    WHERE telegram_user_id = %s
+                    ORDER BY sort_order, id
+                """, (telegram_user_id,))
+                result = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get daily_transaction_configs: {e}")
+            return []
+
+    def create_daily_transaction_config(self, telegram_user_id: int, data: dict) -> int:
+        """Create a new daily transaction config. Returns the new ID."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            p = "?" if DB_TYPE == "sqlite" else "%s"
+
+            cursor.execute(f"""
+                INSERT INTO daily_transactions_config
+                (telegram_user_id, account_name, transaction_type, category_id, category_name,
+                 account_from_id, account_from_name, account_to_id, account_to_name,
+                 amount, comment, is_enabled, sort_order)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+            """, (
+                telegram_user_id,
+                data.get('account_name', 'Pizzburg'),
+                data.get('transaction_type', 0),
+                data.get('category_id', 0),
+                data.get('category_name', ''),
+                data.get('account_from_id', 4),
+                data.get('account_from_name', ''),
+                data.get('account_to_id'),
+                data.get('account_to_name', ''),
+                data.get('amount', 1),
+                data.get('comment', ''),
+                1 if data.get('is_enabled', True) else 0,
+                data.get('sort_order', 0)
+            ))
+            new_id = cursor.lastrowid
+            if DB_TYPE != "sqlite":
+                cursor.execute("SELECT lastval()")
+                new_id = cursor.fetchone()[0]
+            conn.commit()
+            conn.close()
+            return new_id
+        except Exception as e:
+            logger.error(f"Failed to create daily_transaction_config: {e}")
+            return 0
+
+    def update_daily_transaction_config(self, config_id: int, data: dict) -> bool:
+        """Update a daily transaction config"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            p = "?" if DB_TYPE == "sqlite" else "%s"
+
+            fields = []
+            values = []
+            for key in ['account_name', 'transaction_type', 'category_id', 'category_name',
+                        'account_from_id', 'account_from_name', 'account_to_id', 'account_to_name',
+                        'amount', 'comment', 'is_enabled', 'sort_order']:
+                if key in data:
+                    fields.append(f"{key} = {p}")
+                    values.append(data[key])
+
+            if not fields:
+                return False
+
+            now_expr = "CURRENT_TIMESTAMP"
+            fields.append(f"updated_at = {now_expr}")
+            values.append(config_id)
+
+            cursor.execute(f"""
+                UPDATE daily_transactions_config
+                SET {', '.join(fields)}
+                WHERE id = {p}
+            """, tuple(values))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update daily_transaction_config: {e}")
+            return False
+
+    def delete_daily_transaction_config(self, config_id: int) -> bool:
+        """Delete a daily transaction config"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            p = "?" if DB_TYPE == "sqlite" else "%s"
+
+            cursor.execute(f"DELETE FROM daily_transactions_config WHERE id = {p}", (config_id,))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete daily_transaction_config: {e}")
+            return False
+
+    def seed_daily_transaction_configs(self, telegram_user_id: int) -> int:
+        """Seed default daily transaction configs from hardcoded values.
+        Only seeds if the table is empty for this user. Returns count of seeded configs."""
+        existing = self.get_daily_transaction_configs(telegram_user_id)
+        if existing:
+            return 0
+
+        defaults = [
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 17,
+             'category_name': 'Повара', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': 'Заготовка', 'sort_order': 1},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 17,
+             'category_name': 'Повара', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': 'Мадира Т', 'sort_order': 2},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 17,
+             'category_name': 'Повара', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': 'Нургуль Т', 'sort_order': 3},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 18,
+             'category_name': 'КухРабочая', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': '', 'sort_order': 4},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 15,
+             'category_name': 'Курьер', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': 'Курьеры', 'sort_order': 5},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 0,
+             'category_name': 'Зарплаты', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': 'Мадина админ', 'sort_order': 6},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 24,
+             'category_name': 'Логистика', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1, 'comment': 'Караганда', 'sort_order': 7},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 24,
+             'category_name': 'Логистика', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 700, 'comment': 'Фарш', 'sort_order': 8},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 24,
+             'category_name': 'Логистика', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'amount': 1000, 'comment': 'Кюрдамир', 'sort_order': 9},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 7,
+             'category_name': 'Маркетинг', 'account_from_id': 1, 'account_from_name': 'Каспи Пей',
+             'amount': 4100, 'comment': 'Реклама', 'sort_order': 10},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 24,
+             'category_name': 'Логистика', 'account_from_id': 1, 'account_from_name': 'Каспи Пей',
+             'amount': 1, 'comment': 'Астана', 'sort_order': 11},
+            {'account_name': 'Pizzburg', 'transaction_type': 0, 'category_id': 5,
+             'category_name': 'Банковские услуги', 'account_from_id': 1, 'account_from_name': 'Каспи Пей',
+             'amount': 1, 'comment': 'Комиссия', 'sort_order': 12},
+            {'account_name': 'Pizzburg', 'transaction_type': 2, 'category_id': 0,
+             'category_name': 'Перевод', 'account_from_id': 4, 'account_from_name': 'Оставил в кассе',
+             'account_to_id': 5, 'account_to_name': 'Деньги дома', 'amount': 1,
+             'comment': 'Забрал - Имя', 'sort_order': 13},
+        ]
+
+        count = 0
+        for cfg in defaults:
+            cfg['is_enabled'] = True
+            if self.create_daily_transaction_config(telegram_user_id, cfg):
+                count += 1
+
+        logger.info(f"✅ Seeded {count} default daily transaction configs for user {telegram_user_id}")
+        return count
 
     # ==================== Cafe Access Token Methods ====================
 
