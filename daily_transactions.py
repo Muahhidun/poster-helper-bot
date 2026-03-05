@@ -92,7 +92,7 @@ class DailyTransactionScheduler:
 
     async def create_daily_transactions(self):
         """
-        Создать все ежедневные транзакции в 12:00.
+        Создать все ежедневные транзакции в 9:00.
         Только для аккаунта Pizzburg (зарплаты Кафе убраны — создаются при закрытии смены).
 
         Защита от дублей (3 уровня):
@@ -128,9 +128,17 @@ class DailyTransactionScheduler:
                     'already_exists': True
                 }
 
-            # 3. CLAIM: установить флаг ДО создания (count=-1 = "в процессе")
-            # Это предотвращает race condition когда 2 пользователя стартуют одновременно
-            db.set_daily_transactions_created(self.telegram_user_id, today, -1)
+            # 3. ATOMIC CLAIM: попытаться захватить слот (INSERT ON CONFLICT DO NOTHING)
+            # Если другой процесс уже захватил — вернёт False и мы не создадим дубли
+            claimed = db.try_claim_daily_transactions(self.telegram_user_id, today)
+            if not claimed:
+                logger.info(f"⏭️ Claim не удался — другой процесс уже захватил слот для {today}")
+                return {
+                    'success': True,
+                    'count': 0,
+                    'transactions': [],
+                    'already_exists': True
+                }
             logger.info(f"🔒 Claim установлен для {self.telegram_user_id} за {today}")
 
             accounts = db.get_accounts(self.telegram_user_id)

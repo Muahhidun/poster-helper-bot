@@ -5837,9 +5837,9 @@ async def check_and_notify_missed_transactions(app: Application):
         kz_tz = pytz.timezone('Asia/Almaty')
         kz_now = datetime.now(kz_tz)
 
-        # Не проверять до 12:30 — cron запускается в 12:00, дадим ему время отработать
-        if kz_now.hour < 12 or (kz_now.hour == 12 and kz_now.minute < 30):
-            logger.info(f"⏭️ Проверка пропущенных транзакций пропущена: сейчас {kz_now.strftime('%H:%M')} (до 12:30)")
+        # Не проверять до 9:30 — cron запускается в 9:00, дадим ему время отработать
+        if kz_now.hour < 9 or (kz_now.hour == 9 and kz_now.minute < 30):
+            logger.info(f"⏭️ Проверка пропущенных транзакций пропущена: сейчас {kz_now.strftime('%H:%M')} (до 9:30)")
             return
 
         db = get_database()
@@ -5870,7 +5870,7 @@ async def check_and_notify_missed_transactions(app: Application):
                     await app.bot.send_message(
                         chat_id=telegram_user_id,
                         text="⚠️ *Ежедневные транзакции не были созданы сегодня*\n\n"
-                             "Возможно, бот был перезапущен после 12:00.\n\n"
+                             "Возможно, бот был перезапущен после 9:00.\n\n"
                              "Хотите создать транзакции сейчас?",
                         parse_mode='Markdown',
                         reply_markup=reply_markup
@@ -5883,7 +5883,7 @@ async def check_and_notify_missed_transactions(app: Application):
 def setup_scheduler(app: Application):
     """
     Настроить планировщик для автоматических задач
-    Запускает ежедневные транзакции в 12:00 по времени Астаны
+    Запускает ежедневные транзакции в 9:00 по времени Астаны
     """
     scheduler = AsyncIOScheduler()
 
@@ -5893,9 +5893,9 @@ def setup_scheduler(app: Application):
     # Для каждого пользователя с включенными авто-транзакциями
     for telegram_user_id in ALLOWED_USER_IDS:
         if is_daily_transactions_enabled(telegram_user_id):
-            # Триггер: каждый день в 12:00 по времени Астаны
+            # Триггер: каждый день в 9:00 по времени Астаны
             trigger = CronTrigger(
-                hour=12,
+                hour=9,
                 minute=0,
                 timezone=astana_tz
             )
@@ -5909,7 +5909,7 @@ def setup_scheduler(app: Application):
                 replace_existing=True
             )
 
-            logger.info(f"✅ Запланированы ежедневные транзакции для пользователя {telegram_user_id} в 12:00 (Asia/Almaty)")
+            logger.info(f"✅ Запланированы ежедневные транзакции для пользователя {telegram_user_id} в 9:00 (Asia/Almaty)")
 
     # Еженедельные отчёты для всех активных пользователей по понедельникам в 12:00
     for telegram_user_id in ALLOWED_USER_IDS:
