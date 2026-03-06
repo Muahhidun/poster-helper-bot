@@ -5975,6 +5975,11 @@ def _background_expense_sync():
         from datetime import datetime, timedelta
         from poster_client import PosterClient
 
+        # Only sync during business hours (8:00-23:00 Almaty time)
+        now_kz = _kz_now()
+        if now_kz.hour < 8 or now_kz.hour >= 23:
+            return
+
         db = get_database()
 
         # Get all user IDs that have poster accounts
@@ -6021,10 +6026,17 @@ def _sync_expenses_for_user(db, sync_user_id):
                         poster_base_url=account['poster_base_url']
                     )
                     try:
-                        transactions, finance_accounts = await asyncio.gather(
-                            client.get_transactions(date_str, date_str),
-                            client.get_accounts()
-                        )
+                        # Use cached accounts to reduce API calls
+                        cache_key = f"bg_sync_accounts_{account['id']}"
+                        finance_accounts = _cache_get(cache_key)
+                        if finance_accounts is not None:
+                            transactions = await client.get_transactions(date_str, date_str)
+                        else:
+                            transactions, finance_accounts = await asyncio.gather(
+                                client.get_transactions(date_str, date_str),
+                                client.get_accounts()
+                            )
+                            _cache_set(cache_key, finance_accounts)
                         account_map = {str(acc['account_id']): acc for acc in finance_accounts}
 
                         for txn in transactions:
@@ -6182,13 +6194,13 @@ def start_background_sync():
         bg_scheduler.add_job(
             _background_expense_sync,
             'interval',
-            minutes=5,
+            minutes=15,
             id='bg_expense_sync',
             name='Background expense sync from Poster',
             replace_existing=True
         )
         bg_scheduler.start()
-        logger.info("✅ Background expense sync started (every 5 min)")
+        logger.info("✅ Background expense sync started (every 15 min)")
     except Exception as e:
         logger.error(f"Failed to start background sync: {e}")
 
