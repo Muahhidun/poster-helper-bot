@@ -5897,10 +5897,10 @@ def setup_scheduler(app: Application):
     # Для каждого пользователя с включенными авто-транзакциями
     for telegram_user_id in ALLOWED_USER_IDS:
         if is_daily_transactions_enabled(telegram_user_id):
-            # Триггер: каждый день в 10:10 по времени Астаны
+            # Триггер: каждый день в 10:30 по времени Астаны
             trigger = CronTrigger(
                 hour=10,
-                minute=10,
+                minute=30,
                 timezone=astana_tz
             )
 
