@@ -5880,11 +5880,15 @@ async def check_and_notify_missed_transactions(app: Application):
         logger.error(f"❌ Ошибка проверки пропущенных транзакций: {e}", exc_info=True)
 
 
+# Global reference to keep scheduler alive (prevent garbage collection)
+_app_scheduler = None
+
 def setup_scheduler(app: Application):
     """
     Настроить планировщик для автоматических задач
     Запускает ежедневные транзакции в 9:00 по времени Астаны
     """
+    global _app_scheduler
     scheduler = AsyncIOScheduler()
 
     # Часовой пояс Астаны
@@ -5979,7 +5983,13 @@ def setup_scheduler(app: Application):
 
     # Запустить scheduler
     scheduler.start()
-    logger.info("✅ Планировщик запущен")
+    _app_scheduler = scheduler  # Store global reference to prevent GC
+
+    # Log all registered jobs for debugging
+    jobs = scheduler.get_jobs()
+    logger.info(f"✅ Планировщик запущен с {len(jobs)} задачами:")
+    for job in jobs:
+        logger.info(f"   📋 {job.name} | next run: {job.next_run_time}")
 
     # Проверить пропущенные транзакции при старте бота
     import asyncio
