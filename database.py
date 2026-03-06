@@ -3522,8 +3522,39 @@ class UserDatabase:
             logger.error(f"Failed to check daily_transactions_log for date: {e}")
             return False
 
+    def try_claim_daily_transactions(self, telegram_user_id: int, date: str) -> bool:
+        """Atomically try to claim the daily transactions slot.
+        Uses INSERT ... ON CONFLICT DO NOTHING so only the first caller succeeds.
+        Returns True if claimed, False if already claimed by another process."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+
+            if DB_TYPE == "sqlite":
+                cursor.execute(f"""
+                    INSERT OR IGNORE INTO daily_transactions_log
+                    (telegram_user_id, date, count, created_at)
+                    VALUES ({placeholder}, {placeholder}, -1, CURRENT_TIMESTAMP)
+                """, (telegram_user_id, date))
+            else:
+                cursor.execute(f"""
+                    INSERT INTO daily_transactions_log (telegram_user_id, date, count)
+                    VALUES ({placeholder}, {placeholder}, -1)
+                    ON CONFLICT (telegram_user_id, date) DO NOTHING
+                """, (telegram_user_id, date))
+
+            inserted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return inserted
+
+        except Exception as e:
+            logger.error(f"Failed to claim daily_transactions_log: {e}")
+            return False
+
     def set_daily_transactions_created(self, telegram_user_id: int, date: str, count: int) -> bool:
-        """Mark daily transactions as created for this user and date"""
+        """Mark daily transactions as created for this user and date (update existing claim)"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
