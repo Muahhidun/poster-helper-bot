@@ -4485,8 +4485,8 @@ def api_shift_closing_report():
         day_sign = "+" if day_result > 0 else ""
         day_emoji = "📈" if day_result > 0 else "📉" if day_result < 0 else "✅"
 
-        sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        subsep = "   ──────────────────"
+        sep = "━━━━━━"
+        subsep = "   ──────"
 
         lines = [
             f"📋 Закрытие смены {date_display}",
@@ -5039,8 +5039,8 @@ def api_cafe_report():
         day_sign = "+" if day_result > 0 else ""
         day_emoji = "📈" if day_result > 0 else "📉" if day_result < 0 else "✅"
 
-        sep = "━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        subsep = "   ──────────────────"
+        sep = "━━━━━━"
+        subsep = "   ──────"
 
         lines = [
             f"📋 {account_name} — Закрытие смены {date_display}",
