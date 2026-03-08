@@ -2445,12 +2445,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     return aName.localeCompare(bName);
                 });
 
-                // Deduplicate by display name (keep first, which is from selected department)
+                // Deduplicate by display name + account (keep same name from different departments)
                 const seen = new Set();
                 matches = matches.filter(c => {
                     const displayName = getCategoryName(c).toLowerCase();
-                    if (seen.has(displayName)) return false;
-                    seen.add(displayName);
+                    const key = `${displayName}-${c.poster_account_id || ''}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
                     return true;
                 }).slice(0, 10);
 
@@ -2459,9 +2460,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     resultsDiv.innerHTML = matches.map((c, i) => {
                         const displayName = getCategoryName(c);
-                        const isOtherDept = selectedPosterAccountId && c.poster_account_id && c.poster_account_id != selectedPosterAccountId;
-                        const accountTag = isOtherDept && c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
-                        return `<div class="autocomplete-item" data-name="${displayName}" data-index="${i}">${displayName}${accountTag}</div>`;
+                        const rawName = c.category_name || c.name || '';
+                        const accountTag = c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
+                        return `<div class="autocomplete-item" data-name="${displayName}" data-raw="${rawName}" data-index="${i}">${displayName}${accountTag}</div>`;
                     }).join('');
                 }
                 resultsDiv.style.display = 'block';
@@ -2478,6 +2479,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const resultsDiv = wrapper.querySelector('.autocomplete-results');
 
             const name = item.dataset.name;
+            const rawName = item.dataset.raw || '';
             input.value = name;
             resultsDiv.style.display = 'none';
 
@@ -2488,6 +2490,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 input.classList.add('saved');
                 setTimeout(() => input.classList.remove('saved'), 300);
                 updateRowSyncStatus(input.closest('tr'));
+
+                // Auto-switch type to 'supply' when supply category selected
+                if (rawName === 'book_category_action_supplies' || name.toLowerCase() === 'поставки') {
+                    const row = input.closest('tr');
+                    const typeBtn = row?.querySelector('.btn-type');
+                    if (typeBtn && typeBtn.dataset.type !== 'supply') {
+                        typeBtn.click();
+                    }
+                }
             }
         }
     });
