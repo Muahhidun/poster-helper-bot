@@ -120,12 +120,16 @@ function CategoryAutocomplete({
   categories,
   posterAccountId,
   onSave,
+  onToggleType,
+  currentType,
 }: {
   value: string
   draftId: number
   categories: ExpenseCategory[]
   posterAccountId: number | null
   onSave: (id: number, field: string, value: string) => void
+  onToggleType?: (id: number, newType: 'transaction' | 'supply') => void
+  currentType?: string
 }) {
   const [localValue, setLocalValue] = useState(value || '')
   const [isFocused, setIsFocused] = useState(false)
@@ -151,12 +155,13 @@ function CategoryAutocomplete({
       return getCategoryDisplayName(a).localeCompare(getCategoryDisplayName(b), 'ru')
     })
 
-    // Deduplicate by display name
+    // Deduplicate by display name + account (keep same name from different departments)
     const seen = new Set<string>()
     return sorted.filter(c => {
       const displayName = getCategoryDisplayName(c).toLowerCase()
-      if (!displayName || seen.has(displayName)) return false
-      seen.add(displayName)
+      const key = `${displayName}-${c.poster_account_id || ''}`
+      if (!displayName || seen.has(key)) return false
+      seen.add(key)
       return true
     })
   }, [categories, posterAccountId])
@@ -174,12 +179,19 @@ function CategoryAutocomplete({
     }).slice(0, 10)
   }, [localValue, allCategories])
 
-  const handleSelect = (categoryName: string) => {
+  const handleSelect = (categoryName: string, cat?: ExpenseCategory) => {
     setLocalValue(categoryName)
     setIsOpen(false)
     onSave(draftId, 'category', categoryName)
     setIsSaved(true)
     setTimeout(() => setIsSaved(false), 300)
+    // Auto-switch type to 'supply' when supply category selected
+    if (onToggleType && currentType !== 'supply') {
+      const rawName = cat?.category_name || cat?.name || ''
+      if (rawName === 'book_category_action_supplies' || categoryName.toLowerCase() === 'поставки') {
+        onToggleType(draftId, 'supply')
+      }
+    }
   }
 
   const handleBlur = () => {
@@ -219,10 +231,10 @@ function CategoryAutocomplete({
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       if (selectedIndex >= 0 && filteredCategories[selectedIndex]) {
         e.preventDefault()
-        handleSelect(getCategoryDisplayName(filteredCategories[selectedIndex]))
+        handleSelect(getCategoryDisplayName(filteredCategories[selectedIndex]), filteredCategories[selectedIndex])
       } else if (filteredCategories.length === 1) {
         e.preventDefault()
-        handleSelect(getCategoryDisplayName(filteredCategories[0]))
+        handleSelect(getCategoryDisplayName(filteredCategories[0]), filteredCategories[0])
       }
     } else if (e.key === 'Escape') {
       setIsOpen(false)
@@ -260,7 +272,6 @@ function CategoryAutocomplete({
         >
           {filteredCategories.map((cat, i) => {
             const displayName = getCategoryDisplayName(cat)
-            const isOtherDept = posterAccountId && cat.poster_account_id && cat.poster_account_id !== posterAccountId
             return (
               <div
                 key={`${cat.category_id}-${cat.poster_account_id}`}
@@ -268,10 +279,10 @@ function CategoryAutocomplete({
                   'px-3 py-2 cursor-pointer text-sm transition-colors',
                   i === selectedIndex ? 'bg-blue-50' : 'hover:bg-gray-50'
                 )}
-                onMouseDown={() => handleSelect(displayName)}
+                onMouseDown={() => handleSelect(displayName, cat)}
               >
                 {displayName}
-                {isOtherDept && cat.poster_account_name && (
+                {cat.poster_account_name && (
                   <span className="ml-2 text-xs text-gray-400">({cat.poster_account_name})</span>
                 )}
               </div>
@@ -662,6 +673,8 @@ function DraftRow({
           categories={categories}
           posterAccountId={draft.poster_account_id}
           onSave={onUpdate}
+          onToggleType={onToggleType}
+          currentType={draft.expense_type}
         />
       </td>
       <td className="px-3 py-2 border-b border-gray-100">
