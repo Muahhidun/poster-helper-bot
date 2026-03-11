@@ -694,6 +694,34 @@ async def test_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 @admin_only
+async def cleanup_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cleanup_daily command - ручная очистка дублей ежедневных транзакций"""
+    telegram_user_id = update.effective_user.id
+
+    if not is_daily_transactions_enabled(telegram_user_id):
+        await update.message.reply_text(
+            "❌ Автоматические транзакции не включены для вашего аккаунта."
+        )
+        return
+
+    await update.message.reply_text("🧹 Проверяю дубли ежедневных транзакций...")
+
+    try:
+        await run_daily_transactions_cleanup(telegram_user_id)
+
+        await update.message.reply_text(
+            "✅ Проверка дублей завершена!\n\n"
+            "Подробности в логах."
+        )
+
+    except Exception as e:
+        logger.error(f"Cleanup daily command failed: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка очистки:\n{str(e)[:300]}"
+        )
+
+
+@admin_only
 async def check_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /check_ids command - показать ID счетов и категорий для всех аккаунтов"""
     telegram_user_id = update.effective_user.id
@@ -5790,6 +5818,32 @@ async def run_daily_transactions_for_user(telegram_user_id: int):
         logger.error(f"❌ Ошибка в run_daily_transactions_for_user: {e}", exc_info=True)
 
 
+async def run_daily_transactions_cleanup(telegram_user_id: int):
+    """
+    Очистка дублей ежедневных транзакций.
+    Запускается в 13:00 (через 2.5 часа после создания в 10:30),
+    чтобы поймать дубли от старых деплоев/инстансов.
+    """
+    try:
+        logger.info(f"🧹 Запуск очистки дублей для пользователя {telegram_user_id}")
+
+        scheduler = DailyTransactionScheduler(telegram_user_id)
+
+        # Очистка дублей с комментариями
+        result1 = await scheduler.cleanup_duplicate_daily_transactions()
+        # Очистка дублей без комментариев (по category_id)
+        result2 = await scheduler.cleanup_no_comment_duplicates()
+
+        total = result1.get('cleaned', 0) + result2.get('cleaned', 0)
+        if total > 0:
+            logger.info(f"✅ Очищено {total} дублей для пользователя {telegram_user_id}")
+        else:
+            logger.info(f"✅ Дублей не найдено для пользователя {telegram_user_id}")
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка очистки дублей: {e}", exc_info=True)
+
+
 async def run_weekly_report_for_user(telegram_user_id: int, bot_application):
     """
     Отправить еженедельный отчёт пользователю
@@ -5913,7 +5967,26 @@ def setup_scheduler(app: Application):
                 replace_existing=True
             )
 
-            logger.info(f"✅ Запланированы ежедневные транзакции для пользователя {telegram_user_id} в 9:00 (Asia/Almaty)")
+            logger.info(f"✅ Запланированы ежедневные транзакции для пользователя {telegram_user_id} в 10:30 (Asia/Almaty)")
+
+            # Очистка дублей: каждый день в 13:00 по времени Астаны
+            # (через 2.5 часа после создания, чтобы поймать дубли от старых инстансов)
+            cleanup_trigger = CronTrigger(
+                hour=13,
+                minute=0,
+                timezone=astana_tz
+            )
+
+            scheduler.add_job(
+                run_daily_transactions_cleanup,
+                trigger=cleanup_trigger,
+                args=[telegram_user_id],
+                id=f'daily_transactions_cleanup_{telegram_user_id}',
+                name=f'Очистка дублей транзакций для пользователя {telegram_user_id}',
+                replace_existing=True
+            )
+
+            logger.info(f"✅ Запланирована очистка дублей для пользователя {telegram_user_id} в 13:00 (Asia/Almaty)")
 
     # Еженедельные отчёты для всех активных пользователей по понедельникам в 12:00
     for telegram_user_id in ALLOWED_USER_IDS:
@@ -6160,6 +6233,7 @@ def initialize_application():
     app.add_handler(CommandHandler("force_sync", force_sync_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("test_daily", test_daily_command))
+    app.add_handler(CommandHandler("cleanup_daily", cleanup_daily_command))
     app.add_handler(CommandHandler("check_ids", check_ids_command))
     app.add_handler(CommandHandler("test_report", test_report_command))
     app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))

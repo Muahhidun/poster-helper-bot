@@ -301,6 +301,245 @@ class DailyTransactionScheduler:
 
         return transactions_created
 
+    async def cleanup_duplicate_daily_transactions(self):
+        """
+        Проверить Poster на дубли ежедневных транзакций и удалить лишние.
+        Запускается через ~2.5 часа после основного создания (13:00),
+        чтобы поймать дубли от старых деплоев/инстансов.
+        """
+        try:
+            from database import get_database
+            db = get_database()
+            today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
+
+            # Только если мы сегодня создавали транзакции
+            if not db.is_daily_transactions_created(self.telegram_user_id, today):
+                return {'cleaned': 0, 'skipped': True}
+
+            accounts = db.get_accounts(self.telegram_user_id)
+            if not accounts:
+                return {'cleaned': 0}
+
+            # Загрузить текущий конфиг
+            tx_configs = db.get_daily_transaction_configs(self.telegram_user_id)
+            enabled_configs = [c for c in tx_configs if c.get('is_enabled')]
+
+            # Группировать конфиги по account_name
+            configs_by_account = {}
+            for cfg in enabled_configs:
+                acc_name = cfg.get('account_name', 'Pizzburg')
+                if acc_name not in configs_by_account:
+                    configs_by_account[acc_name] = []
+                configs_by_account[acc_name].append(cfg)
+
+            total_cleaned = 0
+
+            for account in accounts:
+                account_name = account['account_name']
+                account_configs = configs_by_account.get(account_name, [])
+                if not account_configs:
+                    continue
+
+                poster_client = PosterClient(
+                    telegram_user_id=self.telegram_user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+
+                try:
+                    today_fmt = datetime.now(KZ_TZ).strftime("%Y%m%d")
+                    transactions = await poster_client.get_transactions(today_fmt, today_fmt)
+
+                    if not transactions:
+                        continue
+
+                    # Построить маппинг: comment → list of transactions
+                    # Только расходы и доходы (type 0, 1), не переводы
+                    comment_groups = {}
+                    for tx in transactions:
+                        tx_type = str(tx.get('type', ''))
+                        comment = (tx.get('comment') or '').strip()
+                        if not comment or tx_type == '2':
+                            continue
+                        if comment not in comment_groups:
+                            comment_groups[comment] = []
+                        comment_groups[comment].append(tx)
+
+                    # Также проверяем fuzzy-дубли (substring matching)
+                    # Например "Мадира" и "Мадира Т" — это дубли одного конфига
+                    config_comments = [(cfg.get('comment', ''), cfg) for cfg in account_configs if cfg.get('comment')]
+
+                    for config_comment, cfg in config_comments:
+                        # Найти ВСЕ транзакции, которые матчат этот конфиг (по substring)
+                        matching_txs = []
+                        for tx in transactions:
+                            tx_type = str(tx.get('type', ''))
+                            tx_comment = (tx.get('comment') or '').strip()
+                            if not tx_comment or tx_type == '2':
+                                continue
+                            # Substring matching (как в _comment_exists)
+                            if config_comment in tx_comment or tx_comment in config_comment:
+                                matching_txs.append(tx)
+
+                        if len(matching_txs) <= 1:
+                            continue
+
+                        # Есть дубли! Оставить ту, которая совпадает по сумме с конфигом
+                        config_amount = cfg.get('amount', 1) * 100  # в тийинах
+                        logger.warning(
+                            f"⚠️ Найдено {len(matching_txs)} дублей для '{config_comment}' "
+                            f"(ожидаемая сумма: {config_amount} тийинов)"
+                        )
+
+                        # Разделить на "правильные" и "неправильные"
+                        correct = []
+                        incorrect = []
+                        for tx in matching_txs:
+                            tx_amount = abs(int(tx.get('amount_from', 0) or tx.get('amount', 0)))
+                            tx_comment = (tx.get('comment') or '').strip()
+                            # Правильная = точный комментарий И точная сумма
+                            if tx_comment == config_comment and tx_amount == config_amount:
+                                correct.append(tx)
+                            else:
+                                incorrect.append(tx)
+
+                        # Если нет "правильных", оставляем все (не трогаем)
+                        if not correct:
+                            logger.warning(
+                                f"  → Нет транзакций с точным совпадением, пропускаю очистку"
+                            )
+                            continue
+
+                        # Удалить "неправильные" (от старого кода)
+                        for tx in incorrect:
+                            tx_id = tx.get('transaction_id')
+                            tx_comment = (tx.get('comment') or '').strip()
+                            tx_amount = abs(int(tx.get('amount_from', 0) or tx.get('amount', 0)))
+                            logger.info(
+                                f"  🗑️ Удаляю дубль: ID={tx_id}, comment='{tx_comment}', "
+                                f"amount={tx_amount} (ожидалось {config_amount})"
+                            )
+                            removed = await poster_client.remove_finance_transaction(int(tx_id))
+                            if removed:
+                                total_cleaned += 1
+                            else:
+                                # Fallback: обновить комментарий чтобы пометить как дубль
+                                logger.warning(f"  → Не удалось удалить {tx_id}, помечаю как дубль")
+                                await poster_client.update_transaction(
+                                    transaction_id=int(tx_id),
+                                    amount=0,
+                                    comment=f"[ДУБЛЬ] {tx_comment}"
+                                )
+                                total_cleaned += 1
+
+                        # Если правильных больше 1, оставить одну, удалить остальные
+                        if len(correct) > 1:
+                            for tx in correct[1:]:
+                                tx_id = tx.get('transaction_id')
+                                logger.info(f"  🗑️ Удаляю лишний дубль: ID={tx_id}")
+                                removed = await poster_client.remove_finance_transaction(int(tx_id))
+                                if removed:
+                                    total_cleaned += 1
+
+                finally:
+                    await poster_client.close()
+
+            if total_cleaned > 0:
+                logger.info(f"✅ Очистка дублей: удалено {total_cleaned} транзакций для пользователя {self.telegram_user_id}")
+            else:
+                logger.info(f"✅ Дублей не найдено для пользователя {self.telegram_user_id}")
+
+            return {'cleaned': total_cleaned}
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки дублей: {e}", exc_info=True)
+            return {'cleaned': 0, 'error': str(e)}
+
+    async def cleanup_no_comment_duplicates(self):
+        """
+        Удалить дубли для транзакций БЕЗ комментариев (например КухРабочая).
+        Проверяет по category_id: если за день больше 1 транзакции с одной категорией
+        и пустым комментарием — удаляет лишние.
+        """
+        try:
+            from database import get_database
+            db = get_database()
+            today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
+
+            if not db.is_daily_transactions_created(self.telegram_user_id, today):
+                return {'cleaned': 0}
+
+            accounts = db.get_accounts(self.telegram_user_id)
+            tx_configs = db.get_daily_transaction_configs(self.telegram_user_id)
+            enabled_configs = [c for c in tx_configs if c.get('is_enabled')]
+
+            # Конфиги без комментариев
+            no_comment_configs = [c for c in enabled_configs if not c.get('comment')]
+            if not no_comment_configs:
+                return {'cleaned': 0}
+
+            configs_by_account = {}
+            for cfg in no_comment_configs:
+                acc_name = cfg.get('account_name', 'Pizzburg')
+                if acc_name not in configs_by_account:
+                    configs_by_account[acc_name] = []
+                configs_by_account[acc_name].append(cfg)
+
+            total_cleaned = 0
+
+            for account in accounts:
+                account_name = account['account_name']
+                account_configs = configs_by_account.get(account_name, [])
+                if not account_configs:
+                    continue
+
+                poster_client = PosterClient(
+                    telegram_user_id=self.telegram_user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+
+                try:
+                    today_fmt = datetime.now(KZ_TZ).strftime("%Y%m%d")
+                    transactions = await poster_client.get_transactions(today_fmt, today_fmt)
+
+                    for cfg in account_configs:
+                        cat_id = str(cfg.get('category_id', 0))
+                        if cat_id == '0':
+                            continue
+
+                        # Найти транзакции с этой категорией и пустым комментарием
+                        matching = [
+                            tx for tx in transactions
+                            if str(tx.get('category', '') or tx.get('finance_category_id', '')) == cat_id
+                            and not (tx.get('comment') or '').strip()
+                            and str(tx.get('type', '')) in ('0', '1')
+                        ]
+
+                        if len(matching) <= 1:
+                            continue
+
+                        logger.warning(f"⚠️ Найдено {len(matching)} дублей для category_id={cat_id} без комментария")
+
+                        # Оставить одну, удалить остальные
+                        for tx in matching[1:]:
+                            tx_id = tx.get('transaction_id')
+                            logger.info(f"  🗑️ Удаляю дубль без комментария: ID={tx_id}, cat={cat_id}")
+                            removed = await poster_client.remove_finance_transaction(int(tx_id))
+                            if removed:
+                                total_cleaned += 1
+
+                finally:
+                    await poster_client.close()
+
+            return {'cleaned': total_cleaned}
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки дублей без комментария: {e}", exc_info=True)
+            return {'cleaned': 0}
+
 
 # Конфигурация для пользователей
 # Ключ: telegram_user_id, значение: включены ли авто-транзакции
