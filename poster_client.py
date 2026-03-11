@@ -207,6 +207,26 @@ class PosterClient:
             logger.error(f"❌ Ошибка удаления чека {transaction_id}: {e}")
             raise
 
+    async def remove_finance_transaction(self, transaction_id: int) -> bool:
+        """
+        Delete a finance transaction from Poster.
+
+        Args:
+            transaction_id: ID of the finance transaction to delete
+
+        Returns:
+            True if deletion was successful
+        """
+        try:
+            result = await self._request('POST', 'finance.removeTransactions', data={
+                'transaction_id': transaction_id
+            })
+            logger.info(f"✅ Finance transaction {transaction_id} removed: {result}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error removing finance transaction {transaction_id}: {e}")
+            return False
+
     async def create_transaction(
         self,
         transaction_type: int,  # 0=expense, 1=income, 2=transfer
