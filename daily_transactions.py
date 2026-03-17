@@ -32,16 +32,26 @@ class DailyTransactionScheduler:
             logger.error(f"❌ Ошибка поиска категории: {e}")
         return None
 
-    def _comment_exists(self, marker: str, existing_comments: set) -> bool:
+    def _comment_exists(self, marker: str, existing_comments: set, strict: bool = False) -> bool:
         """
-        Проверить, есть ли транзакция с данным комментарием (substring matching).
-        Например, маркер 'Заготовка' найдётся в комментарии 'Заготовка Полина'.
+        Проверить, есть ли транзакция с данным комментарием.
+
+        strict=False (default): substring matching — маркер 'Заготовка' найдётся
+        в комментарии 'Заготовка Полина'.
+
+        strict=True: exact match (case-insensitive) — 'Мадира Т' не матчит 'Мадира'.
         """
         if not marker:
             return False
+        marker_lower = marker.lower().strip()
         for existing in existing_comments:
-            if marker in existing or existing in marker:
-                return True
+            existing_lower = existing.lower().strip()
+            if strict:
+                if marker_lower == existing_lower:
+                    return True
+            else:
+                if marker_lower in existing_lower or existing_lower in marker_lower:
+                    return True
         return False
 
     async def _get_account_existing_data(self, poster_client: PosterClient) -> dict:
@@ -78,17 +88,69 @@ class DailyTransactionScheduler:
     async def check_transactions_created_today(self) -> bool:
         """
         Проверить, были ли уже созданы ежедневные транзакции сегодня.
-        Сначала проверяет флаг в БД (быстро), потом Poster API (надёжно).
+        Проверяет только флаг в БД (быстро). Poster API проверяется отдельно
+        через verify_transactions_in_poster() при необходимости.
         """
         from database import get_database
         db = get_database()
         today = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
 
-        # Быстрая проверка по флагу в БД
+        # Проверка по флагу в БД (row existence = attempted)
         if db.is_daily_transactions_created(self.telegram_user_id, today):
             return True
 
         return False
+
+    async def verify_transactions_in_poster(self) -> bool:
+        """
+        Проверить наличие ежедневных транзакций непосредственно в Poster API.
+        Используется как fallback если флаг в БД отсутствует (перезапуск, сбой БД).
+        """
+        from database import get_database
+        db = get_database()
+
+        try:
+            accounts = db.get_accounts(self.telegram_user_id)
+            if not accounts:
+                return False
+
+            # Загрузить конфигурацию
+            db.seed_daily_transaction_configs(self.telegram_user_id)
+            tx_configs = db.get_daily_transaction_configs(self.telegram_user_id)
+            config_comments = [c.get('comment', '') for c in tx_configs if c.get('comment') and c.get('is_enabled')]
+
+            if not config_comments:
+                return False
+
+            # Проверить первый аккаунт (Pizzburg — основной)
+            account = accounts[0]
+            poster_client = PosterClient(
+                telegram_user_id=self.telegram_user_id,
+                poster_token=account['poster_token'],
+                poster_user_id=account['poster_user_id'],
+                poster_base_url=account['poster_base_url']
+            )
+
+            try:
+                existing = await self._get_account_existing_data(poster_client)
+                existing_comments = existing.get('comments', set())
+
+                # Если >= 3 маркеров из конфига найдены в Poster — транзакции есть
+                found = sum(1 for c in config_comments if self._comment_exists(c, existing_comments))
+                threshold = max(3, len(config_comments) // 2)
+
+                if found >= threshold:
+                    logger.info(f"✅ Poster API: найдено {found}/{len(config_comments)} маркеров — транзакции уже существуют")
+                    return True
+                else:
+                    logger.info(f"🔍 Poster API: найдено только {found}/{len(config_comments)} маркеров — транзакции не найдены")
+                    return False
+            finally:
+                await poster_client.close()
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки транзакций в Poster: {e}")
+            return False
 
     async def create_daily_transactions(self):
         """
@@ -232,13 +294,14 @@ class DailyTransactionScheduler:
         existing_category_ids = existing_data.get('category_ids', set())
 
         # Ранний выход: если большинство комментариев из конфига уже найдены в Poster
+        # Используем strict=True чтобы не путать "Мадира" и "Мадира Т"
         config_comments = [c.get('comment', '') for c in configs if c.get('comment')]
         if config_comments:
-            found = sum(1 for c in config_comments if self._comment_exists(c, existing_comments))
+            found = sum(1 for c in config_comments if self._comment_exists(c, existing_comments, strict=True))
             threshold = max(3, len(config_comments) // 2)
             if found >= threshold:
                 logger.info(
-                    f"⏭️ {found}/{len(config_comments)} маркеров уже найдено в Poster — "
+                    f"⏭️ {found}/{len(config_comments)} маркеров уже найдено в Poster (exact match) — "
                     f"транзакции уже существуют, пропускаю создание"
                 )
                 return []
@@ -252,8 +315,8 @@ class DailyTransactionScheduler:
             category_name = cfg.get('category_name', '')
             tx_type = cfg.get('transaction_type', 0)
 
-            # Дедупликация: по комментарию (substring) или category_id
-            if comment and self._comment_exists(comment, existing_comments):
+            # Дедупликация: по комментарию (exact match) или category_id
+            if comment and self._comment_exists(comment, existing_comments, strict=True):
                 logger.info(f"⏭️ Пропускаю (уже есть): '{comment}'")
                 continue
             if not comment and category_id > 0 and str(category_id) in existing_category_ids:
@@ -366,20 +429,21 @@ class DailyTransactionScheduler:
                             comment_groups[comment] = []
                         comment_groups[comment].append(tx)
 
-                    # Также проверяем fuzzy-дубли (substring matching)
-                    # Например "Мадира" и "Мадира Т" — это дубли одного конфига
+                    # Проверяем дубли по ТОЧНОМУ совпадению комментария (case-insensitive)
+                    # Не используем substring — "Мадира" и "Мадира Т" это разные транзакции
                     config_comments = [(cfg.get('comment', ''), cfg) for cfg in account_configs if cfg.get('comment')]
 
                     for config_comment, cfg in config_comments:
-                        # Найти ВСЕ транзакции, которые матчат этот конфиг (по substring)
+                        # Найти ВСЕ транзакции, которые матчат этот конфиг (exact match)
                         matching_txs = []
+                        config_lower = config_comment.lower().strip()
                         for tx in transactions:
                             tx_type = str(tx.get('type', ''))
                             tx_comment = (tx.get('comment') or '').strip()
                             if not tx_comment or tx_type == '2':
                                 continue
-                            # Substring matching (как в _comment_exists)
-                            if config_comment in tx_comment or tx_comment in config_comment:
+                            # Exact match (case-insensitive)
+                            if tx_comment.lower().strip() == config_lower:
                                 matching_txs.append(tx)
 
                         if len(matching_txs) <= 1:

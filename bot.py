@@ -5884,16 +5884,17 @@ async def run_weekly_price_check_for_user(telegram_user_id: int, bot_application
 
 async def check_and_notify_missed_transactions(app: Application):
     """
-    Проверить, были ли созданы ежедневные транзакции сегодня
-    Если нет и уже после 12:00 - отправить сообщение пользователю с подтверждением
+    Проверить, были ли созданы ежедневные транзакции сегодня.
+    Только после 11:00 (cron в 10:30 + 30 мин буфер) — чтобы не слать ложные предупреждения.
+    Дополнительно проверяет Poster API если флаг в БД не найден.
     """
     try:
         kz_tz = pytz.timezone('Asia/Almaty')
         kz_now = datetime.now(kz_tz)
 
-        # Не проверять до 9:30 — cron запускается в 9:00, дадим ему время отработать
-        if kz_now.hour < 9 or (kz_now.hour == 9 and kz_now.minute < 30):
-            logger.info(f"⏭️ Проверка пропущенных транзакций пропущена: сейчас {kz_now.strftime('%H:%M')} (до 9:30)")
+        # Не проверять до 11:00 — cron запускается в 10:30, даём 30 мин на выполнение
+        if kz_now.hour < 11:
+            logger.info(f"⏭️ Проверка пропущенных транзакций пропущена: сейчас {kz_now.strftime('%H:%M')} (до 11:00)")
             return
 
         db = get_database()
@@ -5910,6 +5911,14 @@ async def check_and_notify_missed_transactions(app: Application):
                 transactions_exist = await scheduler.check_transactions_created_today()
 
                 if not transactions_exist:
+                    # Дополнительная проверка через Poster API перед отправкой предупреждения
+                    poster_has_transactions = await scheduler.verify_transactions_in_poster()
+                    if poster_has_transactions:
+                        logger.info(f"✅ Транзакции найдены в Poster API для {telegram_user_id}, хотя флаг в БД отсутствует. Устанавливаю флаг.")
+                        today = kz_now.strftime("%Y-%m-%d")
+                        db.set_daily_transactions_created(telegram_user_id, today, -2)  # -2 = found in Poster
+                        continue
+
                     logger.info(f"⚠️ Ежедневные транзакции не найдены для пользователя {telegram_user_id}. Отправляю уведомление...")
 
                     # Отправить сообщение с кнопкой подтверждения
@@ -5924,7 +5933,7 @@ async def check_and_notify_missed_transactions(app: Application):
                     await app.bot.send_message(
                         chat_id=telegram_user_id,
                         text="⚠️ *Ежедневные транзакции не были созданы сегодня*\n\n"
-                             "Возможно, бот был перезапущен после 9:00.\n\n"
+                             "Возможно, бот был перезапущен после 10:30.\n\n"
                              "Хотите создать транзакции сейчас?",
                         parse_mode='Markdown',
                         reply_markup=reply_markup

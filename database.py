@@ -3471,8 +3471,9 @@ class UserDatabase:
     # ==================== Daily Transactions Log Methods ====================
 
     def is_daily_transactions_created(self, telegram_user_id: int, date: str) -> bool:
-        """Check if daily transactions were already created for this user and date.
-        Also returns True for count=-1 (claim in progress) to prevent race conditions."""
+        """Check if daily transactions were already created (or claimed) for this user and date.
+        Returns True if row exists at all (count=-1 claim, count=0 early exit, count>0 done).
+        The mere presence of a row means we already attempted creation for this date."""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -3485,20 +3486,17 @@ class UserDatabase:
 
             row = cursor.fetchone()
             conn.close()
-            if row is None:
-                return False
-            count = row[0] if isinstance(row, tuple) else row['count']
-            # count > 0 = done, count = -1 = claim in progress
-            return count != 0
+            # Row exists = we already attempted (claimed/created/early-exited)
+            return row is not None
 
         except Exception as e:
             logger.error(f"Failed to check daily_transactions_log: {e}")
             return False
 
     def is_daily_transactions_created_for_date(self, date: str) -> bool:
-        """Check if daily transactions were already created by ANY user for this date.
+        """Check if daily transactions were already created (or claimed) by ANY user for this date.
         Prevents multi-user duplication when multiple users share the same Poster account.
-        Also detects claims (count=-1) to prevent race conditions."""
+        Returns True if any row exists for this date (including count=0 and count=-1)."""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -3506,7 +3504,7 @@ class UserDatabase:
 
             cursor.execute(f"""
                 SELECT telegram_user_id, count FROM daily_transactions_log
-                WHERE date = {placeholder} AND count != 0
+                WHERE date = {placeholder}
                 LIMIT 1
             """, (date,))
 
