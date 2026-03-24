@@ -563,24 +563,49 @@ class IngredientMatcher:
 
         # 4. Fuzzy match on ingredient names
         names_list = list(self.names.keys())
-        name_match = process.extractOne(
+        name_matches = process.extract(
             text_lower,
             names_list,
             scorer=fuzz.WRatio,
-            score_cutoff=score_cutoff
+            score_cutoff=score_cutoff,
+            limit=5
         )
 
         # Log top 3 ingredient name matches
-        if names_list:
-            top_name_matches = process.extract(text_lower, names_list, scorer=fuzz.WRatio, limit=3)
-            logger.info(f"      Top 3 ingredient name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_name_matches]}")
+        if names_list and name_matches:
+            logger.info(f"      Top ingredient name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in name_matches[:3]]}")
 
-        if name_match:
-            matched_name = name_match[0]
-            score = name_match[1]
+        # Find the best valid name match
+        for matched_name, score, _ in name_matches:
+            text_words = set(text_lower.split())
+            matched_words = set(matched_name.split())
+            common_tokens = text_words & matched_words
+            
+            # Stricter rejection for raw names (no alias support)
+            # Reject if WRatio < 85 AND they share fewer than 2 tokens (unless one of them is only 1 word)
+            is_suspicious = (
+                score < 85 and 
+                len(common_tokens) < 2 and 
+                len(text_words) > 1 and 
+                len(matched_words) > 1
+            )
+            
+            # Also reject very short generic overlaps with high score but low commonality
+            is_generic_overlap = (
+                score >= 85 and 
+                len(common_tokens) == 1 and 
+                len(text_words) > 1 and 
+                len(matched_words) > 1 and
+                len(list(common_tokens)[0]) < 5  # Common token is a very short generic word like "соус", "филе"
+            )
+
+            if is_suspicious or is_generic_overlap:
+                logger.info(f"      ❌ Rejected name match: '{text_lower}' → '{matched_name}' (score={score:.1f}, common_tokens={len(common_tokens)})")
+                continue
+                
             ingredient_id = self.names[matched_name]
             ingredient = self.ingredients[ingredient_id]
-            logger.debug(f"Ingredient fuzzy match: '{text}' -> {ingredient} (score={score})")
+            logger.info(f"✅ Ingredient fuzzy match: '{text}' -> {ingredient['name']} (score={score})")
             return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
 
         logger.warning(f"Ingredient not matched: '{text}'")
@@ -649,6 +674,30 @@ class IngredientMatcher:
             )
 
             for matched_name, score, _ in name_matches:
+                text_words = set(text_lower.split())
+                matched_words = set(matched_name.split())
+                common_tokens = text_words & matched_words
+                
+                # Stricter rejection for raw names 
+                is_suspicious = (
+                    score < 85 and 
+                    len(common_tokens) < 2 and 
+                    len(text_words) > 1 and 
+                    len(matched_words) > 1
+                )
+                
+                is_generic_overlap = (
+                    score >= 85 and 
+                    len(common_tokens) == 1 and 
+                    len(text_words) > 1 and 
+                    len(matched_words) > 1 and
+                    len(list(common_tokens)[0]) < 5
+                )
+
+                if is_suspicious or is_generic_overlap:
+                    logger.info(f"      ❌ Rejected name priority match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
+                    continue
+                    
                 ingredient_id = self.names[matched_name]
                 ingredient = self.ingredients[ingredient_id]
                 all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
@@ -989,24 +1038,48 @@ class ProductMatcher:
 
         # 4. Fuzzy match on product names
         names_list = list(self.names.keys())
-        name_match = process.extractOne(
+        name_matches = process.extract(
             text_lower,
             names_list,
             scorer=fuzz.WRatio,
-            score_cutoff=score_cutoff
+            score_cutoff=score_cutoff,
+            limit=5
         )
 
         # Log top 3 product name matches
-        if names_list:
-            top_name_matches = process.extract(text_lower, names_list, scorer=fuzz.WRatio, limit=3)
-            logger.info(f"      Top 3 product name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_name_matches]}")
+        if names_list and name_matches:
+            logger.info(f"      Top product name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in name_matches[:3]]}")
 
-        if name_match:
-            matched_name = name_match[0]
-            score = name_match[1]
+        # Find the best valid name match
+        for matched_name, score, _ in name_matches:
+            text_words = set(text_lower.split())
+            matched_words = set(matched_name.split())
+            common_tokens = text_words & matched_words
+            
+            # Stricter rejection for raw names 
+            is_suspicious = (
+                score < 85 and 
+                len(common_tokens) < 2 and 
+                len(text_words) > 1 and 
+                len(matched_words) > 1
+            )
+            
+            # Also reject very short generic overlaps with high score but low commonality
+            is_generic_overlap = (
+                score >= 85 and 
+                len(common_tokens) == 1 and 
+                len(text_words) > 1 and 
+                len(matched_words) > 1 and
+                len(list(common_tokens)[0]) < 5
+            )
+
+            if is_suspicious or is_generic_overlap:
+                logger.info(f"      ❌ Rejected product name match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
+                continue
+                
             product_id = self.names[matched_name]
             product = self.products[product_id]
-            logger.debug(f"Product fuzzy match: '{text}' -> {product} (score={score})")
+            logger.debug(f"Product fuzzy match: '{text}' -> {product['name']} (score={score})")
             return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
 
         logger.warning(f"Product not matched: '{text}'")
