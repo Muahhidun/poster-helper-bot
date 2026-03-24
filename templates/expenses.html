@@ -2492,7 +2492,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateRowSyncStatus(input.closest('tr'));
 
                 // Auto-switch type to 'supply' when supply category selected
-                if (rawName === 'book_category_action_supplies' || name.toLowerCase() === 'поставки') {
+                if (rawName.includes('supplies') || name.toLowerCase().includes('постав')) {
                     const row = input.closest('tr');
                     const typeBtn = row?.querySelector('.btn-type');
                     if (typeBtn && typeBtn.dataset.type !== 'supply') {
@@ -2564,9 +2564,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (selectedIndex >= 0 && items[selectedIndex]) {
                     e.preventDefault();
                     items[selectedIndex].click();
-                } else if (items.length === 1) {
+                    // Фокус на следующий элемент
+                    const row = input.closest('tr');
+                    const nextBtn = row?.querySelector('.btn-poster-account');
+                    if (nextBtn) setTimeout(() => nextBtn.focus(), 50);
+                } else if (items.length > 0) {
                     e.preventDefault();
-                    items[0].click();
+                    items[0].click(); // Выбираем первый (лучший) вариант
+                    // Фокус на следующий элемент
+                    const row = input.closest('tr');
+                    const nextBtn = row?.querySelector('.btn-poster-account');
+                    if (nextBtn) setTimeout(() => nextBtn.focus(), 50);
                 }
             } else if (e.key === 'Escape') {
                 resultsDiv.style.display = 'none';
