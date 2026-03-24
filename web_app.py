@@ -1033,7 +1033,7 @@ def api_supply_ocr(draft_id):
         
     try:
         from parser_service import get_parser_service
-        from matchers import get_ingredient_matcher
+        from matchers import get_ingredient_matcher, get_product_matcher
         
         # 1. Parse image with Claude
         image_data = file.read()
@@ -1051,6 +1051,7 @@ def api_supply_ocr(draft_id):
         
         # We need matcher to link items to Poster IDs
         ing_matcher = get_ingredient_matcher(g.user_id)
+        prod_matcher = get_product_matcher(g.user_id)
         
         calculated_total = 0.0
         
@@ -1065,18 +1066,23 @@ def api_supply_ocr(draft_id):
             total = qty * price
             calculated_total += total
             
-            # Try matching
-            match_result = ing_matcher.match(name)
-            
             item_id = None
             item_type = 'ingredient'
             matched_name = None
             
+            # Try ingredient matching first
+            match_result = ing_matcher.match(name)
             if match_result:
-                # We found a match in ingredients/products
-                item_id = int(match_result['id'])
-                item_type = match_result.get('type', 'ingredient')
-                matched_name = match_result.get('name')
+                # Returns (ingredient_id, name, unit, score, account_name)
+                item_id, matched_name, _, _, _ = match_result
+                item_type = 'ingredient'
+            else:
+                # Try product matching if ingredient not found
+                prod_match_result = prod_matcher.match(name)
+                if prod_match_result:
+                    # Returns (product_id, name, unit, score, account_name)
+                    item_id, matched_name, _, _, _ = prod_match_result
+                    item_type = 'product'
                 
             # Add to draft
             db.add_supply_draft_item(
