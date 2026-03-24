@@ -538,34 +538,55 @@ class ParserService:
                 media_type = "image/jpeg" # Fallback
 
             # Using fresh client for thread-safety in Flask (run_async creates a new event loop)
-            from anthropic import AsyncAnthropic
+            from anthropic import AsyncAnthropic, NotFoundError
             from config import ANTHROPIC_API_KEY
             
+            # Tier 1 / Evaluation keys may lack access to certain models
+            models_to_try = [
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-sonnet-20240620",
+                "claude-3-haiku-20240307"  # Haiku has vision and is universally available
+            ]
+
+            response = None
+            last_error = None
+
             async with AsyncAnthropic(api_key=ANTHROPIC_API_KEY) as client:
-                response = await client.messages.create(
-                    model="claude-3-5-sonnet-20240620",
-                    max_tokens=4096,
-                    temperature=0,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
+                for model_name in models_to_try:
+                    try:
+                        logger.info(f"Attempting OCR with model: {model_name}")
+                        response = await client.messages.create(
+                            model=model_name,
+                            max_tokens=4096,
+                            temperature=0,
+                            messages=[
                                 {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": media_type,
-                                        "data": file_base64,
-                                    }
-                                },
-                                {
-                                    "type": "text",
-                                    "text": INVOICE_PARSER_PROMPT
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type,
+                                                "data": file_base64,
+                                            }
+                                        },
+                                        {
+                                            "type": "text",
+                                            "text": INVOICE_PARSER_PROMPT
+                                        }
+                                    ]
                                 }
                             ]
-                        }
-                    ]
-                )
+                        )
+                        break  # Success!
+                    except NotFoundError as e:
+                        logger.warning(f"Model {model_name} not available (404). Trying next...")
+                        last_error = e
+                        continue
+                
+                if not response:
+                    raise Exception(f"Все модели недоступны для вашего API ключа. Последняя ошибка: {last_error}")
 
             # Extract text from Claude's response blocks
             response_text = ""
