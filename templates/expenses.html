@@ -2483,6 +2483,15 @@ document.addEventListener('DOMContentLoaded', function() {
             input.value = name;
             resultsDiv.style.display = 'none';
 
+            // Auto-switch type to 'supply' when supply category selected
+            if (rawName.includes('supplies') || name.toLowerCase().includes('постав')) {
+                const row = input.closest('tr');
+                const typeBtn = row?.querySelector('.btn-type');
+                if (typeBtn && typeBtn.dataset.type !== 'supply') {
+                    typeBtn.click();
+                }
+            }
+
             const id = input.dataset.id;
             // Only save to server for real rows (not placeholders)
             if (id && !id.startsWith('placeholder')) {
@@ -2490,15 +2499,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 input.classList.add('saved');
                 setTimeout(() => input.classList.remove('saved'), 300);
                 updateRowSyncStatus(input.closest('tr'));
-
-                // Auto-switch type to 'supply' when supply category selected
-                if (rawName.includes('supplies') || name.toLowerCase().includes('постав')) {
-                    const row = input.closest('tr');
-                    const typeBtn = row?.querySelector('.btn-type');
-                    if (typeBtn && typeBtn.dataset.type !== 'supply') {
-                        typeBtn.click();
-                    }
-                }
             }
         }
     });
