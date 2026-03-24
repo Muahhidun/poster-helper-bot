@@ -1,5 +1,6 @@
 """Poster API Client"""
 import aiohttp
+import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -63,7 +64,8 @@ class PosterClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session"""
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=15)
+            self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
     async def close(self):
@@ -125,9 +127,9 @@ class PosterClient:
 
             return result
 
-        except aiohttp.ClientError as e:
-            logger.error(f"Poster API request failed: {e}")
-            raise Exception(f"Не удалось подключиться к Poster API: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error(f"Poster API request failed or timed out: {e}")
+            raise Exception(f"Не удалось подключиться к Poster API: слишком долгое ожидание или ошибка сети ({e})")
 
     # === Finance Methods ===
 
