@@ -1564,6 +1564,18 @@ def create_expense():
         poster_account_id=poster_account_id
     )
 
+    if draft_id and expense_type == 'supply':
+        from datetime import datetime
+        db.create_empty_supply_draft(
+            telegram_user_id=g.user_id,
+            supplier_name=description,
+            invoice_date=datetime.now().strftime("%Y-%m-%d"),
+            total_sum=amount,
+            linked_expense_draft_id=draft_id,
+            account_id=account_id,
+            source=source
+        )
+
     if draft_id:
         # Return full draft object for dynamic row creation
         return jsonify({
@@ -2157,6 +2169,18 @@ def api_create_expense(validated=None):
         account_id=validated.account_id,
         poster_account_id=validated.poster_account_id,
     )
+
+    if draft_id and validated.expense_type.value == 'supply':
+        from datetime import datetime
+        db.create_empty_supply_draft(
+            telegram_user_id=g.user_id,
+            supplier_name=validated.description,
+            invoice_date=datetime.now().strftime("%Y-%m-%d"),
+            total_sum=validated.amount,
+            linked_expense_draft_id=draft_id,
+            account_id=validated.account_id,
+            source=validated.source.value
+        )
 
     return jsonify({'success': True, 'id': draft_id})
 
