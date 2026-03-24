@@ -15,13 +15,22 @@ if DATABASE_URL:
     # PostgreSQL on Railway
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    from psycopg2 import pool
     DB_TYPE = "postgresql"
     logger.info("Using PostgreSQL database")
+    
+    try:
+        DB_POOL = pool.ThreadedConnectionPool(1, 20, dsn=DATABASE_URL)
+        logger.info("Initialized PostgreSQL connection pool (min=1, max=20)")
+    except Exception as e:
+        logger.error(f"Failed to initialize connection pool: {e}")
+        DB_POOL = None
 else:
     # SQLite locally
     import sqlite3
     from config import DATABASE_PATH
     DB_TYPE = "sqlite"
+    DB_POOL = None
     logger.info(f"Using SQLite database at {DATABASE_PATH}")
 
 
@@ -34,9 +43,10 @@ class _ManagedConnection:
     - Supports context manager protocol (with statement)
     """
 
-    def __init__(self, conn):
+    def __init__(self, conn, pool=None):
         self._conn = conn
         self._closed = False
+        self._pool = pool
 
     def cursor(self, *args, **kwargs):
         return self._conn.cursor(*args, **kwargs)
@@ -50,7 +60,10 @@ class _ManagedConnection:
     def close(self):
         if not self._closed:
             self._closed = True
-            self._conn.close()
+            if self._pool:
+                self._pool.putconn(self._conn)
+            else:
+                self._conn.close()
 
     def __del__(self):
         self.close()
@@ -90,7 +103,15 @@ class UserDatabase:
             return _ManagedConnection(conn)
         else:
             # PostgreSQL
-            return _ManagedConnection(psycopg2.connect(self.db_url))
+            if DB_POOL:
+                try:
+                    conn = DB_POOL.getconn()
+                    return _ManagedConnection(conn, pool=DB_POOL)
+                except Exception as e:
+                    logger.error(f"Pool error: {e}. Falling back to standard connection.")
+                    return _ManagedConnection(psycopg2.connect(self.db_url))
+            else:
+                return _ManagedConnection(psycopg2.connect(self.db_url))
 
     def _init_db(self):
         """Initialize database with tables"""
