@@ -842,6 +842,39 @@ h1 { margin: 0; }
 </style>
 
 <script>
+// Global state for mapping unmatched items
+let mappingItemId = null;
+let mappingOriginalName = null;
+
+window.startMapping = window.startMapping || function(itemId, draftId, originalName) {
+    mappingItemId = itemId;
+    mappingOriginalName = originalName;
+    const searchInput = document.querySelector(`.ingredient-search[data-draft-id="${draftId}"]`);
+    if (searchInput) {
+        // Highlight search input
+        searchInput.style.boxShadow = '0 0 0 0.25rem rgba(220, 53, 69, 0.25)';
+        searchInput.style.borderColor = '#dc3545';
+        searchInput.placeholder = `🔍 Связать "${originalName}" с...`;
+        
+        // Auto-fill first part of text
+        const searchStr = originalName.split(',')[0].substring(0, 15).trim();
+        searchInput.value = searchStr;
+        searchInput.focus();
+        searchInput.dispatchEvent(new Event('input'));
+        
+        // Remove highlight on blur
+        searchInput.addEventListener('blur', function cleanup() {
+            setTimeout(() => {
+                if (!mappingItemId) {
+                    searchInput.style.boxShadow = '';
+                    searchInput.style.borderColor = '';
+                    searchInput.placeholder = '🔍 Поиск ингредиента...';
+                }
+                searchInput.removeEventListener('blur', cleanup);
+            }, 200);
+        });
+    }
+};
 // Ingredients data from server
 const ingredients = {{ items|tojson|safe if items else '[]' }};
 const posterAccounts = {{ poster_accounts|tojson|safe if poster_accounts else '[]' }};
@@ -1399,7 +1432,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Fetch last price using cached function
             const lastPrice = await fetchLastPrice(ingredientId);
 
-            // Check if we have last supply data for this ingredient (autofill)
+            // Check if we have last supply data for this ingredient
             let autoQty = 0;
             let autoPrice = 0;
             const lastSupply = lastSupplyByDraft[draftId];
@@ -1411,7 +1444,70 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
-            // Add item to server
+            // Are we mapping an unmatched item?
+            if (mappingItemId) {
+                const response = await fetch(`/supplies/update-item/${mappingItemId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        poster_ingredient_id: ingredientId,
+                        poster_ingredient_name: ingredientName,
+                        poster_account_id: accountId,
+                        poster_account_name: accountName
+                    })
+                });
+
+                // Auto-save Alias in background
+                fetch('/supplier-aliases/add', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        alias_text: mappingOriginalName,
+                        poster_item_id: ingredientId,
+                        poster_item_name: ingredientName,
+                        poster_account_id: accountId,
+                        poster_account_name: accountName,
+                        source: itemType,
+                        notes: 'Авто-сохранено при связывании в Поставках'
+                    })
+                }).catch(e => console.error("Failed to save alias", e));
+
+                const result = await response.json();
+                if (result.success) {
+                    // Update local arrays
+                    if (supplyItems[draftId]) {
+                        const idx = supplyItems[draftId].findIndex(i => i.id === mappingItemId);
+                        if (idx > -1) {
+                            supplyItems[draftId][idx].poster_ingredient_id = ingredientId;
+                            supplyItems[draftId][idx].poster_ingredient_name = ingredientName;
+                            supplyItems[draftId][idx].poster_account_id = accountId;
+                            supplyItems[draftId][idx].poster_account_name = accountName;
+                            supplyItems[draftId][idx].lastPrice = lastPrice;
+                            if (!supplyItems[draftId][idx].price_per_unit && autoPrice) {
+                                supplyItems[draftId][idx].price_per_unit = autoPrice;
+                                supplyItems[draftId][idx].total = supplyItems[draftId][idx].quantity * autoPrice;
+                            }
+                        }
+                    }
+
+                    // Reset styling
+                    inputEl.style.boxShadow = '';
+                    inputEl.style.borderColor = '';
+                    inputEl.placeholder = '🔍 Поиск ингредиента...';
+                    inputEl.value = '';
+                    const resDiv = inputEl.nextElementSibling;
+                    if (resDiv) resDiv.style.display = 'none';
+
+                    mappingItemId = null;
+                    mappingOriginalName = null;
+                    
+                    renderItems(parseInt(draftId));
+                    updateTotals();
+                }
+                return;
+            }
+
+            // Normal Flow: Add item to server
             const response = await fetch(`/supplies/add-item/${draftId}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1505,10 +1601,16 @@ function renderItems(draftId) {
             if (lastItem) lastPrice = lastItem.price;
         }
 
+        const isMatched = !!item.poster_ingredient_name;
+        const displayName = item.poster_ingredient_name || item.item_name;
+        const nameHtml = isMatched 
+            ? `<span class="ingredient-name matched" title="Связано с Poster">${displayName}</span>`
+            : `<span class="ingredient-name unmatched" title="Нажмите, чтобы связать с существующим товаром" onclick="startMapping(${item.id}, ${draftId}, '${(item.item_name || '').replace(/'/g, "\\'")}')" style="cursor:pointer; color:#dc3545; border-bottom:1px dashed #dc3545; display:inline-block; padding:2px 0;">⚠️ ${displayName}</span>`;
+
         return `
         <tr data-item-id="${item.id}">
             <td>
-                <span class="ingredient-name">${item.poster_ingredient_name || item.item_name}</span>
+                ${nameHtml}
             </td>
             <td>
                 ${item.poster_account_name ? `<span class="account-badge">${item.poster_account_name}</span>` : (item.storage_name ? `<span class="account-badge">${item.storage_name}</span>` : '-')}
