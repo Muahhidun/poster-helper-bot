@@ -513,26 +513,32 @@ class ParserService:
 
     async def _parse_invoice_with_vision(self, file_data: bytes, media_type: str) -> Optional[Dict]:
         """
-        Parse supply invoice from image or PDF using GPT-4o Vision API
-
+        Parse supply invoice from image using Claude 3.5 Sonnet Vision API
+        
         Args:
-            file_data: Image or PDF bytes
-            media_type: MIME type (image/jpeg, image/png, or application/pdf)
-
+            file_data: Image bytes
+            media_type: MIME type (image/jpeg, image/png, etc)
+            
         Returns:
             Parsed supply dict or None if parsing failed
         """
         try:
-            file_type = "PDF" if media_type == "application/pdf" else "image"
-            logger.info(f"Parsing invoice from {file_type} using GPT-4o Vision API")
+            logger.info(f"Parsing invoice from image using Claude 3.5 Sonnet Vision API")
 
             # Encode to base64
             file_base64 = base64.standard_b64encode(file_data).decode("utf-8")
+            
+            # Claude expects image/jpeg, image/png, image/gif, or image/webp
+            if media_type == "application/pdf":
+                logger.error("Claude 3.5 Sonnet API currently does not support direct PDF parsing in this implementation format. Convert to image first.")
+                return None
+                
+            if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+                media_type = "image/jpeg" # Fallback
 
-            # Create message with image
-            # Using GPT-4o for best OCR performance
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o",
+            # Using Claude 3.5 Sonnet as requested by user
+            response = await self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
                 max_tokens=4096,
                 temperature=0,
                 messages=[
@@ -540,23 +546,29 @@ class ParserService:
                         "role": "user",
                         "content": [
                             {
-                                "type": "text",
-                                "text": INVOICE_PARSER_PROMPT
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": file_base64,
+                                }
                             },
                             {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{media_type};base64,{file_base64}",
-                                    "detail": "high"  # High detail for better OCR
-                                }
+                                "type": "text",
+                                "text": INVOICE_PARSER_PROMPT
                             }
                         ]
                     }
                 ]
             )
 
-            response_text = response.choices[0].message.content.strip()
-            logger.info(f"GPT-4o Vision raw response: {response_text[:500]}...")
+            # Extract text from Claude's response blocks
+            response_text = ""
+            for block in response.content:
+                if block.type == 'text':
+                    response_text += block.text
+                    
+            logger.info(f"Claude Vision raw response: {response_text[:500]}...")
 
             # Extract JSON from response
             json_text = self._extract_json(response_text)
@@ -588,10 +600,10 @@ class ParserService:
             return parsed
 
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse GPT-4o Vision response as JSON: {e}")
+            logger.error(f"Failed to parse Claude Vision response as JSON: {e}")
             return None
         except Exception as e:
-            logger.error(f"GPT-4o Vision invoice parsing failed: {e}")
+            logger.error(f"Claude Vision invoice parsing failed: {e}")
             return None
 
     def _extract_json(self, text: str) -> str:

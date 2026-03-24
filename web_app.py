@@ -1019,6 +1019,94 @@ def api_create_supply():
         return jsonify({'error': f'Failed to create supply: {str(e)}'}), 500
 
 
+@app.route('/api/supplies/<int:draft_id>/ocr', methods=['POST'])
+def api_supply_ocr(draft_id):
+    """Process supply invoice image using OCR and link to draft"""
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image provided'}), 400
+        
+    file = request.files['image']
+    if not file or not file.filename:
+        return jsonify({'error': 'No image selected'}), 400
+        
+    expected_sum = request.form.get('expected_sum', type=float, default=0.0)
+        
+    try:
+        from parser_service import get_parser_service
+        from matchers import get_ingredient_matcher
+        
+        # 1. Parse image with Claude
+        image_data = file.read()
+        media_type = file.mimetype
+        
+        parser = get_parser_service()
+        logger.info(f"Sending invoice image for draft {draft_id} to OCR...")
+        parsed_data = run_async(parser.parse_invoice_image(image_data, media_type))
+        
+        if not parsed_data or not parsed_data.get('items'):
+            return jsonify({'error': 'Не удалось распознать позиции накладной. Попробуйте фото в лучшем качестве.'}), 400
+            
+        # 2. Process recognized items
+        db = get_database()
+        
+        # We need matcher to link items to Poster IDs
+        ing_matcher = get_ingredient_matcher(g.user_id)
+        
+        calculated_total = 0.0
+        
+        for item in parsed_data['items']:
+            name = item.get('name', 'Неизвестный товар')
+            qty = float(item.get('qty', 0))
+            price = float(item.get('price', 0))
+            
+            if qty <= 0 or price <= 0:
+                continue
+                
+            total = qty * price
+            calculated_total += total
+            
+            # Try matching
+            match_result = ing_matcher.match(name)
+            
+            item_id = None
+            item_type = 'ingredient'
+            matched_name = None
+            
+            if match_result:
+                # We found a match in ingredients/products
+                item_id = int(match_result['id'])
+                item_type = match_result.get('type', 'ingredient')
+                matched_name = match_result.get('name')
+                
+            # Add to draft
+            db.add_supply_draft_item(
+                supply_draft_id=draft_id,
+                item_name=name,
+                quantity=qty,
+                price_per_unit=price,
+                poster_ingredient_id=item_id,
+                poster_ingredient_name=matched_name,
+                item_type=item_type
+            )
+            
+        # 3. Calculate match difference
+        # Allow 50 KZT margin for rounding errors
+        match_diff = calculated_total - expected_sum
+        
+        return jsonify({
+            'success': True,
+            'match_diff': match_diff,
+            'calculated_total': calculated_total,
+            'items_processed': len(parsed_data['items'])
+        })
+        
+    except Exception as e:
+        logger.error(f"OCR Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Внутренняя ошибка: {str(e)}'}), 500
+
+
 # ========================================
 # Shipment Templates API
 # ========================================

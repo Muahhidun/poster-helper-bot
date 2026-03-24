@@ -49,7 +49,12 @@
                             title="Создать в Poster">
                         ✅ Создать
                     </button>
-                    <button type="button" class="btn btn-sm btn-danger btn-delete-supply" data-id="{{ draft.id }}">
+                    <!-- OCR BUTTON -->
+                    <label class="btn btn-sm btn-primary btn-ocr" title="Загрузить фото чека" style="margin-left: 5px; cursor: pointer;">
+                        📷 Авто
+                        <input type="file" class="ocr-file-input" data-id="{{ draft.id }}" data-sum="{{ draft.total_sum or 0 }}" accept="image/*" capture="environment" style="display: none;">
+                    </label>
+                    <button type="button" class="btn btn-sm btn-danger btn-delete-supply" data-id="{{ draft.id }}" style="margin-left: 5px;">
                         🗑️
                     </button>
                 </div>
@@ -1726,5 +1731,63 @@ function updateTotals() {
     });
     document.getElementById('total-sum').textContent = totalSum.toLocaleString('ru-RU');
 }
+
+// Logic for OCR file upload
+document.addEventListener('change', async function(e) {
+    if (e.target.classList.contains('ocr-file-input')) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const draftId = e.target.dataset.id;
+        const expectedSum = parseFloat(e.target.dataset.sum) || 0;
+        
+        // Show loading state
+        const label = e.target.closest('.btn-ocr');
+        const originalHtml = label.innerHTML;
+        label.innerHTML = '⏳ ИИ в работе...';
+        label.style.pointerEvents = 'none';
+        label.classList.remove('btn-outline-primary');
+        label.classList.add('btn-secondary');
+
+        // Prepare form data
+        const formData = new FormData();
+        formData.append('image', file);
+        formData.append('expected_sum', expectedSum);
+
+        try {
+            const response = await fetch(`/api/supplies/${draftId}/ocr`, {
+                method: 'POST',
+                body: formData
+            });
+            const result = await response.json();
+
+            if (response.ok) {
+                if (result.match_diff !== undefined && Math.abs(result.match_diff) <= 50) {
+                    alert('✅ Накладная успешно распознана! Суммы сошлись идеально.');
+                } else if (result.match_diff !== undefined) {
+                    alert(`⚠️ Накладная распознана, но суммы не сошлись на ${Math.abs(result.match_diff)}₸.\n\nОжидалось: ${expectedSum}₸\nПолучено ИИ: ${result.calculated_total}₸\n\nПожалуйста, сверьте таблицу с фото вручную.`);
+                }
+                window.location.reload();
+            } else {
+                alert('❌ Ошибка: ' + (result.error || 'Не удалось распознать накладную'));
+                // Restore button
+                label.innerHTML = originalHtml;
+                label.style.pointerEvents = 'auto';
+                label.classList.add('btn-outline-primary');
+                label.classList.remove('btn-secondary');
+            }
+        } catch (error) {
+            alert('❌ Ошибка сети: ' + error.message);
+            // Restore button
+            label.innerHTML = originalHtml;
+            label.style.pointerEvents = 'auto';
+            label.classList.add('btn-outline-primary');
+            label.classList.remove('btn-secondary');
+        }
+        
+        // Clear input
+        e.target.value = '';
+    }
+});
 </script>
 {% endblock %}
