@@ -547,61 +547,93 @@ class ParserService:
                 media_type = "image/jpeg" # Fallback
 
             # Using fresh client for thread-safety in Flask (run_async creates a new event loop)
-            from anthropic import AsyncAnthropic, NotFoundError
-            from config import ANTHROPIC_API_KEY
+            from anthropic import AsyncAnthropic, NotFoundError as AnthropicNotFoundError
+            from openai import AsyncOpenAI
+            from config import ANTHROPIC_API_KEY, OPENAI_API_KEY
             
-            # Tier 1 / Evaluation keys may lack access to certain models
-            models_to_try = [
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-sonnet-20240620",
-                "claude-3-haiku-20240307"  # Haiku has vision and is universally available
-            ]
-
-            response = None
+            response_text = None
             last_error = None
-
-            async with AsyncAnthropic(api_key=ANTHROPIC_API_KEY) as client:
-                for model_name in models_to_try:
-                    try:
-                        logger.info(f"Attempting OCR with model: {model_name}")
-                        response = await client.messages.create(
-                            model=model_name,
-                            max_tokens=4096,
-                            temperature=0,
-                            messages=[
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "image",
-                                            "source": {
-                                                "type": "base64",
-                                                "media_type": media_type,
-                                                "data": file_base64,
+            
+            # 1. Try Claude 3.5 Sonnet first (Best OCR overall)
+            try:
+                async with AsyncAnthropic(api_key=ANTHROPIC_API_KEY) as anthropic_client:
+                    for claude_model in ["claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620"]:
+                        try:
+                            logger.info(f"Attempting OCR with Anthropic: {claude_model}")
+                            response = await anthropic_client.messages.create(
+                                model=claude_model,
+                                max_tokens=4096,
+                                temperature=0,
+                                messages=[
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "image",
+                                                "source": {
+                                                    "type": "base64",
+                                                    "media_type": media_type,
+                                                    "data": file_base64,
+                                                }
+                                            },
+                                            {
+                                                "type": "text",
+                                                "text": INVOICE_PARSER_PROMPT
                                             }
-                                        },
-                                        {
-                                            "type": "text",
-                                            "text": INVOICE_PARSER_PROMPT
-                                        }
-                                    ]
-                                }
-                            ]
-                        )
-                        break  # Success!
-                    except NotFoundError as e:
-                        logger.warning(f"Model {model_name} not available (404). Trying next...")
-                        last_error = e
-                        continue
-                
-                if not response:
-                    raise Exception(f"Все модели недоступны для вашего API ключа. Последняя ошибка: {last_error}")
+                                        ]
+                                    }
+                                ]
+                            )
+                            response_text = ""
+                            for block in response.content:
+                                if block.type == 'text':
+                                    response_text += block.text
+                            break # Success!
+                        except AnthropicNotFoundError as e:
+                            logger.warning(f"Anthropic model {claude_model} not available (404). Trying next...")
+                            last_error = e
+                            continue
+            except Exception as e:
+                logger.warning(f"Anthropic client error: {e}")
+                last_error = e
 
-            # Extract text from Claude's response blocks
-            response_text = ""
-            for block in response.content:
-                if block.type == 'text':
-                    response_text += block.text
+            # 2. Fallback to OpenAI GPT-4o-mini (Great at handwriting, cheap, no evaluation limits)
+            if not response_text:
+                logger.info("Falling back to OpenAI GPT-4o-mini for Vision OCR due to Anthropic limits...")
+                try:
+                    data_uri = f"data:{media_type};base64,{file_base64}"
+                    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+                    
+                    response = await openai_client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        max_tokens=4096,
+                        temperature=0,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": INVOICE_PARSER_PROMPT
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": data_uri
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    )
+                    response_text = response.choices[0].message.content
+                    logger.info("✅ OpenAI OCR successful")
+                except Exception as e:
+                    logger.error(f"OpenAI fallback failed: {e}")
+                    raise Exception(f"Все ИИ-модели недоступны. Anthropic Error: {last_error}, OpenAI Error: {e}")
+            
+            if not response_text:
+                raise Exception(f"Не удалось получить текст от распознавания. Последняя ошибка: {last_error}")
                     
             logger.info(f"Claude Vision raw response: {response_text[:500]}...")
 
