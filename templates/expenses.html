@@ -2191,8 +2191,18 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.target.classList.contains('btn-type')) {
             const btn = e.target;
             const id = btn.dataset.id;
-            const currentType = btn.dataset.type;
+            const currentType = btn.dataset.type || 'transaction';
             const newType = currentType === 'supply' ? 'transaction' : 'supply';
+
+            const row = btn.closest('tr');
+            if (row && row.classList.contains('placeholder-row')) {
+                btn.dataset.type = newType;
+                btn.innerHTML = newType === 'supply' ? '📦 поставка' : '💰 транзакция';
+                row.classList.remove('supply', 'transaction');
+                row.classList.add(newType);
+                updateRowSyncStatus(row);
+                return;
+            }
 
             try {
                 const response = await fetch(`/expenses/toggle-type/${id}`, {
