@@ -537,31 +537,35 @@ class ParserService:
             if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
                 media_type = "image/jpeg" # Fallback
 
-            # Using Claude 3.5 Sonnet as requested by user
-            response = await self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4096,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": file_base64,
+            # Using fresh client for thread-safety in Flask (run_async creates a new event loop)
+            from anthropic import AsyncAnthropic
+            from config import ANTHROPIC_API_KEY
+            
+            async with AsyncAnthropic(api_key=ANTHROPIC_API_KEY) as client:
+                response = await client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=4096,
+                    temperature=0,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": file_base64,
+                                    }
+                                },
+                                {
+                                    "type": "text",
+                                    "text": INVOICE_PARSER_PROMPT
                                 }
-                            },
-                            {
-                                "type": "text",
-                                "text": INVOICE_PARSER_PROMPT
-                            }
-                        ]
-                    }
-                ]
-            )
+                            ]
+                        }
+                    ]
+                )
 
             # Extract text from Claude's response blocks
             response_text = ""
@@ -605,7 +609,7 @@ class ParserService:
             return None
         except Exception as e:
             logger.error(f"Claude Vision invoice parsing failed: {e}")
-            return None
+            raise Exception(f"Claude API Error: {str(e)}")
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from Claude response text"""
