@@ -2503,12 +2503,28 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             const id = input.dataset.id;
+            const row = input.closest('tr');
             // Only save to server for real rows (not placeholders)
             if (id && !id.startsWith('placeholder')) {
                 await updateField(id, 'category', name);
                 input.classList.add('saved');
                 setTimeout(() => input.classList.remove('saved'), 300);
-                updateRowSyncStatus(input.closest('tr'));
+                updateRowSyncStatus(row);
+            } else if (row && row.classList.contains('placeholder-row')) {
+                const tbody = row.closest('tbody');
+                const accountType = tbody?.dataset.accountType || 'cash';
+                
+                setTimeout(() => {
+                    convertPlaceholderToRealRow(row, accountType, false).then(newRow => {
+                        if (tbody) {
+                            const newPlaceholder = tbody.querySelector('.placeholder-row');
+                            if (newPlaceholder) {
+                                const newAmount = newPlaceholder.querySelector('.edit-amount');
+                                if (newAmount) newAmount.focus();
+                            }
+                        }
+                    });
+                }, 50);
             }
         }
     });
@@ -2574,17 +2590,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (selectedIndex >= 0 && items[selectedIndex]) {
                     e.preventDefault();
                     items[selectedIndex].click();
-                    // Фокус на следующий элемент
-                    const row = input.closest('tr');
-                    const nextBtn = row?.querySelector('.btn-poster-account');
-                    if (nextBtn) setTimeout(() => nextBtn.focus(), 50);
                 } else if (items.length > 0) {
                     e.preventDefault();
                     items[0].click(); // Выбираем первый (лучший) вариант
-                    // Фокус на следующий элемент
-                    const row = input.closest('tr');
-                    const nextBtn = row?.querySelector('.btn-poster-account');
-                    if (nextBtn) setTimeout(() => nextBtn.focus(), 50);
                 }
             } else if (e.key === 'Escape') {
                 resultsDiv.style.display = 'none';
@@ -2710,6 +2718,9 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType, preserve
         const posterAccountBtn = placeholderRow.querySelector('.btn-poster-account');
         const posterAccountId = posterAccountBtn ? posterAccountBtn.dataset.posterAccountId : null;
 
+        const typeBtn = placeholderRow.querySelector('.btn-type');
+        const expenseType = typeBtn ? typeBtn.dataset.type : 'transaction';
+
         // Create real DB entry with the data
         // Don't send account_id — backend auto-detects the correct finance account
         // based on source + poster_account_id at process time
@@ -2721,7 +2732,8 @@ async function convertPlaceholderToRealRow(placeholderRow, accountType, preserve
                 amount: amount,
                 description: description,
                 category: category || undefined,
-                poster_account_id: posterAccountId || undefined
+                poster_account_id: posterAccountId || undefined,
+                expense_type: expenseType
             })
         });
 
