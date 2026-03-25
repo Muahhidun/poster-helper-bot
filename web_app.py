@@ -1049,6 +1049,10 @@ def api_supply_ocr(draft_id):
         # 2. Process recognized items
         db = get_database()
         
+        # Build account name to ID mapping for mapping OCR matched account_name to poster_account_id
+        accounts = db.get_accounts(g.user_id)
+        account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
+        
         # We need matcher to link items to Poster IDs
         ing_matcher = get_ingredient_matcher(g.user_id)
         prod_matcher = get_product_matcher(g.user_id)
@@ -1069,20 +1073,25 @@ def api_supply_ocr(draft_id):
             item_id = None
             item_type = 'ingredient'
             matched_name = None
+            account_name = None
+            account_id = None
             
             # Try ingredient matching first
             match_result = ing_matcher.match(name)
             if match_result:
                 # Returns (ingredient_id, name, unit, score, account_name)
-                item_id, matched_name, _, _, _ = match_result
+                item_id, matched_name, _, _, account_name = match_result
                 item_type = 'ingredient'
             else:
                 # Try product matching if ingredient not found
                 prod_match_result = prod_matcher.match(name)
                 if prod_match_result:
                     # Returns (product_id, name, unit, score, account_name)
-                    item_id, matched_name, _, _, _ = prod_match_result
+                    item_id, matched_name, _, _, account_name = prod_match_result
                     item_type = 'product'
+            
+            if account_name:
+                account_id = account_name_to_id.get(account_name)
                 
             # Add to draft
             db.add_supply_draft_item(
@@ -1092,6 +1101,8 @@ def api_supply_ocr(draft_id):
                 price_per_unit=price,
                 poster_ingredient_id=item_id,
                 poster_ingredient_name=matched_name,
+                poster_account_id=account_id,
+                poster_account_name=account_name,
                 item_type=item_type
             )
             
