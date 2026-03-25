@@ -3782,6 +3782,7 @@ def process_supply(draft_id):
 
         async def create_supplies_in_poster():
             created_supplies = []
+            all_price_records = []
 
             for poster_account_id, account_items in items_by_account.items():
                 account = accounts_by_id.get(poster_account_id, primary_account)
@@ -3990,13 +3991,27 @@ def process_supply(draft_id):
                             'total': account_total
                         })
                         logger.info(f"Created supply #{supply_id} in {account['account_name']}: {len(account_items)} items, {account_total} tg")
+                        
+                        # Prepare price history records for this account's items
+                        for item in account_items:
+                            all_price_records.append({
+                                'ingredient_id': item['poster_ingredient_id'],
+                                'ingredient_name': item.get('poster_ingredient_name', item.get('item_name', '')),
+                                'supplier_id': supplier_id,
+                                'supplier_name': supplier_name,
+                                'price': float(item['price_per_unit']),
+                                'quantity': float(item['quantity']),
+                                'unit': 'шт', # fallback
+                                'supply_id': supply_id,
+                                'date': supply_date
+                            })
 
                 finally:
                     await client.close()
 
-            return created_supplies
+            return created_supplies, all_price_records
 
-        created_supplies = run_async(create_supplies_in_poster())
+        created_supplies, all_price_records = run_async(create_supplies_in_poster())
 
         if created_supplies:
             # Mark draft as processed
@@ -4020,6 +4035,10 @@ def process_supply(draft_id):
                 db.mark_drafts_in_poster([draft['linked_expense_draft_id']])
             else:
                 logger.warning(f"⚠️ Supply draft #{draft_id} has no linked_expense_draft_id — sync may create duplicate!")
+
+            # Save price history to database
+            if all_price_records:
+                db.bulk_add_price_history(g.user_id, all_price_records)
 
             # Format response
             supply_ids = [s['supply_id'] for s in created_supplies]
