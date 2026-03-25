@@ -658,6 +658,30 @@ class IngredientMatcher:
             )
 
             for matched_alias, score, _ in alias_matches:
+                text_words = set(text_lower.split())
+                matched_words = set(matched_alias.split())
+                common_tokens = text_words & matched_words
+                
+                # Stricter rejection for aliases 
+                is_suspicious = (
+                    score < 88 and 
+                    len(common_tokens) < 1 and 
+                    len(text_words) > 0 and 
+                    len(matched_words) > 0
+                )
+                
+                is_generic_overlap = (
+                    score >= 80 and 
+                    len(common_tokens) == 1 and 
+                    len(text_words) > 1 and 
+                    len(matched_words) > 1 and
+                    len(list(common_tokens)[0]) < 4
+                )
+
+                if is_suspicious or is_generic_overlap:
+                    logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
+                    continue
+
                 ingredient_id = self.aliases[matched_alias]
                 ingredient = self.ingredients[ingredient_id]
                 all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
@@ -1132,6 +1156,30 @@ class ProductMatcher:
             )
 
             for matched_alias, score, _ in alias_matches:
+                text_words = set(text_lower.split())
+                matched_words = set(matched_alias.split())
+                common_tokens = text_words & matched_words
+                
+                # Stricter rejection for aliases 
+                is_suspicious = (
+                    score < 88 and 
+                    len(common_tokens) < 1 and 
+                    len(text_words) > 0 and 
+                    len(matched_words) > 0
+                )
+                
+                is_generic_overlap = (
+                    score >= 80 and 
+                    len(common_tokens) == 1 and 
+                    len(text_words) > 1 and 
+                    len(matched_words) > 1 and
+                    len(list(common_tokens)[0]) < 4
+                )
+
+                if is_suspicious or is_generic_overlap:
+                    logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
+                    continue
+
                 product_id = self.aliases[matched_alias]
                 product = self.products[product_id]
                 all_matches.append((product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
