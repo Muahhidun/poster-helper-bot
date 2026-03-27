@@ -1,0 +1,16 @@
+{
+  "name": "PizzBurg",
+  "short_name": "PizzBurg",
+  "start_url": "/",
+  "display": "standalone",
+  "scope": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/static/favicon.ico",
+      "sizes": "192x192 256x256 512x512",
+      "type": "image/x-icon"
+    }
+  ]
+}
