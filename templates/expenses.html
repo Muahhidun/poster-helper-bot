@@ -38,7 +38,7 @@
         <!-- Section: Наличка (Cash) -->
         <div class="account-section fade-in-up" data-account-type="cash">
             <div class="section-header-wrapper">
-                <h2 class="section-header">💵 Наличка</h2>
+                <h2 class="section-header" onclick="toggleSection(this)">💵 Наличка</h2>
                 <div class="reconciliation-row" data-source="cash">
                     <label>Факт:</label>
                     <input type="number" class="reconciliation-input" id="cash-fact-input"
@@ -158,7 +158,7 @@
         <!-- Section: Kaspi Pay -->
         <div class="account-section fade-in-up" data-account-type="kaspi">
             <div class="section-header-wrapper">
-                <h2 class="section-header">📱 Kaspi Pay</h2>
+                <h2 class="section-header" onclick="toggleSection(this)">📱 Kaspi Pay</h2>
                 <div class="reconciliation-row" data-source="kaspi">
                     <label>Факт:</label>
                     <input type="number" class="reconciliation-input" id="kaspi-fact-input"
@@ -277,7 +277,7 @@
         <!-- Section: Халык -->
         <div class="account-section fade-in-up" data-account-type="halyk">
             <div class="section-header-wrapper">
-                <h2 class="section-header">🏦 Халык</h2>
+                <h2 class="section-header" onclick="toggleSection(this)">🏦 Халык</h2>
                 <div class="reconciliation-row" data-source="halyk">
                     <label>Факт:</label>
                     <input type="number" class="reconciliation-input" id="halyk-fact-input"
@@ -611,6 +611,29 @@ h1 {
 
 .section-header-wrapper .section-header {
     border-bottom: none;
+    cursor: pointer;
+    position: relative;
+    padding-right: 30px;
+    user-select: none;
+}
+
+.section-header-wrapper .section-header::after {
+    content: '▼';
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+
+.account-section.collapsed .section-header::after {
+    transform: translateY(-50%) rotate(-90deg);
+}
+
+.account-section.collapsed .table {
+    display: none !important;
 }
 
 .reconciliation-row {
@@ -3627,6 +3650,10 @@ function checkChecklistViewParam() {
         // Small delay to ensure page is fully loaded
         setTimeout(openChecklistModal, 100);
     }
+}
+
+function toggleSection(element) {
+    element.closest('.account-section').classList.toggle('collapsed');
 }
 
 document.addEventListener('DOMContentLoaded', checkChecklistViewParam);
