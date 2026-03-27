@@ -64,37 +64,54 @@
             color: #059669;
         }
 
-        /* Hide desktop-only nav items on mobile */
+        /* Mobile responsive bottom navigation */
         @media (max-width: 768px) {
             .nav-desktop-only {
                 display: none;
             }
-        }
-
-        /* Mobile responsive navbar */
-        @media (max-width: 480px) {
             .modern-nav {
-                padding: 0 12px;
-                height: 48px;
+                top: auto;
+                bottom: 0;
+                height: 64px;
+                padding: 0 4px;
+                box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05); /* modern soft shadow */
+                border-bottom: none;
+                border-top: 1px solid #e5e7eb;
+            }
+            .modern-nav .nav-container {
+                justify-content: center;
+                height: 100%;
             }
             .modern-nav .brand {
-                font-size: 16px;
+                display: none; /* Hide brand on mobile */
             }
             .modern-nav .nav-links {
-                gap: 2px;
+                width: 100%;
+                justify-content: space-around;
+                align-items: center;
+                height: 100%;
+            }
+            .modern-nav .nav-links li {
+                height: 100%;
+                display: flex;
+                align-items: center;
+                flex: 1;
             }
             .modern-nav .nav-links a {
-                padding: 6px 10px;
-                font-size: 12px;
-            }
-        }
-        @media (max-width: 375px) {
-            .modern-nav .brand {
-                font-size: 14px;
-            }
-            .modern-nav .nav-links a {
-                padding: 6px 8px;
+                padding: 4px;
                 font-size: 11px;
+                width: 100%;
+                height: 90%;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                text-align: center;
+                border-radius: 10px;
+                white-space: pre-line;
+            }
+            body {
+                padding-bottom: 75px !important;
             }
         }
     </style>
