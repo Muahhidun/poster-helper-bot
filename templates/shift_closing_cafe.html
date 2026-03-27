@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>{{ account_name }} — Закрытие смены</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1158,6 +1160,18 @@ document.addEventListener('DOMContentLoaded', function() {
         checkSalaryStatus();
     }
 });
+</script>
+<script>
+    // Prevent iOS standalone web app from opening links in regular Safari
+    if (("standalone" in window.navigator) && window.navigator.standalone) {
+        document.addEventListener('click', function(e) {
+            var a = e.target.closest('a');
+            if (a && a.href && !a.hasAttribute('download') && a.target !== '_blank' && a.href.indexOf(document.location.host) !== -1) {
+                e.preventDefault();
+                window.location.href = a.href;
+            }
+        }, false);
+    }
 </script>
 </body>
 </html>
