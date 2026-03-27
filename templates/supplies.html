@@ -857,8 +857,7 @@ window.startMapping = window.startMapping || function(itemId, draftId, originalN
         searchInput.placeholder = `🔍 Связать "${originalName}" с...`;
         
         // Auto-fill first part of text
-        const searchStr = originalName.split(',')[0].substring(0, 15).trim();
-        searchInput.value = searchStr;
+        searchInput.value = '';
         searchInput.focus();
         searchInput.dispatchEvent(new Event('input'));
         
