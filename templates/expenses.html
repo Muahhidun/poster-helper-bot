@@ -3325,14 +3325,12 @@ document.getElementById('cash-fact-input')?.addEventListener('input', function()
 
 document.getElementById('kaspi-fact-input')?.addEventListener('input', function() {
     const data = updateSimpleDifference('kaspi');
-    syncChecklistNotes('kaspi', this.value);
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('kaspi', data), 500);
 });
 
 document.getElementById('halyk-fact-input')?.addEventListener('input', function() {
     const data = updateSimpleDifference('halyk');
-    syncChecklistNotes('halyk', this.value);
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('halyk', data), 500);
 });
