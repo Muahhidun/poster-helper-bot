@@ -715,6 +715,12 @@ async function loadDateData(date) {
         const d = await r.json();
         if (d.success && d.closing) {
             const c = d.closing;
+            
+            // Hotfix: if the DB leaked global default 15000 for Cafe due to salaries auto-creation
+            if (c.cash_to_leave === 15000 && (!c.cash_bills && !c.cash_coins && !c.expenses)) {
+                c.cash_to_leave = 10000;
+            }
+
             USER_INPUT_IDS.forEach(id => {
                 if (c[id]) document.getElementById(id).value = c[id];
             });
@@ -728,6 +734,9 @@ async function loadDateData(date) {
         } else {
             const ls = loadFromLS(date);
             if (ls) {
+                if (ls.cash_to_leave == 15000 && (!ls.cash_bills && !ls.cash_coins && !ls.expenses)) {
+                    ls.cash_to_leave = 10000;
+                }
                 USER_INPUT_IDS.forEach(id => {
                     if (ls[id]) document.getElementById(id).value = ls[id];
                 });
@@ -737,6 +746,9 @@ async function loadDateData(date) {
     } catch(e) {
         const ls = loadFromLS(date);
         if (ls) {
+            if (ls.cash_to_leave == 15000 && (!ls.cash_bills && !ls.cash_coins && !ls.expenses)) {
+                ls.cash_to_leave = 10000;
+            }
             USER_INPUT_IDS.forEach(id => {
                 if (ls[id]) document.getElementById(id).value = ls[id];
             });

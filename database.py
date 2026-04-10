@@ -3471,12 +3471,12 @@ class UserDatabase:
                     AND poster_account_id = {placeholder}
                 """, (true_val, salaries_data, telegram_user_id, date, poster_account_id))
             else:
-                # Create a minimal row
+                # Create a minimal row with cafe-specific default for cash_to_leave
                 cursor.execute(f"""
                     INSERT INTO shift_closings (telegram_user_id, date, poster_account_id,
-                        salaries_created, salaries_data, updated_at)
+                        salaries_created, salaries_data, updated_at, cash_to_leave)
                     VALUES ({placeholder}, {placeholder}, {placeholder},
-                        {placeholder}, {placeholder}, CURRENT_TIMESTAMP)
+                        {placeholder}, {placeholder}, CURRENT_TIMESTAMP, 10000)
                 """, (telegram_user_id, date, poster_account_id, true_val, salaries_data))
 
             conn.commit()
