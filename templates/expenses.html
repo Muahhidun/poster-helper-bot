@@ -3294,21 +3294,45 @@ function initReconciliation() {
     const halykData = updateSimpleDifference('halyk');
 }
 
+// Sync fact value to checklist notes
+function syncChecklistNotes(source, value) {
+    const notesEl = document.getElementById(`checklist-${source}-notes`);
+    if (!notesEl) return;
+    
+    const currentVal = notesEl.value.trim();
+    // Only auto-fill if empty or matches our previous auto-fill pattern
+    if (!currentVal || currentVal.startsWith('Оставил - ')) {
+        const parsed = parseFloat(value);
+        if (!isNaN(parsed)) {
+            notesEl.value = `Оставил - ${parsed.toLocaleString('ru-RU')}₸`;
+        } else {
+            notesEl.value = '';
+        }
+        
+        if (typeof saveChecklistData === 'function') {
+            saveChecklistData();
+        }
+    }
+}
+
 // Event listeners for reconciliation inputs
 document.getElementById('cash-fact-input')?.addEventListener('input', function() {
     const data = updateCashDifference();
+    syncChecklistNotes('cash', this.value);
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('cash', data), 500);
 });
 
 document.getElementById('kaspi-fact-input')?.addEventListener('input', function() {
     const data = updateSimpleDifference('kaspi');
+    syncChecklistNotes('kaspi', this.value);
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('kaspi', data), 500);
 });
 
 document.getElementById('halyk-fact-input')?.addEventListener('input', function() {
     const data = updateSimpleDifference('halyk');
+    syncChecklistNotes('halyk', this.value);
     clearTimeout(reconciliationTimeout);
     reconciliationTimeout = setTimeout(() => saveReconciliation('halyk', data), 500);
 });
