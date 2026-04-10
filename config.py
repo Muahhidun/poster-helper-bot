@@ -71,7 +71,7 @@ CURRENCY = os.getenv("CURRENCY", "KZT")
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Almaty")
 
 # Business defaults
-DEFAULT_CASH_TO_LEAVE = int(os.getenv("DEFAULT_CASH_TO_LEAVE", "10000"))
+DEFAULT_CASH_TO_LEAVE = int(os.getenv("DEFAULT_CASH_TO_LEAVE", "15000"))
 MIN_MATCH_CONFIDENCE = int(os.getenv("MIN_MATCH_CONFIDENCE", "75"))
 MAX_INLINE_BUTTONS = int(os.getenv("MAX_INLINE_BUTTONS", "15"))
 
