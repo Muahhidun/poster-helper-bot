@@ -123,7 +123,7 @@ class ShiftClosingCalculateRequest(BaseModel):
     shift_start: float = Field(default=0, ge=0, le=100_000_000)
     expenses: float = Field(default=0, ge=0, le=100_000_000)
     deposits: float = Field(default=0, ge=0, le=100_000_000)
-    cash_to_leave: float = Field(default=15000, ge=0, le=100_000_000)
+    cash_to_leave: float = Field(default=10000, ge=0, le=100_000_000)
     poster_trade: float = Field(default=0, ge=0)
     poster_bonus: float = Field(default=0, ge=0)
     poster_card: float = Field(default=0, ge=0)
