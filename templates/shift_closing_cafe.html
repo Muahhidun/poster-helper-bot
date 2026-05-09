@@ -1036,44 +1036,34 @@ function loadShiftReport() {
     let lines = [
         '📋 {{ account_name }} — Закрытие смены ' + dateDisplay,
         sep,
-        '💳 Безнал терминалы:',
-        '   Wolt: ' + fmtR(wolt) + '₸',
-        '   Kaspi: ' + fmtR(kaspi) + '₸',
+        '   🔹Wolt: ' + fmtR(wolt) + '₸',
+        '   🔹Kaspi: ' + fmtR(kaspi) + '₸',
     ];
     if (kaspi_pizzburg > 0) {
-        lines.push('   Kaspi Pizzburg (курьеры): +' + fmtR(kaspi_pizzburg) + '₸');
+        lines.push('   🔹Kaspi Pizzburg (курьеры): +' + fmtR(kaspi_pizzburg) + '₸');
     }
     lines = lines.concat([
-        subsep,
-        '   Итого безнал: ' + fmtR(fact_cashless) + '₸',
-        '',
-        '💵 Наличные:',
-        '   Бумажные: ' + fmtR(cash_bills) + '₸',
-        '   Мелочь: ' + fmtR(cash_coins) + '₸',
+        '   🔹Бумажные: ' + fmtR(cash_bills) + '₸',
+        '   🔹Мелочь: ' + fmtR(cash_coins) + '₸',
         sep,
-        '📊 Сверка:',
-        '   Фактический: ' + fmtR(fact_total) + '₸',
-        '   Смена начало: ' + fmtR(shift_start) + '₸',
+        '   🔸Фактический: ' + fmtR(fact_total) + '₸',
+        '   🔸Смена начало: ' + fmtR(shift_start) + '₸',
     ]);
-    if (expenses > 0) lines.push('   Расходы: ' + fmtR(expenses) + '₸');
+    if (expenses > 0) lines.push('   🔸Расходы: ' + fmtR(expenses) + '₸');
     lines = lines.concat([
-        subsep,
-        '   Итого факт: ' + fmtR(fact_adjusted) + '₸',
-        '',
-        '   Poster торговля: ' + fmtR(poster_trade) + '₸',
-        '   Poster бонусы: -' + fmtR(poster_bonus) + '₸',
-        subsep,
-        '   Итого Poster: ' + fmtR(poster_total) + '₸',
-        '',
+        '   🔸Итого факт: ' + fmtR(fact_adjusted) + '₸',
+        sep,
+        '   ♦️Poster торговля: ' + fmtR(poster_trade) + '₸',
+        '   ♦️Poster бонусы: -' + fmtR(poster_bonus) + '₸',
+        '   ♦️Итого Poster: ' + fmtR(poster_total) + '₸',
         sep,
         dayEmoji + ' ИТОГО ДЕНЬ: ' + daySign + fmtR(day_result) + '₸ (' + dayLabel + ')',
         sep,
-        '',
         '💰 Инкассация: ' + fmtR(collection) + '₸',
         '🔄 Смена оставили: ' + fmtR(shift_left) + '₸',
     ]);
     if (Math.abs(cashless_diff) >= 1) {
-        lines.push('');
+        lines.push(sep);
         lines.push('ℹ️ Разница безнал: ' + (cashless_diff > 0 ? '+' : '') + fmtR(cashless_diff) + '₸ (учтено в инкассации)');
     }
 
