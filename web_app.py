@@ -4946,10 +4946,18 @@ def api_cafe_poster_data():
                         logger.debug(f"[CAFE SHIFT] getProductsSales error: {e}")
                         return None
 
-                result, cash_shifts, products_result = await asyncio.gather(
+                async def _fetch_categories():
+                    try:
+                        return await client._request('GET', 'menu.getCategories')
+                    except Exception as e:
+                        logger.debug(f"[CAFE SHIFT] getCategories error: {e}")
+                        return None
+
+                result, cash_shifts, products_result, categories_result = await asyncio.gather(
                     _fetch_sales(), 
                     _fetch_cash_shifts(),
-                    _fetch_product_sales()
+                    _fetch_product_sales(),
+                    _fetch_categories()
                 )
 
                 # Process sales data
@@ -4984,11 +4992,20 @@ def api_cafe_poster_data():
 
                 # Process WeDrink sales
                 wedrink_sales = 0
+                wedrink_category_ids = set()
+                
+                # Find WeDrink category IDs
+                if categories_result and categories_result.get('response'):
+                    for c in categories_result['response']:
+                        if 'wedrink' in str(c.get('category_name', '')).lower():
+                            wedrink_category_ids.add(str(c.get('category_id')))
+                
                 if products_result and products_result.get('response'):
                     for p in products_result['response']:
-                        if 'wedrink' in p.get('category_name', '').lower():
-                            # payed_sum is usually a string representing kopecks, or 'sum' depending on exact API version
-                            # but getProductsSales returns payed_sum
+                        # getProductsSales returns category_id
+                        cat_id = str(p.get('category_id'))
+                        cat_name = str(p.get('category_name', '')).lower()
+                        if cat_id in wedrink_category_ids or 'wedrink' in cat_name:
                             val = float(p.get('payed_sum', p.get('sum', 0)))
                             wedrink_sales += val
                             
