@@ -4935,8 +4935,22 @@ def api_cafe_poster_data():
                     except Exception as e:
                         logger.debug(f"[CAFE SHIFT] getCashShifts error: {e}")
                         return None
+                        
+                async def _fetch_product_sales():
+                    try:
+                        return await client._request('GET', 'dash.getProductsSales', params={
+                            'dateFrom': date_param,
+                            'dateTo': date_param
+                        })
+                    except Exception as e:
+                        logger.debug(f"[CAFE SHIFT] getProductsSales error: {e}")
+                        return None
 
-                result, cash_shifts = await asyncio.gather(_fetch_sales(), _fetch_cash_shifts())
+                result, cash_shifts, products_result = await asyncio.gather(
+                    _fetch_sales(), 
+                    _fetch_cash_shifts(),
+                    _fetch_product_sales()
+                )
 
                 # Process sales data
                 transactions = result.get('response', [])
@@ -4968,6 +4982,16 @@ def api_cafe_poster_data():
                     if amount_end > 0:
                         poster_prev_shift_left = amount_end
 
+                # Process WeDrink sales
+                wedrink_sales = 0
+                if products_result and products_result.get('response'):
+                    for p in products_result['response']:
+                        if 'wedrink' in p.get('category_name', '').lower():
+                            # payed_sum is usually a string representing kopecks, or 'sum' depending on exact API version
+                            # but getProductsSales returns payed_sum
+                            val = float(p.get('payed_sum', p.get('sum', 0)))
+                            wedrink_sales += val
+                            
                 return {
                     'success': True,
                     'date': date_param,
@@ -4978,6 +5002,7 @@ def api_cafe_poster_data():
                     'poster_card': total_card,
                     'poster_cash': total_cash,
                     'poster_prev_shift_left': poster_prev_shift_left,
+                    'wedrink_sales': wedrink_sales,
                 }
             finally:
                 await client.close()

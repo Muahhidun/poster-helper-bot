@@ -353,6 +353,9 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
             <span>Инкассация</span>
             <span id="collection_value">0</span>
         </div>
+        <div class="sc-wedrink-debt" id="wedrink_debt_block" style="display:none; margin-top: 10px; background: #fff3cd; color: #856404; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; text-align: center; border: 1px solid #ffeeba;">
+            ⚠️ Из инкассации отдать WeDrink: <span id="wedrink_debt_value">0</span> ₸
+        </div>
     </div>
 
     <div class="sc-actions">
@@ -910,6 +913,13 @@ function showCalc(c) {
 
     document.getElementById('collection_block').style.display = 'flex';
     document.getElementById('collection_value').textContent = fmt(c.collection);
+
+    if (posterData && posterData.wedrink_sales > 0) {
+        document.getElementById('wedrink_debt_block').style.display = 'block';
+        document.getElementById('wedrink_debt_value').textContent = fmt(posterData.wedrink_sales / 100);
+    } else {
+        document.getElementById('wedrink_debt_block').style.display = 'none';
+    }
 }
 
 function scheduleSave(calc) {
@@ -1062,6 +1072,10 @@ function loadShiftReport() {
         '💰 Инкассация: ' + fmtR(collection) + '₸',
         '🔄 Смена оставили: ' + fmtR(shift_left) + '₸',
     ]);
+    if (posterData && posterData.wedrink_sales > 0) {
+        lines.push(sep);
+        lines.push('⚠️ Из них отдать WeDrink: ' + fmtR(posterData.wedrink_sales / 100) + '₸');
+    }
     if (Math.abs(cashless_diff) >= 1) {
         lines.push(sep);
         lines.push('ℹ️ Разница безнал: ' + (cashless_diff > 0 ? '+' : '') + fmtR(cashless_diff) + '₸ (учтено в инкассации)');
