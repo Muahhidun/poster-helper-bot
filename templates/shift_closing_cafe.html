@@ -914,7 +914,7 @@ function showCalc(c) {
     document.getElementById('collection_block').style.display = 'flex';
     document.getElementById('collection_value').textContent = fmt(c.collection);
 
-    if (posterData && posterData.wedrink_sales > 0) {
+    if (posterData && posterData.wedrink_sales !== undefined) {
         document.getElementById('wedrink_debt_block').style.display = 'block';
         document.getElementById('wedrink_debt_value').textContent = fmt(posterData.wedrink_sales / 100);
     } else {
@@ -1072,7 +1072,7 @@ function loadShiftReport() {
         '💰 Инкассация: ' + fmtR(collection) + '₸',
         '🔄 Смена оставили: ' + fmtR(shift_left) + '₸',
     ]);
-    if (posterData && posterData.wedrink_sales > 0) {
+    if (posterData && posterData.wedrink_sales !== undefined) {
         lines.push(sep);
         lines.push('⚠️ Из них отдать WeDrink: ' + fmtR(posterData.wedrink_sales / 100) + '₸');
     }
