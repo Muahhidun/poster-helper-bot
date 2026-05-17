@@ -7,6 +7,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="PizzBurg">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <!-- Apple Touch Icon -->
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
     <title>{% block title %}Poster Helper{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -213,6 +215,30 @@
                 }
             }
         }, false);
+    }
+    // Pull to refresh logic for PWA
+    let touchstartY = 0;
+    let touchendY = 0;
+    let isAtTop = false;
+
+    document.addEventListener('touchstart', e => {
+        touchstartY = e.changedTouches[0].screenY;
+        isAtTop = window.scrollY === 0;
+    }, {passive: true});
+
+    document.addEventListener('touchend', e => {
+        touchendY = e.changedTouches[0].screenY;
+        handleSwipe();
+    }, {passive: true});
+
+    function handleSwipe() {
+        if (isAtTop && (touchendY - touchstartY) > 150) {
+            // Pulled down significantly while at the top
+            showToast("Обновление данных...", "info", 1000);
+            setTimeout(() => {
+                window.location.reload();
+            }, 500);
+        }
     }
 </script>
 </body>
