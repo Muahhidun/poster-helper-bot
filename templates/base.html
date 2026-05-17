@@ -209,7 +209,7 @@
     {% block scripts %}{% endblock %}
     {% block extra_scripts %}{% endblock %}
 
-    <!-- PWA Service Worker Registration -->
+    <!-- PWA Service Worker Registration & Pull-to-refresh -->
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
@@ -218,6 +218,35 @@
             .catch(err => console.log('ServiceWorker registration failed: ', err));
         });
       }
+
+      // Custom pull-to-refresh for PWA (especially iOS standalone)
+      let touchStartY = 0;
+      let isRefreshing = false;
+      const refreshThreshold = 150;
+
+      document.addEventListener('touchstart', (e) => {
+          if (window.scrollY === 0) {
+              touchStartY = e.touches[0].clientY;
+          } else {
+              touchStartY = 0;
+          }
+      }, { passive: true });
+
+      document.addEventListener('touchmove', (e) => {
+          if (touchStartY === 0 || isRefreshing) return;
+          const touchY = e.touches[0].clientY;
+          const distance = touchY - touchStartY;
+
+          // Only trigger if pulling down
+          if (distance > refreshThreshold && window.scrollY === 0) {
+              isRefreshing = true;
+              document.body.style.transition = 'opacity 0.2s';
+              document.body.style.opacity = '0.5';
+              setTimeout(() => {
+                  window.location.reload();
+              }, 100);
+          }
+      }, { passive: true });
     </script>
 <script>
     // Prevent iOS standalone web app from opening links in regular Safari
