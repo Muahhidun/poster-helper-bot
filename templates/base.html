@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="PizzBurg">
+    <meta name="apple-mobile-web-app-title" content="WeDrink">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
     <!-- Apple Touch Icon -->
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
@@ -125,7 +125,10 @@
 <body style="background: #f9fafb;">
     <nav class="modern-nav">
         <div class="nav-container">
-            <a href="/" class="brand">🍕 PizzBurg</a>
+            <a href="/" class="brand">
+                <img src="{{ url_for('static', filename='icon-192.png') }}" style="height: 24px; width: 24px;" alt="WeDrink Logo">
+                WeDrink
+            </a>
             <ul class="nav-links">
                 <li>
                     <a href="{{ url_for('list_expenses') }}" {% if request.endpoint == 'list_expenses' %}class="active"{% endif %}>Расходы</a>

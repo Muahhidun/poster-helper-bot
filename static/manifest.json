@@ -1,6 +1,6 @@
 {
-  "name": "PizzBurg",
-  "short_name": "PizzBurg",
+  "name": "WeDrink",
+  "short_name": "WeDrink",
   "start_url": "/",
   "display": "standalone",
   "scope": "/",
