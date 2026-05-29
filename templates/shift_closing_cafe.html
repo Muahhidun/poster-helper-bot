@@ -1122,11 +1122,17 @@ async function copyReportAndTransfer() {
     if (!transfersCreated && !isReadonly) {
         btn.textContent = 'Создаю переводы...';
         btn.disabled = true;
+        
+        const reqBody = {
+            date: currentDate,
+            wedrink_sales: posterData && posterData.wedrink_sales ? posterData.wedrink_sales / 100 : 0
+        };
+        
         try {
             const res = await fetch(API_BASE + '/transfers', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({date: currentDate})
+                body: JSON.stringify(reqBody)
             });
             const data = await res.json();
             if (data.success) {

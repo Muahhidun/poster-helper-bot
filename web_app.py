@@ -5639,6 +5639,33 @@ def api_cafe_transfers():
             )
             results = []
             try:
+                wedrink_sales = float(data.get('wedrink_sales', 0))
+                # If there are WeDrink sales, dynamically find category ID and add expense to tasks
+                if wedrink_sales > 0:
+                    categories = await client.get_categories()
+                    expense_cat_id = None
+                    for c in categories:
+                        if 'единовременный расход' in c.get('category_name', '').lower():
+                            expense_cat_id = c.get('category_id')
+                            break
+                    
+                    if expense_cat_id:
+                        dt = datetime.strptime(date, '%Y-%m-%d')
+                        tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
+                        tx_id = await client.create_transaction(
+                            transaction_type=0, # Expense
+                            category_id=expense_cat_id,
+                            account_from_id=CAFE_ACCOUNTS['cash_left'],
+                            amount=int(round(wedrink_sales)),
+                            comment="WeDrink",
+                            date=tx_date
+                        )
+                        if tx_id:
+                            results.append(tx_id)
+                            logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸")
+                    else:
+                        logger.error("[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense")
+
                 # Format date for Poster API
                 dt = datetime.strptime(date, '%Y-%m-%d')
                 tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
