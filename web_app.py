@@ -5642,7 +5642,7 @@ def api_cafe_transfers():
                 wedrink_sales = float(data.get('wedrink_sales', 0))
                 # If there are WeDrink sales, dynamically find category ID and add expense to tasks
                 if wedrink_sales > 0:
-                    categories = await client.get_categories()
+                    categories = await client.get_expense_categories()
                     expense_cat_id = None
                     for c in categories:
                         cat_name = c.get('category_name', '').lower()

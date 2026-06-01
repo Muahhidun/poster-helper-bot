@@ -139,8 +139,13 @@ class PosterClient:
         return result.get('response', [])
 
     async def get_categories(self) -> List[Dict]:
-        """Get list of finance categories"""
+        """Get list of finance categories (income)"""
         result = await self._request('GET', 'finance.getCategories')
+        return result.get('response', [])
+
+    async def get_expense_categories(self) -> List[Dict]:
+        """Get list of finance expense categories"""
+        result = await self._request('GET', 'finance.getExpenseCategories')
         return result.get('response', [])
 
     async def get_transactions(self, date_from: str, date_to: str) -> List[Dict]:
