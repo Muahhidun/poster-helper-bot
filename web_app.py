@@ -5645,7 +5645,8 @@ def api_cafe_transfers():
                     categories = await client.get_categories()
                     expense_cat_id = None
                     for c in categories:
-                        if 'единовременный расход' in c.get('category_name', '').lower():
+                        cat_name = c.get('category_name', '').lower()
+                        if 'единовремен' in cat_name or 'разовый' in cat_name:
                             expense_cat_id = c.get('category_id')
                             break
                     
@@ -5662,9 +5663,10 @@ def api_cafe_transfers():
                         )
                         if tx_id:
                             results.append(tx_id)
-                            logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸")
+                            logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
                     else:
-                        logger.error("[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense")
+                        cat_names = [c.get('category_name') for c in categories]
+                        logger.error(f"[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense. Available categories: {cat_names}")
 
                 # Format date for Poster API
                 dt = datetime.strptime(date, '%Y-%m-%d')
