@@ -5642,31 +5642,41 @@ def api_cafe_transfers():
                 wedrink_sales = float(data.get('wedrink_sales', 0))
                 # If there are WeDrink sales, dynamically find category ID and add expense to tasks
                 if wedrink_sales > 0:
-                    categories = await client.get_expense_categories()
-                    expense_cat_id = None
-                    for c in categories:
-                        cat_name = c.get('category_name', '').lower()
-                        if 'единовремен' in cat_name or 'разовый' in cat_name:
-                            expense_cat_id = c.get('category_id')
-                            break
-                    
-                    if expense_cat_id:
-                        dt = datetime.strptime(date, '%Y-%m-%d')
-                        tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
-                        tx_id = await client.create_transaction(
-                            transaction_type=0, # Expense
-                            category_id=expense_cat_id,
-                            account_from_id=CAFE_ACCOUNTS['cash_left'],
-                            amount=int(round(wedrink_sales)),
-                            comment="WeDrink",
-                            date=tx_date
-                        )
-                        if tx_id:
-                            results.append(tx_id)
-                            logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
-                    else:
-                        cat_names = [c.get('category_name') for c in categories]
-                        logger.error(f"[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense. Available categories: {cat_names}")
+                    try:
+                        # Poster API actually doesn't have finance.getExpenseCategories, use get_categories
+                        # We try both just in case, but gracefully fallback
+                        try:
+                            categories = await client.get_expense_categories()
+                        except Exception:
+                            categories = await client.get_categories()
+                            
+                        expense_cat_id = None
+                        for c in categories:
+                            cat_name = c.get('category_name', '').lower()
+                            if 'единовремен' in cat_name or 'разовый' in cat_name:
+                                expense_cat_id = c.get('category_id')
+                                break
+                        
+                        if expense_cat_id:
+                            dt = datetime.strptime(date, '%Y-%m-%d')
+                            tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
+                            tx_id = await client.create_transaction(
+                                transaction_type=0, # Expense
+                                category_id=expense_cat_id,
+                                account_from_id=CAFE_ACCOUNTS['cash_left'],
+                                amount=int(round(wedrink_sales)),
+                                comment="WeDrink",
+                                date=tx_date
+                            )
+                            if tx_id:
+                                # MUST append a dict to avoid JS TypeError on frontend
+                                results.append({'name': 'Расход WeDrink', 'amount': int(round(wedrink_sales)), 'tx_id': tx_id})
+                                logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
+                        else:
+                            cat_names = [c.get('category_name') for c in categories]
+                            logger.error(f"[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense. Available categories: {cat_names}")
+                    except Exception as e:
+                        logger.error(f"[CAFE TRANSFER] Failed to process WeDrink expense: {e}")
 
                 # Format date for Poster API
                 dt = datetime.strptime(date, '%Y-%m-%d')
