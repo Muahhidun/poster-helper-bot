@@ -5718,6 +5718,57 @@ def api_cafe_transfers():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/cafe/debug/wedrink')
+def api_cafe_debug_wedrink():
+    """Debug endpoint for WeDrink expense"""
+    info = resolve_cafe_info()
+    
+    from poster_client import PosterClient
+    import asyncio
+    
+    async def run_debug():
+        client = PosterClient(
+            telegram_user_id=info['telegram_user_id'],
+            poster_token=info['poster_token'],
+            poster_user_id=info['poster_user_id'],
+            poster_base_url=info['poster_base_url']
+        )
+        debug_info = {}
+        try:
+            try:
+                categories = await client.get_expense_categories()
+                debug_info['method'] = 'get_expense_categories'
+            except Exception as e:
+                categories = await client.get_categories()
+                debug_info['method'] = f'get_categories (fallback after {str(e)})'
+                
+            debug_info['categories_count'] = len(categories)
+            debug_info['all_categories'] = [
+                {'id': c.get('category_id'), 'name': c.get('category_name')}
+                for c in categories
+            ]
+            
+            expense_cat_id = None
+            for c in categories:
+                cat_name = c.get('category_name', '').lower()
+                if 'единовремен' in cat_name or 'разовый' in cat_name:
+                    expense_cat_id = c.get('category_id')
+                    debug_info['matched_category'] = {'id': expense_cat_id, 'name': c.get('category_name')}
+                    break
+                    
+            if not expense_cat_id:
+                debug_info['error'] = 'Category not found in the list above.'
+                
+        except Exception as e:
+            debug_info['error'] = str(e)
+        finally:
+            await client.close()
+            
+        return debug_info
+
+    from database import run_async
+    return jsonify(run_async(run_debug()))
+
 
 # ==================== Main Dept Transfers ====================
 
