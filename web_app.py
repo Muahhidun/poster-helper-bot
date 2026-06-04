@@ -2596,13 +2596,20 @@ def api_import_batch():
             if 'фарш' in desc_lower:
                 qty = draft['amount'] / 4600.0
                 invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+                
+                # Resolve fuzzy supplier name
+                res_supplier_name, res_supplier_id = resolve_supplier_name_and_id(user_id, "Фарш")
+                if not res_supplier_id:
+                    res_supplier_name = "Фарш (Поставщик фарша)"
+                    
                 supply_draft_id = db.create_empty_supply_draft(
                     telegram_user_id=user_id,
-                    supplier_name="Фарш (Поставщик фарша)",
+                    supplier_name=res_supplier_name,
                     invoice_date=invoice_date,
                     total_sum=draft['amount'],
                     linked_expense_draft_id=draft['id'],
-                    source=draft['source']
+                    source=draft['source'],
+                    supplier_id=res_supplier_id
                 )
                 if supply_draft_id:
                     from matchers import get_ingredient_matcher

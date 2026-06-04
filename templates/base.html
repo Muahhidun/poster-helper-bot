@@ -149,6 +149,9 @@
                 <li class="nav-desktop-only">
                     <a href="{{ url_for('daily_transactions_page') }}" {% if request.endpoint == 'daily_transactions_page' %}class="active"{% endif %}>Авто</a>
                 </li>
+                <li class="nav-desktop-only">
+                    <a href="{{ url_for('list_aliases') }}" {% if request.endpoint == 'list_aliases' %}class="active"{% endif %}>Алиасы</a>
+                </li>
             </ul>
         </div>
     </nav>
