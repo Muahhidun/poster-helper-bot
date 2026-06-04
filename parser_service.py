@@ -5,7 +5,8 @@ import base64
 from typing import Dict, Optional, List
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
-from config import ANTHROPIC_API_KEY, OPENAI_API_KEY
+import aiohttp
+from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +346,74 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
 ВАЖНО: отвечай ТОЛЬКО валидным JSON, без дополнительного текста!"""
 
 
+UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный помощник по автоматизации бухгалтерии сети ресторанов PizzBurg.
+Перед тобой изображение документа: это может быть рукописный лист кассира (список различных расходов), скриншот перевода, или печатная накладная от поставщика (перечень закупаемых продуктов).
+
+Твоя задача — проанализировать изображение, классифицировать тип документа и извлечь все данные в структурированный JSON.
+
+ШАГ 1. Определи тип документа ("document_type"):
+1. "cashier_sheet" — если это список расходов кассира за смену (рукописный лист с разными тратами: зарплаты курьерам/поварам/кассирам, такси, хозтовары, разовые мелкие закупы продуктов).
+2. "printed_invoice" — если это накладная на поставку (печатная таблица или рукописный список от одного поставщика), содержащая перечень товаров от одного конкретного контрагента (например: ТОО Метро, Кюрдамир, ТОО Алель, фарш и т.д.).
+
+ШАГ 2. Выполни извлечение данных в зависимости от типа:
+
+А. Если это "cashier_sheet":
+Извлеки все строки расходов в массив "expenses". Для каждого расхода заполни:
+- amount: сумма в тенге (число)
+- description: оригинальное описание расхода (имя сотрудника или суть покупки)
+- type: тип расхода ("transaction" для зарплат, такси, хозтоваров, аренды; "supply" для покупки продуктов питания, например: фарш, сыр, помидоры, мясо)
+- category: примерная категория ("Зарплаты", "Хозтовары", "Транспорт", "Прочее")
+- items: если в строке с расходом прямо указаны детали (например, "Фарш 12кг по 2800" или "сыр 5кг х 2600" или "молоко 10л х 450"), выдели их в массив:
+  [{"name": "<название>", "qty": <кол-во>, "price": <цена за единицу>}]
+
+Б. Если это "printed_invoice":
+Извлеки данные накладной в объект "invoice":
+- supplier: название поставщика (ТОО, ИП или бренд, например: Метро, Алель, Кюрдамир)
+- total_sum: общая сумма накладной (число, если есть)
+- items: массив всех позиций товаров:
+  - name: полное наименование товара
+  - qty: количество (число)
+  - price: цена за единицу (число)
+  *ВАЖНО:* Пересчитывай фасовки! Если в названии указан вес упаковки (например "Фри 2.5кг"), а в количестве штуки (например 2 шт) по цене 4000 за шт, пересчитай в базовые единицы: qty=5.0, price=1600.0.
+
+ФОРМАТ JSON ОТВЕТА:
+{
+  "document_type": "cashier_sheet" | "printed_invoice",
+  
+  // Заполняется только для document_type = "cashier_sheet"
+  "expenses": [
+    {
+      "amount": 12000,
+      "description": "Мадина кассир",
+      "type": "transaction",
+      "category": "Зарплаты"
+    },
+    {
+      "amount": 46000,
+      "description": "Фарш 10 кг",
+      "type": "supply",
+      "category": "Прочее",
+      "items": [{"name": "Фарш", "qty": 10.0, "price": 4600.0}]
+    }
+  ],
+  
+  // Заполняется только для document_type = "printed_invoice"
+  "invoice": {
+    "supplier": "Название поставщика",
+    "total_sum": 25400,
+    "items": [
+      {"name": "Фри дольки", "qty": 10.0, "price": 1200.0},
+      {"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0}
+    ]
+  }
+}
+
+ВАЖНО:
+- Распознавай ВСЕ строки, даже нечеткие.
+- Возвращай исключительно валидный JSON без постороннего текста и без markdown разметки.
+"""
+
+
 class ParserService:
     """Service for parsing text using Claude API and OpenAI Vision"""
 
@@ -538,18 +607,61 @@ class ParserService:
             Parsed supply dict or None if parsing failed
         """
         try:
-            logger.info(f"Parsing invoice from image using Claude 3.5 Sonnet Vision API")
-
             # Encode to base64
             file_base64 = base64.standard_b64encode(file_data).decode("utf-8")
+            
+            if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+                media_type = "image/jpeg" # Fallback
+                
+            # 0. Try Gemini first if API key is set
+            if GEMINI_API_KEY:
+                try:
+                    logger.info(f"Attempting OCR with Gemini: {GEMINI_MODEL}")
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+                    headers = {"Content-Type": "application/json"}
+                    
+                    payload = {
+                        "contents": [
+                            {
+                                "parts": [
+                                    {
+                                        "text": INVOICE_PARSER_PROMPT
+                                    },
+                                    {
+                                        "inlineData": {
+                                            "mimeType": media_type,
+                                            "data": file_base64
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        "generationConfig": {
+                            "responseMimeType": "application/json"
+                        }
+                    }
+                    
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(url, json=payload, headers=headers) as resp:
+                            if resp.status == 200:
+                                result = await resp.json()
+                                response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                                json_text = self._extract_json(response_text)
+                                parsed = json.loads(json_text)
+                                logger.info(f"✅ Invoice parsed successfully with Gemini. Items: {len(parsed.get('items', []))}")
+                                return parsed
+                            else:
+                                error_text = await resp.text()
+                                logger.warning(f"Gemini API returned error status {resp.status}: {error_text}")
+                except Exception as e:
+                    logger.warning(f"Gemini OCR attempt failed: {e}. Falling back to Claude...")
+
+            logger.info(f"Parsing invoice from image using Claude 3.5 Sonnet Vision API")
             
             # Claude expects image/jpeg, image/png, image/gif, or image/webp
             if media_type == "application/pdf":
                 logger.error("Claude 3.5 Sonnet API currently does not support direct PDF parsing in this implementation format. Convert to image first.")
                 return None
-                
-            if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
-                media_type = "image/jpeg" # Fallback
 
             # Using fresh client for thread-safety in Flask (run_async creates a new event loop)
             from anthropic import AsyncAnthropic, NotFoundError as AnthropicNotFoundError
@@ -677,6 +789,231 @@ class ParserService:
         except Exception as e:
             logger.error(f"Claude Vision invoice parsing failed: {e}")
             raise Exception(f"Claude API Error: {str(e)}")
+
+    async def parse_batch_image(self, file_data: bytes, media_type: str = "image/jpeg") -> Optional[Dict]:
+        """
+        Parse image using Gemini API (or fall back to OpenAI Vision API if GEMINI_API_KEY is not set)
+        to classify it (cashier_sheet or printed_invoice) and extract structured expenses / supply items.
+        """
+        file_base64 = base64.standard_b64encode(file_data).decode("utf-8")
+        if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+            media_type = "image/jpeg"
+
+        if GEMINI_API_KEY:
+            try:
+                logger.info(f"Parsing batch image with Gemini {GEMINI_MODEL}...")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+                headers = {"Content-Type": "application/json"}
+                
+                payload = {
+                    "contents": [
+                        {
+                            "parts": [
+                                {
+                                    "text": UNIFIED_BATCH_PARSER_PROMPT
+                                },
+                                {
+                                    "inlineData": {
+                                        "mimeType": media_type,
+                                        "data": file_base64
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "responseMimeType": "application/json"
+                    }
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, headers=headers) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                            json_text = self._extract_json(response_text)
+                            parsed = json.loads(json_text)
+                            logger.info(f"✅ Batch image parsed successfully with Gemini. Type: {parsed.get('document_type')}")
+                            return parsed
+                        else:
+                            error_text = await resp.text()
+                            logger.error(f"Gemini API error (status {resp.status}): {error_text}")
+                            raise Exception(f"Gemini API error: {error_text}")
+            except Exception as e:
+                logger.error(f"Gemini batch image parsing failed: {e}. Falling back to OpenAI...")
+
+        try:
+            logger.info("Parsing batch image with GPT-4o-mini Vision...")
+            data_uri = f"data:{media_type};base64,{file_base64}"
+            
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=4096,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": UNIFIED_BATCH_PARSER_PROMPT
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": data_uri
+                                }
+                            }
+                        ]
+                    }
+                ],
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            json_text = self._extract_json(response_text)
+            parsed = json.loads(json_text)
+            logger.info(f"✅ Batch image parsed successfully with OpenAI. Type: {parsed.get('document_type')}")
+            return parsed
+            
+        except Exception as e:
+            logger.error(f"Failed to parse batch image: {e}")
+            raise Exception(f"Vision parsing error: {str(e)}")
+
+    async def parse_batch_text(self, text: str) -> Optional[Dict]:
+        """
+        Parse text using Gemini API (or fall back to OpenAI if GEMINI_API_KEY is not set)
+        to classify it (cashier_sheet or printed_invoice) and extract structured expenses / supply items.
+        """
+        prompt = f"""Ты — интеллектуальный помощник по автоматизации бухгалтерии сети ресторанов PizzBurg.
+Перед тобой текстовые данные: это может быть список расходов кассира за смену (рукописный лист с разными тратами: зарплаты курьерам/поварам/кассирам, такси, хозтовары, разовые мелкие закупы продуктов), скопированный текст выписки банка (например Kaspi) или печатная накладная от поставщика.
+
+Твоя задача — проанализировать текст, классифицировать тип документа и извлечь все данные в структурированный JSON.
+
+ШАГ 1. Определи тип документа ("document_type"):
+1. "cashier_sheet" — если это список расходов кассира за смену (различные трат: зарплаты, такси, мелкие закупки продуктов).
+2. "printed_invoice" — если это перечень товаров от одного конкретного контрагента/поставщика.
+
+ШАГ 2. Выполни извлечение данных в зависимости от типа:
+
+А. Если это "cashier_sheet":
+Извлеки все строки расходов в массив "expenses". Для каждого расхода заполни:
+- amount: сумма в тенге (число)
+- description: оригинальное описание расхода (имя сотрудника или суть покупки)
+- type: тип расхода ("transaction" для зарплат, такси, хозтоваров, аренды; "supply" для покупки продуктов питания, например: фарш, сыр, помидоры, мясо)
+- category: примерная категория ("Зарплаты", "Хозтовары", "Транспорт", "Прочее")
+- items: если в строке с расходом прямо указаны детали (например, "Фарш 12кг по 2800" или "сыр 5кг х 2600" или "молоко 10л х 450"), выдели их в массив:
+  [{"name": "<название>", "qty": <кол-во>, "price": <цена за единицу>}]
+
+Б. Если это "printed_invoice":
+Извлеки данные накладной в объект "invoice":
+- supplier: название поставщика (ТОО, ИП или бренд, например: Метро, Алель, Кюрдамир)
+- total_sum: общая сумма накладной (число, если есть)
+- items: массив всех позиций товаров:
+  - name: полное наименование товара
+  - qty: количество (число)
+  - price: цена за единицу (число)
+
+ФОРМАТ JSON ОТВЕТА:
+{{
+  "document_type": "cashier_sheet" | "printed_invoice",
+  
+  // Заполняется только для document_type = "cashier_sheet"
+  "expenses": [
+    {{
+      "amount": 12000,
+      "description": "Мадина кассир",
+      "type": "transaction",
+      "category": "Зарплаты"
+    }},
+    {{
+      "amount": 46000,
+      "description": "Фарш 10 кг",
+      "type": "supply",
+      "category": "Прочее",
+      "items": [{{"name": "Фарш", "qty": 10.0, "price": 4600.0}}]
+    }}
+  ],
+  
+  // Заполняется только для document_type = "printed_invoice"
+  "invoice": {{
+    "supplier": "Название поставщика",
+    "total_sum": 25400,
+    "items": [
+      {{"name": "Фри дольки", "qty": 10.0, "price": 1200.0}},
+      {{"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0}}
+    ]
+  }}
+}}
+
+ВАЖНО:
+- Распознавай ВСЕ строки.
+- Возвращай исключительно валидный JSON без постороннего текста и без markdown разметки.
+
+ВХОДНЫЕ ТЕКСТОВЫЕ ДАННЫЕ:
+{text}
+"""
+        if GEMINI_API_KEY:
+            try:
+                logger.info(f"Parsing batch text with Gemini {GEMINI_MODEL}...")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+                headers = {"Content-Type": "application/json"}
+                
+                payload = {
+                    "contents": [
+                        {
+                            "parts": [
+                                {
+                                    "text": prompt
+                                }
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "responseMimeType": "application/json"
+                    }
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload, headers=headers) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                            json_text = self._extract_json(response_text)
+                            parsed = json.loads(json_text)
+                            logger.info(f"✅ Batch text parsed successfully with Gemini. Type: {parsed.get('document_type')}")
+                            return parsed
+                        else:
+                            error_text = await resp.text()
+                            logger.error(f"Gemini API error (status {resp.status}): {error_text}")
+                            raise Exception(f"Gemini API error: {error_text}")
+            except Exception as e:
+                logger.error(f"Gemini batch text parsing failed: {e}. Falling back to OpenAI...")
+
+        try:
+            logger.info("Parsing batch text with GPT-4o-mini...")
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=4096,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            json_text = self._extract_json(response_text)
+            parsed = json.loads(json_text)
+            logger.info(f"✅ Batch text parsed successfully with OpenAI. Type: {parsed.get('document_type')}")
+            return parsed
+            
+        except Exception as e:
+            logger.error(f"Failed to parse batch text: {e}")
+            raise Exception(f"Text parsing error: {str(e)}")
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from Claude response text"""

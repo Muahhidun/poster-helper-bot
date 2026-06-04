@@ -2196,6 +2196,401 @@ def api_create_expense(validated=None):
     return jsonify({'success': True, 'id': draft_id})
 
 
+def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expense_draft_id, source):
+    from datetime import datetime
+    from matchers import get_ingredient_matcher, get_product_matcher
+    
+    supplier_name = invoice.get('supplier') or 'Неизвестный поставщик'
+    total_sum = invoice.get('total_sum') or 0.0
+    invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+    
+    supply_draft_id = db.create_empty_supply_draft(
+        telegram_user_id=user_id,
+        supplier_name=supplier_name,
+        invoice_date=invoice_date,
+        total_sum=total_sum,
+        linked_expense_draft_id=linked_expense_draft_id,
+        source=source
+    )
+    
+    if not supply_draft_id:
+        return None
+        
+    ing_matcher = get_ingredient_matcher(user_id)
+    prod_matcher = get_product_matcher(user_id)
+    accounts = db.get_accounts(user_id)
+    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
+    
+    for item in invoice.get('items', []):
+        name = item.get('name', 'Товар')
+        qty = float(item.get('qty') or 1)
+        price = float(item.get('price') or 0)
+        
+        item_id = None
+        item_type = 'ingredient'
+        matched_name = None
+        account_name = None
+        account_id = None
+        
+        match_result = ing_matcher.match(name)
+        if match_result:
+            item_id, matched_name, _, _, account_name = match_result
+            item_type = 'ingredient'
+        else:
+            prod_match_result = prod_matcher.match(name)
+            if prod_match_result:
+                item_id, matched_name, _, _, account_name = prod_match_result
+                item_type = 'product'
+                
+        if account_name:
+            account_id = account_name_to_id.get(account_name)
+            
+        db.add_supply_draft_item(
+            supply_draft_id=supply_draft_id,
+            item_name=name,
+            quantity=qty,
+            price_per_unit=price,
+            poster_ingredient_id=item_id,
+            poster_ingredient_name=matched_name,
+            poster_account_id=account_id,
+            poster_account_name=account_name,
+            item_type=item_type
+        )
+        
+    return supply_draft_id
+
+
+@app.route('/api/expenses/import-batch', methods=['POST'])
+def api_import_batch():
+    """
+    Универсальный пакетный импорт расходов и поставок:
+    Принимает выбранную дату, текст, и файлы (выписки xlsx, фото накладных/листов).
+    """
+    db = get_database()
+    user_id = g.user_id
+    
+    date_str = request.form.get('date')  # Выбранная дата (например YYYY-MM-DD)
+    text_content = request.form.get('text', '').strip()
+    
+    uploaded_files = request.files.getlist('files') or request.files.getlist('files[]')
+    
+    # Результирующие списки для обработки
+    cashier_expenses = []      # С кассирского листа (все cash)
+    kaspi_expenses = []        # С Kaspi выписок (все kaspi)
+    printed_invoices = []      # Из печатных накладных
+    
+    from parser_service import get_parser_service
+    parser = get_parser_service()
+    
+    import tempfile
+    import os
+    from datetime import datetime
+    
+    # 1. Обрабатываем текстовый ввод (если есть)
+    if text_content:
+        try:
+            parsed_text = run_async(parser.parse_batch_text(text_content))
+            if parsed_text:
+                doc_type = parsed_text.get('document_type')
+                if doc_type == 'cashier_sheet':
+                    cashier_expenses.extend(parsed_text.get('expenses', []))
+                elif doc_type == 'printed_invoice':
+                    invoice_data = parsed_text.get('invoice')
+                    if invoice_data:
+                        printed_invoices.append(invoice_data)
+        except Exception as e:
+            logger.error(f"Error parsing batch text: {e}")
+            
+    # 2. Обрабатываем загруженные файлы
+    for file in uploaded_files:
+        if not file or not file.filename:
+            continue
+            
+        filename = file.filename.lower()
+        
+        try:
+            file_data = file.read()
+        except Exception as e:
+            logger.error(f"Error reading file {filename}: {e}")
+            continue
+            
+        # а) Excel файлы
+        if filename.endswith('.xlsx') or filename.endswith('.xls'):
+            try:
+                with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1], delete=False) as tmp:
+                    tmp.write(file_data)
+                    tmp_path = tmp.name
+                
+                try:
+                    from expense_input import parse_kaspi_xlsx
+                    items = parse_kaspi_xlsx(tmp_path, telegram_user_id=user_id)
+                    for item in items:
+                        kaspi_expenses.append({
+                            'amount': item.amount,
+                            'description': item.description,
+                            'expense_type': item.expense_type.value,
+                            'category': item.category,
+                            'supplier_id': item.supplier_id,
+                            'supplier_name': item.supplier_name
+                        })
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as e:
+                logger.error(f"Error parsing xlsx file {filename}: {e}")
+                
+        # б) Картинки
+        elif any(filename.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
+            try:
+                media_type = file.mimetype or 'image/jpeg'
+                parsed_image = run_async(parser.parse_batch_image(file_data, media_type))
+                if parsed_image:
+                    doc_type = parsed_image.get('document_type')
+                    if doc_type == 'cashier_sheet':
+                        cashier_expenses.extend(parsed_image.get('expenses', []))
+                    elif doc_type == 'printed_invoice':
+                        invoice_data = parsed_image.get('invoice')
+                        if invoice_data:
+                            printed_invoices.append(invoice_data)
+            except Exception as e:
+                logger.error(f"Error parsing image file {filename}: {e}")
+                
+    # 3. Сохраняем расходы и связываем их
+    saved_drafts = []
+    
+    # а) Сначала сохраняем cashier_expenses (касса, cash)
+    for exp in cashier_expenses:
+        amount = exp.get('amount')
+        description = exp.get('description', '')
+        expense_type = exp.get('type', 'transaction')
+        category = exp.get('category', 'Прочее')
+        
+        draft_id = db.create_expense_draft(
+            telegram_user_id=user_id,
+            amount=amount,
+            description=description,
+            expense_type=expense_type,
+            category=category,
+            source='cash',
+            created_at=date_str
+        )
+        
+        if draft_id:
+            saved_drafts.append({
+                'id': draft_id,
+                'amount': amount,
+                'description': description,
+                'expense_type': expense_type,
+                'source': 'cash',
+                'items': exp.get('items', []),
+                'matched': False
+            })
+            
+    # б) Сохраняем kaspi_expenses (каспи пей, kaspi)
+    for exp in kaspi_expenses:
+        draft_id = db.create_expense_draft(
+            telegram_user_id=user_id,
+            amount=exp['amount'],
+            description=exp['description'],
+            expense_type=exp['expense_type'],
+            category=exp['category'],
+            source='kaspi',
+            created_at=date_str
+        )
+        
+        if draft_id:
+            saved_drafts.append({
+                'id': draft_id,
+                'amount': exp['amount'],
+                'description': exp['description'],
+                'expense_type': exp['expense_type'],
+                'source': 'kaspi',
+                'supplier_id': exp.get('supplier_id'),
+                'supplier_name': exp.get('supplier_name'),
+                'matched': False
+            })
+            
+    # в) Связывание накладных с созданными расходами
+    linked_supplies_count = 0
+    unlinked_supplies_count = 0
+    
+    for invoice in printed_invoices:
+        total_sum = invoice.get('total_sum') or 0.0
+        supplier_name = invoice.get('supplier', '')
+        
+        best_candidate = None
+        best_score = 0
+        
+        for draft in saved_drafts:
+            if draft['expense_type'] != 'supply' or draft['matched']:
+                continue
+                
+            score = 0
+            amount_diff_pct = abs(draft['amount'] - total_sum) / max(draft['amount'], 1)
+            if amount_diff_pct <= 0.15:
+                score += 5
+                if amount_diff_pct <= 0.02:
+                    score += 5
+                    
+                supplier_clean = supplier_name.lower().replace('тоо', '').replace('ип', '').strip()
+                desc_clean = draft['description'].lower()
+                
+                if supplier_clean and (supplier_clean in desc_clean or desc_clean in supplier_clean):
+                    score += 10
+                elif draft.get('supplier_name') and supplier_clean in draft['supplier_name'].lower():
+                    score += 10
+                    
+            if score > best_score:
+                best_score = score
+                best_candidate = draft
+                
+        if best_candidate and best_score >= 5:
+            best_candidate['matched'] = True
+            success_id = create_supply_draft_from_invoice(
+                db, user_id, invoice, date_str, best_candidate['id'], best_candidate['source']
+            )
+            if success_id:
+                linked_supplies_count += 1
+        else:
+            # Не привязалась ни к одному расходу. Создаем новый расход Kaspi Pay
+            draft_id = db.create_expense_draft(
+                telegram_user_id=user_id,
+                amount=total_sum,
+                description=supplier_name or 'Поставка (неизвестный поставщик)',
+                expense_type='supply',
+                category='Прочее',
+                source='kaspi',
+                created_at=date_str
+            )
+            
+            if draft_id:
+                success_id = create_supply_draft_from_invoice(
+                    db, user_id, invoice, date_str, draft_id, 'kaspi'
+                )
+                if success_id:
+                    unlinked_supplies_count += 1
+                    
+    # г) Обрабатываем те supply расходы, которые НЕ сопоставились с накладными
+    for draft in saved_drafts:
+        if draft['expense_type'] == 'supply' and not draft['matched']:
+            desc_lower = draft['description'].lower()
+            if 'фарш' in desc_lower:
+                qty = draft['amount'] / 4600.0
+                invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+                supply_draft_id = db.create_empty_supply_draft(
+                    telegram_user_id=user_id,
+                    supplier_name="Фарш (Поставщик фарша)",
+                    invoice_date=invoice_date,
+                    total_sum=draft['amount'],
+                    linked_expense_draft_id=draft['id'],
+                    source=draft['source']
+                )
+                if supply_draft_id:
+                    from matchers import get_ingredient_matcher
+                    ing_matcher = get_ingredient_matcher(user_id)
+                    
+                    item_id = None
+                    matched_name = None
+                    account_name = None
+                    account_id = None
+                    
+                    match_result = ing_matcher.match("Фарш")
+                    if match_result:
+                        item_id, matched_name, _, _, account_name = match_result
+                        
+                    if account_name:
+                        accounts = db.get_accounts(user_id)
+                        account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
+                        account_id = account_name_to_id.get(account_name)
+                        
+                    db.add_supply_draft_item(
+                        supply_draft_id=supply_draft_id,
+                        item_name="Фарш",
+                        quantity=qty,
+                        price_per_unit=4600.0,
+                        poster_ingredient_id=item_id,
+                        poster_ingredient_name=matched_name or "Фарш",
+                        poster_account_id=account_id,
+                        poster_account_name=account_name,
+                        item_type='ingredient'
+                    )
+                    linked_supplies_count += 1
+            else:
+                items = draft.get('items', [])
+                if items:
+                    invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+                    supply_draft_id = db.create_empty_supply_draft(
+                        telegram_user_id=user_id,
+                        supplier_name=draft['description'],
+                        invoice_date=invoice_date,
+                        total_sum=draft['amount'],
+                        linked_expense_draft_id=draft['id'],
+                        source=draft['source']
+                    )
+                    if supply_draft_id:
+                        from matchers import get_ingredient_matcher, get_product_matcher
+                        ing_matcher = get_ingredient_matcher(user_id)
+                        prod_matcher = get_product_matcher(user_id)
+                        accounts = db.get_accounts(user_id)
+                        account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
+                        
+                        for item in items:
+                            name = item.get('name', 'Товар')
+                            qty = float(item.get('qty') or 1)
+                            price = float(item.get('price') or 0)
+                            
+                            item_id = None
+                            item_type = 'ingredient'
+                            matched_name = None
+                            account_name = None
+                            account_id = None
+                            
+                            match_result = ing_matcher.match(name)
+                            if match_result:
+                                item_id, matched_name, _, _, account_name = match_result
+                                item_type = 'ingredient'
+                            else:
+                                prod_match_result = prod_matcher.match(name)
+                                if prod_match_result:
+                                    item_id, matched_name, _, _, account_name = prod_match_result
+                                    item_type = 'product'
+                                    
+                            if account_name:
+                                account_id = account_name_to_id.get(account_name)
+                                
+                            db.add_supply_draft_item(
+                                supply_draft_id=supply_draft_id,
+                                item_name=name,
+                                quantity=qty,
+                                price_per_unit=price,
+                                poster_ingredient_id=item_id,
+                                poster_ingredient_name=matched_name,
+                                poster_account_id=account_id,
+                                poster_account_name=account_name,
+                                item_type=item_type
+                            )
+                        linked_supplies_count += 1
+                else:
+                    # Пустой черновик
+                    invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+                    db.create_empty_supply_draft(
+                        telegram_user_id=user_id,
+                        supplier_name=draft['description'],
+                        invoice_date=invoice_date,
+                        total_sum=draft['amount'],
+                        linked_expense_draft_id=draft['id'],
+                        source=draft['source']
+                    )
+                    linked_supplies_count += 1
+                    
+    return jsonify({
+        'success': True,
+        'parsed_expenses': len(saved_drafts),
+        'linked_supplies': linked_supplies_count + unlinked_supplies_count,
+        'message': f"Импорт завершен: создано {len(saved_drafts)} расходов и {linked_supplies_count + unlinked_supplies_count} поставок."
+    })
+
+
 @app.route('/api/expenses/<int:draft_id>/toggle-type', methods=['POST'])
 @validate_json(ToggleExpenseTypeRequest)
 def api_toggle_expense_type(draft_id, validated=None):

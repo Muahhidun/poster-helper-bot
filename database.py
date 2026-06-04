@@ -2770,7 +2770,7 @@ class UserDatabase:
 
     # ==================== Expense Drafts Methods ====================
 
-    def save_expense_drafts(self, telegram_user_id: int, items: list, source: str = "cash", source_account: str = None) -> int:
+    def save_expense_drafts(self, telegram_user_id: int, items: list, source: str = "cash", source_account: str = None, date_str: str = None) -> int:
         """
         Сохранить черновики расходов в БД
 
@@ -2779,6 +2779,7 @@ class UserDatabase:
             items: Список ExpenseItem или dict с полями amount, description, expense_type, category
             source: Источник (cash, kaspi)
             source_account: Название счёта
+            date_str: Кастомная дата создания (YYYY-MM-DD или YYYY-MM-DD HH:MM:SS)
 
         Returns:
             Количество сохранённых записей
@@ -2786,6 +2787,15 @@ class UserDatabase:
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
+
+            # Format date_str to full timestamp if needed
+            full_date_str = None
+            if date_str:
+                date_str = date_str.strip()
+                if len(date_str) == 10:
+                    full_date_str = f"{date_str} 12:00:00"
+                else:
+                    full_date_str = date_str
 
             count = 0
             for item in items:
@@ -2808,23 +2818,37 @@ class UserDatabase:
                     price_per_unit = item.get('price_per_unit')
 
                 if DB_TYPE == "sqlite":
-                    cursor.execute("""
-                        INSERT INTO expense_drafts
-                        (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit))
+                    if full_date_str:
+                        cursor.execute("""
+                            INSERT INTO expense_drafts
+                            (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit, full_date_str))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO expense_drafts
+                            (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit))
                 else:
-                    cursor.execute("""
-                        INSERT INTO expense_drafts
-                        (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit))
+                    if full_date_str:
+                        cursor.execute("""
+                            INSERT INTO expense_drafts
+                            (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit, full_date_str))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO expense_drafts
+                            (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (telegram_user_id, amount, description, expense_type, category, source, source_account, quantity, unit, price_per_unit))
                 count += 1
 
             conn.commit()
             conn.close()
 
-            logger.info(f"✅ Saved {count} expense drafts for user {telegram_user_id}")
+            logger.info(f"✅ Saved {count} expense drafts for user {telegram_user_id} on date {date_str or 'now'}")
             return count
 
         except Exception as e:
@@ -2994,7 +3018,8 @@ class UserDatabase:
         poster_transaction_id: str = None,
         is_income: bool = False,
         completion_status: str = "pending",
-        poster_amount: float = None
+        poster_amount: float = None,
+        created_at: str = None
     ) -> Optional[int]:
         """
         Создать один черновик расхода (для ручного ввода или синхронизации из Poster)
@@ -3003,6 +3028,7 @@ class UserDatabase:
             is_income: True если это доход (например, продажа масла), False для расхода
             completion_status: 'pending' (не в Poster), 'completed' (в Poster)
             poster_amount: Текущая сумма в Poster (для отслеживания изменений)
+            created_at: Кастомная дата создания (YYYY-MM-DD или YYYY-MM-DD HH:MM:SS)
 
         Returns:
             ID созданного черновика или None при ошибке
@@ -3013,20 +3039,44 @@ class UserDatabase:
 
             is_income_int = 1 if is_income else 0
 
+            # Format created_at to full timestamp if needed
+            full_created_at = None
+            if created_at:
+                created_at = created_at.strip()
+                if len(created_at) == 10:
+                    full_created_at = f"{created_at} 12:00:00"
+                else:
+                    full_created_at = created_at
+
             if DB_TYPE == "sqlite":
-                cursor.execute("""
-                    INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
+                if full_created_at:
+                    cursor.execute("""
+                        INSERT INTO expense_drafts
+                        (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount, full_created_at))
+                else:
+                    cursor.execute("""
+                        INSERT INTO expense_drafts
+                        (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
                 draft_id = cursor.lastrowid
             else:
-                cursor.execute("""
-                    INSERT INTO expense_drafts
-                    (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
+                if full_created_at:
+                    cursor.execute("""
+                        INSERT INTO expense_drafts
+                        (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount, full_created_at))
+                else:
+                    cursor.execute("""
+                        INSERT INTO expense_drafts
+                        (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income, completion_status, poster_amount)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
                 draft_id = cursor.fetchone()[0]
 
             conn.commit()
