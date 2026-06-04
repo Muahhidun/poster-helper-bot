@@ -839,6 +839,9 @@ class UserDatabase:
         # Run migration to create daily_transactions_config table
         self._migrate_daily_transactions_config()
 
+        # Run migration to add packaging rules and habits
+        self._migrate_packaging_and_habits()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -2093,7 +2096,346 @@ class UserDatabase:
             logger.error(f"Failed to clean orphaned aliases: {e}")
             return 0
 
+    # === Ingredient Packaging Rules & Habits Methods ===
+
+    def _migrate_packaging_and_habits(self):
+        """Add columns to supply_draft_items and create packaging_rules and ingredient_habits tables"""
+        # 1. Add columns to supply_draft_items
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                try:
+                    cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN parsed_quantity REAL")
+                except:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN parsed_unit TEXT")
+                except:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN parsed_price_per_unit REAL")
+                except:
+                    pass
+            else:
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS parsed_quantity DECIMAL(10,3)")
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS parsed_unit TEXT")
+                cursor.execute("ALTER TABLE supply_draft_items ADD COLUMN IF NOT EXISTS parsed_price_per_unit DECIMAL(12,2)")
+            conn.commit()
+            conn.close()
+            logger.info("✅ supply_draft_items migration: added parsed_quantity, parsed_unit, parsed_price_per_unit")
+        except Exception as e:
+            logger.error(f"❌ Failed to migrate supply_draft_items: {e}")
+
+        # 2. Create ingredient_packaging_rules table
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS ingredient_packaging_rules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        poster_ingredient_id INTEGER NOT NULL,
+                        original_unit TEXT NOT NULL,
+                        coefficient REAL NOT NULL,
+                        target_unit TEXT NOT NULL DEFAULT 'кг',
+                        notes TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, poster_ingredient_id, original_unit),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS ingredient_packaging_rules (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        poster_ingredient_id INTEGER NOT NULL,
+                        original_unit TEXT NOT NULL,
+                        coefficient REAL NOT NULL,
+                        target_unit TEXT NOT NULL DEFAULT 'кг',
+                        notes TEXT,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, poster_ingredient_id, original_unit),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ Created ingredient_packaging_rules table")
+        except Exception as e:
+            logger.error(f"❌ Failed to create ingredient_packaging_rules table: {e}")
+
+        # 3. Create ingredient_habits table
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS ingredient_habits (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        poster_ingredient_id INTEGER NOT NULL,
+                        default_price REAL,
+                        default_quantity REAL,
+                        notes TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, poster_ingredient_id),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS ingredient_habits (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        poster_ingredient_id INTEGER NOT NULL,
+                        default_price DECIMAL(12,2),
+                        default_quantity DECIMAL(10,3),
+                        notes TEXT,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, poster_ingredient_id),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ Created ingredient_habits table")
+        except Exception as e:
+            logger.error(f"❌ Failed to create ingredient_habits table: {e}")
+
+    def get_packaging_rules(self, telegram_user_id: int) -> list:
+        """Get all ingredient packaging rules for a user"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, poster_ingredient_id, original_unit, coefficient, target_unit, notes, created_at
+                    FROM ingredient_packaging_rules
+                    WHERE telegram_user_id = ?
+                """, (telegram_user_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                res = [dict(zip(columns, row)) for row in rows]
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, poster_ingredient_id, original_unit, coefficient, target_unit, notes, created_at
+                    FROM ingredient_packaging_rules
+                    WHERE telegram_user_id = %s
+                """, (telegram_user_id,))
+                res = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return res
+        except Exception as e:
+            logger.error(f"Failed to get packaging rules: {e}")
+            return []
+
+    def add_packaging_rule(
+        self,
+        telegram_user_id: int,
+        poster_ingredient_id: int,
+        original_unit: str,
+        coefficient: float,
+        target_unit: str = 'кг',
+        notes: str = ''
+    ) -> bool:
+        """Add or update an ingredient packaging rule"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            original_unit = original_unit.strip().lower()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT OR REPLACE INTO ingredient_packaging_rules (
+                        telegram_user_id, poster_ingredient_id, original_unit,
+                        coefficient, target_unit, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, poster_ingredient_id, original_unit, coefficient, target_unit, notes))
+            else:
+                cursor.execute("""
+                    INSERT INTO ingredient_packaging_rules (
+                        telegram_user_id, poster_ingredient_id, original_unit,
+                        coefficient, target_unit, notes
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, poster_ingredient_id, original_unit)
+                    DO UPDATE SET
+                        coefficient = EXCLUDED.coefficient,
+                        target_unit = EXCLUDED.target_unit,
+                        notes = EXCLUDED.notes
+                """, (telegram_user_id, poster_ingredient_id, original_unit, coefficient, target_unit, notes))
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Packaging rule saved: User {telegram_user_id}, Ingredient {poster_ingredient_id}, '{original_unit}' -> coefficient {coefficient}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add packaging rule: {e}")
+            return False
+
+    def delete_packaging_rule_by_id(self, rule_id: int, telegram_user_id: int) -> bool:
+        """Delete an ingredient packaging rule by ID"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM ingredient_packaging_rules WHERE id = ? AND telegram_user_id = ?", (rule_id, telegram_user_id))
+            else:
+                cursor.execute("DELETE FROM ingredient_packaging_rules WHERE id = %s AND telegram_user_id = %s", (rule_id, telegram_user_id))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete packaging rule: {e}")
+            return False
+
+    def delete_packaging_rule(self, telegram_user_id: int, poster_ingredient_id: int, original_unit: str) -> bool:
+        """Delete an ingredient packaging rule"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            original_unit = original_unit.strip().lower()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    DELETE FROM ingredient_packaging_rules
+                    WHERE telegram_user_id = ? AND poster_ingredient_id = ? AND original_unit = ?
+                """, (telegram_user_id, poster_ingredient_id, original_unit))
+            else:
+                cursor.execute("""
+                    DELETE FROM ingredient_packaging_rules
+                    WHERE telegram_user_id = %s AND poster_ingredient_id = %s AND original_unit = %s
+                """, (telegram_user_id, poster_ingredient_id, original_unit))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete packaging rule: {e}")
+            return False
+
+    def get_ingredient_habits(self, telegram_user_id: int) -> list:
+        """Get all ingredient habits (typical prices) for a user"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, poster_ingredient_id, default_price, default_quantity, notes, created_at
+                    FROM ingredient_habits
+                    WHERE telegram_user_id = ?
+                """, (telegram_user_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                res = [dict(zip(columns, row)) for row in rows]
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, poster_ingredient_id, default_price, default_quantity, notes, created_at
+                    FROM ingredient_habits
+                    WHERE telegram_user_id = %s
+                """, (telegram_user_id,))
+                res = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return res
+        except Exception as e:
+            logger.error(f"Failed to get ingredient habits: {e}")
+            return []
+
+    def add_ingredient_habit(
+        self,
+        telegram_user_id: int,
+        poster_ingredient_id: int,
+        default_price: float = None,
+        default_quantity: float = None,
+        notes: str = ''
+    ) -> bool:
+        """Add or update an ingredient habit"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT OR REPLACE INTO ingredient_habits (
+                        telegram_user_id, poster_ingredient_id, default_price,
+                        default_quantity, notes
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, (telegram_user_id, poster_ingredient_id, default_price, default_quantity, notes))
+            else:
+                cursor.execute("""
+                    INSERT INTO ingredient_habits (
+                        telegram_user_id, poster_ingredient_id, default_price,
+                        default_quantity, notes
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, poster_ingredient_id)
+                    DO UPDATE SET
+                        default_price = EXCLUDED.default_price,
+                        default_quantity = EXCLUDED.default_quantity,
+                        notes = EXCLUDED.notes
+                """, (telegram_user_id, poster_ingredient_id, default_price, default_quantity, notes))
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Ingredient habit saved: User {telegram_user_id}, Ingredient {poster_ingredient_id}, price {default_price}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add ingredient habit: {e}")
+            return False
+
+    def delete_ingredient_habit_by_id(self, habit_id: int, telegram_user_id: int) -> bool:
+        """Delete an ingredient habit by ID"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM ingredient_habits WHERE id = ? AND telegram_user_id = ?", (habit_id, telegram_user_id))
+            else:
+                cursor.execute("DELETE FROM ingredient_habits WHERE id = %s AND telegram_user_id = %s", (habit_id, telegram_user_id))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete habit: {e}")
+            return False
+
+    def get_supply_draft_item(self, item_id: int, telegram_user_id: int = None) -> Optional[Dict]:
+        """Получить позицию из черновика поставки по ее ID"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                if telegram_user_id is not None:
+                    cursor.execute("""
+                        SELECT i.* FROM supply_draft_items i
+                        JOIN supply_drafts d ON i.supply_draft_id = d.id
+                        WHERE i.id = ? AND d.telegram_user_id = ?
+                    """, (item_id, telegram_user_id))
+                else:
+                    cursor.execute("SELECT * FROM supply_draft_items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                columns = [desc[0] for desc in cursor.description] if row else []
+                res = dict(zip(columns, row)) if row else None
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                if telegram_user_id is not None:
+                    cursor.execute("""
+                        SELECT i.* FROM supply_draft_items i
+                        JOIN supply_drafts d ON i.supply_draft_id = d.id
+                        WHERE i.id = %s AND d.telegram_user_id = %s
+                    """, (item_id, telegram_user_id))
+                else:
+                    cursor.execute("SELECT * FROM supply_draft_items WHERE id = %s", (item_id,))
+                row = cursor.fetchone()
+                res = dict(row) if row else None
+            conn.close()
+            return res
+        except Exception as e:
+            logger.error(f"Failed to get supply draft item: {e}")
+            return None
+
     # === Supplier Aliases Methods ===
+
 
     def get_supplier_aliases(self, telegram_user_id: int) -> list:
         """Get all supplier aliases for a user"""
@@ -4452,8 +4794,10 @@ class UserDatabase:
         total_sum: float = 0,
         linked_expense_draft_id: int = None,
         account_id: int = None,
-        source: str = 'cash'
+        source: str = 'cash',
+        supplier_id: int = None
     ) -> Optional[int]:
+
         """
         Создать пустой черновик поставки (без товаров) - для ручного ввода
 
@@ -4471,18 +4815,19 @@ class UserDatabase:
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT INTO supply_drafts
-                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source))
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source, supplier_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source, supplier_id))
                 supply_draft_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO supply_drafts
-                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source, supplier_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
-                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source))
+                """, (telegram_user_id, supplier_name, invoice_date, total_sum, linked_expense_draft_id, account_id, source, supplier_id))
                 supply_draft_id = cursor.fetchone()[0]
+
 
             conn.commit()
             conn.close()
@@ -4547,8 +4892,12 @@ class UserDatabase:
         poster_account_name: str = None,
         item_type: str = 'ingredient',  # 'ingredient' or 'product'
         storage_id: int = None,
-        storage_name: str = None
+        storage_name: str = None,
+        parsed_quantity: float = None,
+        parsed_unit: str = None,
+        parsed_price_per_unit: float = None
     ) -> Optional[int]:
+
         """
         Добавить позицию в черновик поставки
 
@@ -4565,24 +4914,25 @@ class UserDatabase:
                     INSERT INTO supply_draft_items
                     (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
                      poster_ingredient_id, poster_ingredient_name, poster_account_id, poster_account_name,
-                     item_type, storage_id, storage_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     item_type, storage_id, storage_name, parsed_quantity, parsed_unit, parsed_price_per_unit)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
                       poster_ingredient_id, poster_ingredient_name, poster_account_id, poster_account_name,
-                      item_type, storage_id, storage_name))
+                      item_type, storage_id, storage_name, parsed_quantity, parsed_unit, parsed_price_per_unit))
                 item_id = cursor.lastrowid
             else:
                 cursor.execute("""
                     INSERT INTO supply_draft_items
                     (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
                      poster_ingredient_id, poster_ingredient_name, poster_account_id, poster_account_name,
-                     item_type, storage_id, storage_name)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     item_type, storage_id, storage_name, parsed_quantity, parsed_unit, parsed_price_per_unit)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (supply_draft_id, item_name, quantity, unit, price_per_unit, total,
                       poster_ingredient_id, poster_ingredient_name, poster_account_id, poster_account_name,
-                      item_type, storage_id, storage_name))
+                      item_type, storage_id, storage_name, parsed_quantity, parsed_unit, parsed_price_per_unit))
                 item_id = cursor.fetchone()[0]
+
 
             conn.commit()
             conn.close()

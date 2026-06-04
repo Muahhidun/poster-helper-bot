@@ -1,22 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Список Aliases{% endblock %}
+{% block title %}Управление алиасами и автозаполнением{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-    <h2>Список Aliases</h2>
-    <a href="{{ url_for('new_alias') }}" class="btn btn-success">➕ Добавить</a>
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>📋 Управление правилами сопоставлений</h2>
+    <a href="{{ url_for('new_alias') }}" class="btn btn-success">➕ Добавить алиас</a>
 </div>
 
+<!-- Search / Filter form -->
 <form method="get" class="row g-3 mb-4">
     <div class="col-md-6">
-        <input type="text" name="search" class="form-control" placeholder="Поиск по alias..." value="{{ search }}">
+        <input type="text" name="search" class="form-control" placeholder="Поиск по названию или алиасу..." value="{{ search }}">
     </div>
     <div class="col-md-3">
         <select name="source" class="form-select">
-            <option value="all" {% if source_filter == 'all' %}selected{% endif %}>Все типы</option>
-            <option value="ingredient" {% if source_filter == 'ingredient' %}selected{% endif %}>Ингредиенты</option>
-            <option value="product" {% if source_filter == 'product' %}selected{% endif %}>Продукты</option>
+            <option value="all" {% if source_filter == 'all' %}selected{% endif %}>Все типы алиасов</option>
+            <option value="ingredient" {% if source_filter == 'ingredient' %}selected{% endif %}>Только Ингредиенты</option>
+            <option value="product" {% if source_filter == 'product' %}selected{% endif %}>Только Продукты</option>
         </select>
     </div>
     <div class="col-md-3">
@@ -25,47 +26,158 @@
     </div>
 </form>
 
-<div class="table-responsive">
-    <table class="table table-striped table-hover">
-        <thead>
-            <tr>
-                <th style="width: 5%;">ID</th>
-                <th style="width: 30%;">Alias Text</th>
-                <th style="width: 30%;">Товар</th>
-                <th style="width: 10%;">Тип</th>
-                <th style="width: 15%;">Примечание</th>
-                <th style="width: 10%;">Действия</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% if aliases %}
-                {% for alias in aliases %}
-                <tr>
-                    <td>{{ alias.id }}</td>
-                    <td>{{ alias.alias_text }}</td>
-                    <td>{{ alias.poster_item_name }}</td>
-                    <td>
-                        <span class="badge bg-{{ 'primary' if alias.source == 'ingredient' else 'success' }}">
-                            {{ alias.source }}
-                        </span>
-                    </td>
-                    <td>{{ alias.notes if alias.notes else '-' }}</td>
-                    <td>
-                        <a href="{{ url_for('edit_alias', alias_id=alias.id) }}" class="btn btn-sm btn-warning" title="Редактировать">✏️</a>
-                        <form method="post" action="{{ url_for('delete_alias', alias_id=alias.id) }}" style="display:inline;">
-                            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Удалить этот alias?')" title="Удалить">🗑️</button>
-                        </form>
-                    </td>
-                </tr>
-                {% endfor %}
-            {% else %}
-                <tr>
-                    <td colspan="6" class="text-center text-muted">Нет aliases. Добавьте первый!</td>
-                </tr>
-            {% endif %}
-        </tbody>
-    </table>
-</div>
+<!-- Navigation Tabs -->
+<ul class="nav nav-tabs mb-4" id="aliasTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="aliases-tab" data-bs-toggle="tab" data-bs-target="#aliases" type="button" role="tab" aria-controls="aliases" aria-selected="true">
+            🏷️ Алиасы ингредиентов ({{ aliases|length }})
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules" type="button" role="tab" aria-controls="rules" aria-selected="false">
+            ⚖️ Правила умных фасовок ({{ packaging_rules|length }})
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="habits-tab" data-bs-toggle="tab" data-bs-target="#habits" type="button" role="tab" aria-controls="habits" aria-selected="false">
+            💰 Привычные цены ({{ habits|length }})
+        </button>
+    </li>
+</ul>
 
-<p class="text-muted mt-3">Всего aliases: {{ aliases|length }}</p>
+<!-- Tab Contents -->
+<div class="tab-content" id="aliasTabsContent">
+    
+    <!-- Tab 1: Aliases -->
+    <div class="tab-pane fade show active" id="aliases" role="tabpanel" aria-labelledby="aliases-tab">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 5%;">ID</th>
+                        <th style="width: 30%;">Текст из накладной (Alias)</th>
+                        <th style="width: 30%;">Ингредиент в Poster</th>
+                        <th style="width: 10%;">Тип</th>
+                        <th style="width: 15%;">Примечание</th>
+                        <th style="width: 10%;" class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if aliases %}
+                        {% for alias in aliases %}
+                        <tr>
+                            <td>{{ alias.id }}</td>
+                            <td class="fw-bold">{{ alias.alias_text }}</td>
+                            <td>{{ alias.poster_item_name }}</td>
+                            <td>
+                                <span class="badge bg-{{ 'primary' if alias.source == 'ingredient' else 'success' }}">
+                                    {{ alias.source }}
+                                </span>
+                            </td>
+                            <td><span class="text-muted small">{{ alias.notes if alias.notes else '-' }}</span></td>
+                            <td class="text-end">
+                                <a href="{{ url_for('edit_alias', alias_id=alias.id) }}" class="btn btn-sm btn-outline-warning" title="Редактировать">✏️</a>
+                                <form method="post" action="{{ url_for('delete_alias', alias_id=alias.id) }}" style="display:inline;">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить этот alias?')" title="Удалить">🗑️</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">Нет сохраненных алиасов.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Tab 2: Smart Packaging Rules -->
+    <div class="tab-pane fade" id="rules" role="tabpanel" aria-labelledby="rules-tab">
+        <div class="alert alert-info d-flex align-items-center mb-3">
+            <span class="me-2">💡</span>
+            <span>Здесь показаны правила перевода штук/упаковок в базовые единицы (например, 1 шт соуса терияки -> 0.23 кг). Правила создаются автоматически, когда вы редактируете количество в черновиках.</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 5%;">ID</th>
+                        <th style="width: 35%;">Ингредиент</th>
+                        <th style="width: 20%;">Исходная упаковка</th>
+                        <th style="width: 15%;">Коэффициент (кг/ед)</th>
+                        <th style="width: 15%;">Примечание</th>
+                        <th style="width: 10%;" class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if packaging_rules %}
+                        {% for rule in packaging_rules %}
+                        <tr>
+                            <td>{{ rule.id }}</td>
+                            <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id, 'ID: ' ~ rule.poster_ingredient_id) }}</td>
+                            <td><span class="badge bg-secondary">{{ rule.original_unit }}</span></td>
+                            <td><span class="fw-bold text-success">{{ rule.coefficient }}</span> {{ rule.target_unit }}</td>
+                            <td><span class="text-muted small">{{ rule.notes if rule.notes else '-' }}</span></td>
+                            <td class="text-end">
+                                <form method="post" action="{{ url_for('delete_packaging_rule_route', rule_id=rule.id) }}" style="display:inline;">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить это правило фасовки?')" title="Удалить">🗑️</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Tab 3: Price Habits -->
+    <div class="tab-pane fade" id="habits" role="tabpanel" aria-labelledby="habits-tab">
+        <div class="alert alert-info d-flex align-items-center mb-3">
+            <span class="me-2">💡</span>
+            <span>Здесь сохранены ваши привычные цены за килограмм. Если при импорте общая сумма кратна этой цене, система автоматически рассчитает вес (например, 46 000 за фарш -> 10 кг по 4 600).</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 5%;">ID</th>
+                        <th style="width: 45%;">Ингредиент</th>
+                        <th style="width: 20%;">Типичная цена</th>
+                        <th style="width: 20%;">Примечание</th>
+                        <th style="width: 10%;" class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if habits %}
+                        {% for habit in habits %}
+                        <tr>
+                            <td>{{ habit.id }}</td>
+                            <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id, 'ID: ' ~ habit.poster_ingredient_id) }}</td>
+                            <td><span class="fw-bold text-primary">{{ "{:,.0f}".format(habit.default_price) }} ₸</span> /кг</td>
+                            <td><span class="text-muted small">{{ habit.notes if habit.notes else '-' }}</span></td>
+                            <td class="text-end">
+                                <form method="post" action="{{ url_for('delete_habit_route', habit_id=habit.id) }}" style="display:inline;">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить эту привычную цену?')" title="Удалить">🗑️</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">Нет сохраненных привычных цен.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+</div>
 {% endblock %}

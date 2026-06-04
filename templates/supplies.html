@@ -985,6 +985,17 @@ document.addEventListener('DOMContentLoaded', function() {
     // Then load last prices asynchronously
     loadAllLastPrices();
 
+    // Automatically load last supply for already selected suppliers
+    document.querySelectorAll('.supplier-input').forEach(input => {
+        const draftId = input.dataset.id;
+        const supplierId = input.dataset.supplierId;
+        const supplierName = input.value;
+        if (supplierId && supplierName) {
+            loadLastSupplyForDraft(draftId, parseInt(supplierId), supplierName);
+        }
+    });
+
+
     // Add new supply button
     document.getElementById('add-supply-btn').addEventListener('click', async function() {
         try {
@@ -1470,21 +1481,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         poster_account_name: accountName
                     })
                 });
-
-                // Auto-save Alias in background
-                fetch('/supplier-aliases/add', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        alias_text: mappingOriginalName,
-                        poster_item_id: ingredientId,
-                        poster_item_name: ingredientName,
-                        poster_account_id: accountId,
-                        poster_account_name: accountName,
-                        source: itemType,
-                        notes: 'Авто-сохранено при связывании в Поставках'
-                    })
-                }).catch(e => console.error("Failed to save alias", e));
 
                 const result = await response.json();
                 if (result.success) {

@@ -294,7 +294,29 @@ def load_items_from_csv():
     return items
 
 
+def resolve_supplier_name_and_id(user_id: int, text: str) -> tuple:
+    """Try to resolve supplier name and ID from text using fuzzy matching.
+
+    Returns (supplier_name, supplier_id). If not matched, returns (text, None).
+    """
+    if not text:
+        return "", None
+
+    try:
+        from matchers import get_supplier_matcher
+        supplier_matcher = get_supplier_matcher(user_id)
+        matched_id = supplier_matcher.match(text, score_cutoff=60)  # Use 60 for high tolerance
+        if matched_id:
+            name = supplier_matcher.get_supplier_name(matched_id)
+            return name, matched_id
+    except Exception as e:
+        logger.error(f"Error in fuzzy matching supplier: {e}")
+
+    return text, None
+
+
 @app.route('/')
+
 def index():
     """Redirect based on user role"""
     role = session.get('role')
@@ -317,7 +339,7 @@ def list_aliases():
     # Get aliases from DB
     aliases = db.get_ingredient_aliases(g.user_id)
 
-    # Apply filters
+    # Apply filters to aliases
     if search:
         aliases = [a for a in aliases if search.lower() in a['alias_text'].lower() or
                    search.lower() in a['poster_item_name'].lower()]
@@ -325,10 +347,27 @@ def list_aliases():
     if source_filter != 'all':
         aliases = [a for a in aliases if a['source'] == source_filter]
 
+    # Load packaging rules and habits
+    packaging_rules = db.get_packaging_rules(g.user_id)
+    habits = db.get_ingredient_habits(g.user_id)
+
+    # Load items to map ingredient names
+    items = load_items_from_csv()
+    item_names = {i['id']: i['name'] for i in items if i['type'] == 'ingredient'}
+
+    # If search filter is active, filter packaging rules and habits too
+    if search:
+        packaging_rules = [r for r in packaging_rules if search.lower() in item_names.get(r['poster_ingredient_id'], '').lower()]
+        habits = [h for h in habits if search.lower() in item_names.get(h['poster_ingredient_id'], '').lower()]
+
     return render_template('aliases_list.html',
                           aliases=aliases,
                           search=search,
-                          source_filter=source_filter)
+                          source_filter=source_filter,
+                          packaging_rules=packaging_rules,
+                          habits=habits,
+                          item_names=item_names)
+
 
 
 @app.route('/aliases/new', methods=['GET', 'POST'])
@@ -428,6 +467,31 @@ def delete_alias(alias_id):
         flash('❌ Ошибка при удалении alias', 'danger')
 
     return redirect(url_for('list_aliases'))
+
+
+@app.route('/aliases/packaging-rules/delete/<int:rule_id>', methods=['POST'])
+def delete_packaging_rule_route(rule_id):
+    """Delete packaging rule"""
+    db = get_database()
+    success = db.delete_packaging_rule_by_id(rule_id, g.user_id)
+    if success:
+        flash('🗑️ Правило фасовки удалено!', 'info')
+    else:
+        flash('❌ Ошибка при удалении правила фасовки', 'danger')
+    return redirect(url_for('list_aliases'))
+
+
+@app.route('/aliases/habits/delete/<int:habit_id>', methods=['POST'])
+def delete_habit_route(habit_id):
+    """Delete typical price habit"""
+    db = get_database()
+    success = db.delete_ingredient_habit_by_id(habit_id, g.user_id)
+    if success:
+        flash('🗑️ Привычная цена удалена!', 'info')
+    else:
+        flash('❌ Ошибка при удалении привычной цены', 'danger')
+    return redirect(url_for('list_aliases'))
+
 
 
 # ========================================
@@ -1416,15 +1480,20 @@ def toggle_expense_type(draft_id):
     if new_type == 'supply':
         # Create supply draft linked to this expense
         from datetime import datetime
+        description = expense_draft.get('description', '').strip()
+        supplier_name, supplier_id = resolve_supplier_name_and_id(g.user_id, description)
+
         supply_draft_id = db.create_empty_supply_draft(
             telegram_user_id=g.user_id,
-            supplier_name=expense_draft.get('description', ''),
+            supplier_name=supplier_name,
             invoice_date=datetime.now().strftime("%Y-%m-%d"),
             total_sum=expense_draft.get('amount', 0),
             linked_expense_draft_id=draft_id,
             account_id=expense_draft.get('account_id'),
-            source=expense_draft.get('source', 'cash')
+            source=expense_draft.get('source', 'cash'),
+            supplier_id=supplier_id
         )
+
     else:
         # Switching to transaction - find and delete linked supply draft
         supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
@@ -1577,15 +1646,18 @@ def create_expense():
 
     if draft_id and expense_type == 'supply':
         from datetime import datetime
+        supplier_name, supplier_id = resolve_supplier_name_and_id(g.user_id, description)
         db.create_empty_supply_draft(
             telegram_user_id=g.user_id,
-            supplier_name=description,
+            supplier_name=supplier_name,
             invoice_date=datetime.now().strftime("%Y-%m-%d"),
             total_sum=amount,
             linked_expense_draft_id=draft_id,
             account_id=account_id,
-            source=source
+            source=source,
+            supplier_id=supplier_id
         )
+
 
     if draft_id:
         # Return full draft object for dynamic row creation
@@ -2183,15 +2255,18 @@ def api_create_expense(validated=None):
 
     if draft_id and validated.expense_type.value == 'supply':
         from datetime import datetime
+        supplier_name, supplier_id = resolve_supplier_name_and_id(g.user_id, validated.description)
         db.create_empty_supply_draft(
             telegram_user_id=g.user_id,
-            supplier_name=validated.description,
+            supplier_name=supplier_name,
             invoice_date=datetime.now().strftime("%Y-%m-%d"),
             total_sum=validated.amount,
             linked_expense_draft_id=draft_id,
             account_id=validated.account_id,
-            source=validated.source.value
+            source=validated.source.value,
+            supplier_id=supplier_id
         )
+
 
     return jsonify({'success': True, 'id': draft_id})
 
@@ -2201,6 +2276,7 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
     from matchers import get_ingredient_matcher, get_product_matcher
     
     supplier_name = invoice.get('supplier') or 'Неизвестный поставщик'
+    supplier_name, supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
     total_sum = invoice.get('total_sum') or 0.0
     invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
     
@@ -2210,7 +2286,8 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
         invoice_date=invoice_date,
         total_sum=total_sum,
         linked_expense_draft_id=linked_expense_draft_id,
-        source=source
+        source=source,
+        supplier_id=supplier_id
     )
     
     if not supply_draft_id:
@@ -2221,10 +2298,18 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
     accounts = db.get_accounts(user_id)
     account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
     
+    # Load user's packaging rules and habits
+    rules = db.get_packaging_rules(user_id)
+    rules_dict = {(r['poster_ingredient_id'], r['original_unit'].strip().lower()): r['coefficient'] for r in rules}
+    
+    habits = db.get_ingredient_habits(user_id)
+    habits_dict = {h['poster_ingredient_id']: h['default_price'] for h in habits if h['default_price']}
+    
     for item in invoice.get('items', []):
         name = item.get('name', 'Товар')
         qty = float(item.get('qty') or 1)
         price = float(item.get('price') or 0)
+        unit = item.get('unit', 'шт').strip().lower()
         
         item_id = None
         item_type = 'ingredient'
@@ -2245,19 +2330,53 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
         if account_name:
             account_id = account_name_to_id.get(account_name)
             
+        # Keep original parsed values
+        parsed_quantity = qty
+        parsed_unit = item.get('unit', 'шт')
+        parsed_price_per_unit = price
+        
+        # Default target unit
+        target_unit = parsed_unit
+        
+        # Apply packaging rules and habits
+        if item_id and item_type == 'ingredient':
+            matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id and r['original_unit'].strip().lower() == unit), None)
+            if matching_rule:
+                coef = matching_rule['coefficient']
+                target_unit = matching_rule.get('target_unit', 'кг')
+                qty = parsed_quantity * coef
+                price = parsed_price_per_unit / coef
+                logger.info(f"⚖️ Applied packaging rule for ingredient {item_id}: {parsed_quantity} {parsed_unit} -> {qty} {target_unit} (coef={coef})")
+            else:
+                default_price = habits_dict.get(item_id)
+                if default_price:
+                    total_sum_item = parsed_quantity * parsed_price_per_unit
+                    if parsed_price_per_unit > default_price * 1.5 and abs(total_sum_item / default_price - round(total_sum_item / default_price)) < 0.05:
+                        calculated_qty = round(total_sum_item / default_price)
+                        if calculated_qty > 0:
+                            qty = float(calculated_qty)
+                            price = default_price
+                            target_unit = 'кг'
+                            logger.info(f"⚖️ Habit match for ingredient {item_id}: qty {qty} based on total {total_sum_item} and typical price {default_price}")
+            
         db.add_supply_draft_item(
             supply_draft_id=supply_draft_id,
             item_name=name,
             quantity=qty,
+            unit=target_unit,
             price_per_unit=price,
             poster_ingredient_id=item_id,
             poster_ingredient_name=matched_name,
             poster_account_id=account_id,
             poster_account_name=account_name,
-            item_type=item_type
+            item_type=item_type,
+            parsed_quantity=parsed_quantity,
+            parsed_unit=parsed_unit,
+            parsed_price_per_unit=parsed_price_per_unit
         )
         
     return supply_draft_id
+
 
 
 @app.route('/api/expenses/import-batch', methods=['POST'])
@@ -4108,6 +4227,11 @@ def update_supply_item(item_id):
     db = get_database()
     data = request.get_json() or {}
 
+    # Get the item BEFORE update to check if there is a mapping change
+    item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
+    if not item:
+        return jsonify({'success': False, 'error': 'Позиция не найдена'})
+
     update_fields = {}
     if 'poster_ingredient_id' in data:
         update_fields['poster_ingredient_id'] = data['poster_ingredient_id']
@@ -4125,10 +4249,71 @@ def update_supply_item(item_id):
         if 'quantity' in update_fields:
             update_fields['total'] = update_fields['quantity'] * update_fields['price_per_unit']
         else:
-            update_fields['total'] = data.get('quantity', 1) * update_fields['price_per_unit']
+            update_fields['total'] = data.get('quantity', item.get('quantity', 1)) * update_fields['price_per_unit']
 
     success = db.update_supply_draft_item(item_id, telegram_user_id=g.user_id, **update_fields) if update_fields else False
+
+    if success:
+        # Auto-update aliases and learn habits/rules
+        # 1. Alias correction
+        if 'poster_ingredient_id' in data:
+            new_id = data['poster_ingredient_id']
+            new_name = data.get('poster_ingredient_name', '')
+            original_name = item['item_name']
+
+            if new_id is not None:
+                if new_id == 0 or new_id == '':
+                    # Deleted/unbound
+                    db.delete_ingredient_alias(telegram_user_id=g.user_id, alias_text=original_name)
+                else:
+                    # Created/updated mapping
+                    db.add_ingredient_alias(
+                        telegram_user_id=g.user_id,
+                        alias_text=original_name,
+                        poster_item_id=int(new_id),
+                        poster_item_name=new_name,
+                        source='ingredient',
+                        notes='Авто-сохранено при ручной привязке в Поставках'
+                    )
+
+        # 2. Learn packaging rules or habits
+        ing_id = data.get('poster_ingredient_id') or item.get('poster_ingredient_id')
+        if ing_id and ing_id != 0 and ing_id != '':
+            # Get updated item from DB to see current state
+            updated_item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
+            if updated_item:
+                qty = updated_item.get('quantity')
+                price = updated_item.get('price_per_unit')
+                parsed_qty = updated_item.get('parsed_quantity')
+                parsed_unit = updated_item.get('parsed_unit')
+
+                # A. Packaging rule: user edited quantity vs parsed quantity
+                if parsed_qty is not None and parsed_qty > 0 and qty is not None:
+                    # Ignore minor floating-point difference
+                    if abs(qty - parsed_qty) > 0.001:
+                        coef = qty / parsed_qty
+                        # original unit is parsed unit (default 'шт')
+                        orig_unit = parsed_unit or 'шт'
+                        db.add_packaging_rule(
+                            telegram_user_id=g.user_id,
+                            poster_ingredient_id=int(ing_id),
+                            original_unit=orig_unit,
+                            coefficient=coef,
+                            target_unit='кг',
+                            notes=f"Авто-изучено: {parsed_qty} {orig_unit} -> {qty} кг"
+                        )
+
+                # B. Habit: user edited price
+                if price is not None and price > 0:
+                    db.add_ingredient_habit(
+                        telegram_user_id=g.user_id,
+                        poster_ingredient_id=int(ing_id),
+                        default_price=price,
+                        notes="Изучено из ручного ввода цены"
+                    )
+
     return jsonify({'success': success})
+
 
 
 @app.route('/supplies/process/<int:draft_id>', methods=['POST'])
