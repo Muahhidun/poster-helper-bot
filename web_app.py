@@ -2498,6 +2498,7 @@ def api_import_batch():
         description = exp.get('description', '')
         expense_type = exp.get('type', 'transaction')
         category = exp.get('category', 'Прочее')
+        is_income = bool(exp.get('is_income', False))
         
         draft_id = db.create_expense_draft(
             telegram_user_id=user_id,
@@ -2506,6 +2507,7 @@ def api_import_batch():
             expense_type=expense_type,
             category=category,
             source='cash',
+            is_income=is_income,
             created_at=date_str
         )
         
