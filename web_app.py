@@ -3158,12 +3158,71 @@ def api_process_expenses(validated=None):
                     if not account_id and finance_accounts:
                         account_id = int(finance_accounts[0]['account_id'])
 
+                    # Resolve category ID from draft
+                    income_cats = await client.get_categories()
+                    expense_cats = await client.get_expense_categories()
+                    categories = income_cats + expense_cats
+
+                    # Build category map (name -> id)
+                    category_map = {}
+                    for cat in categories:
+                        cat_name = cat.get('category_name', '') or cat.get('name', '')
+                        if cat_name:
+                            category_map[cat_name.lower().strip()] = int(cat.get('category_id', 1))
+
+                    # Define default category priority
+                    default_categories = ['хозяйственные расходы', 'прочее', 'единовременный расход']
+                    default_cat_id = 1
+                    for default_name in default_categories:
+                        if default_name in category_map:
+                            default_cat_id = category_map[default_name]
+                            break
+                    if not default_cat_id and category_map:
+                        default_cat_id = list(category_map.values())[0]
+
+                    draft_category = (draft.get('category') or '').lower().strip()
+                    cat_id = None
+
+                    # 1. Exact match
+                    if draft_category in category_map:
+                        cat_id = category_map[draft_category]
+
+                    # 2. Partial match
+                    if not cat_id:
+                        for poster_cat_name, poster_cat_id in category_map.items():
+                            if draft_category in poster_cat_name or poster_cat_name in draft_category:
+                                cat_id = poster_cat_id
+                                break
+
+                    # 3. Smart mapping based on common keywords
+                    if not cat_id and draft_category:
+                        keyword_mapping = {
+                            ('зарплата', 'зп', 'аванс', 'оклад'): 'зарплата',
+                            ('доставка', 'логистика', 'курьер', 'транспорт'): 'логистика',
+                            ('маркетинг', 'реклама', 'продвижение'): 'маркетинг',
+                            ('аренда', 'офис', 'помещение'): 'аренда',
+                            ('коммуналка', 'свет', 'вода', 'газ', 'отопление'): 'коммунальные',
+                            ('банк', 'комиссия', 'эквайринг'): 'банковские',
+                            ('уборка', 'мыло', 'моющ', 'хоз', 'расход'): 'хозяйственные расходы',
+                        }
+                        for keywords, target_cat in keyword_mapping.items():
+                            if any(kw in draft_category for kw in keywords):
+                                for poster_cat_name, poster_cat_id in category_map.items():
+                                    if target_cat in poster_cat_name:
+                                        cat_id = poster_cat_id
+                                        break
+                                break
+
+                    # 4. Default fallback
+                    if not cat_id:
+                        cat_id = default_cat_id or 1
+
                     # Create transaction in Poster
                     is_income = bool(draft.get('is_income'))
                     txn_type = 1 if is_income else 0
                     new_txn_id = await client.create_transaction(
                         transaction_type=txn_type,
-                        category_id=1,  # default category
+                        category_id=cat_id,
                         account_from_id=account_id or 1,
                         amount=int(draft['amount']),
                         comment=draft.get('description', '')
@@ -3519,7 +3578,9 @@ def process_drafts():
 
                 try:
                     finance_accounts = await client.get_accounts()
-                    categories = await client.get_categories()
+                    income_cats = await client.get_categories()
+                    expense_cats = await client.get_expense_categories()
+                    categories = income_cats + expense_cats
 
                     # Debug: print all categories from Poster
                     logger.debug(f"Categories from Poster for {account['account_name']}:")
