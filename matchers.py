@@ -310,6 +310,7 @@ class SupplierMatcher:
             self.csv_path = config.DATA_DIR / "poster_suppliers.csv"
 
         self.load_suppliers()
+        self.load_aliases()
 
     def load_suppliers(self):
         """Load suppliers from CSV"""
@@ -346,6 +347,31 @@ class SupplierMatcher:
                             self.normalized_aliases[norm_alias] = supplier_id
 
         logger.info(f"Loaded {len(self.suppliers)} suppliers with {len(self.aliases)} aliases ({len(self.normalized_aliases)} normalized) for user {self.telegram_user_id}")
+
+    def load_aliases(self):
+        """Load supplier aliases from database"""
+        if self.telegram_user_id:
+            try:
+                from database import get_database
+                db = get_database()
+                db_aliases = db.get_supplier_aliases(self.telegram_user_id)
+                
+                logger.info(f"📋 Found {len(db_aliases)} supplier aliases in database for user {self.telegram_user_id}")
+                
+                for row in db_aliases:
+                    alias_text = row['alias_text'].strip().lower()
+                    supplier_id = int(row['poster_supplier_id'])
+                    
+                    # Verify supplier exists in our database/CSV
+                    if supplier_id in self.suppliers:
+                        self.aliases[alias_text] = supplier_id
+                        norm_alias = normalize_supplier_text(alias_text)
+                        if norm_alias:
+                            self.normalized_aliases[norm_alias] = supplier_id
+                            
+                logger.info(f"✅ Loaded supplier aliases from database for user {self.telegram_user_id}")
+            except Exception as e:
+                logger.warning(f"Could not load supplier aliases from database: {e}")
 
     def match(self, text: str, score_cutoff: int = 80) -> Optional[int]:
         """Match supplier by text"""

@@ -2584,6 +2584,7 @@ def api_import_batch():
             )
             if success_id:
                 linked_supplies_count += 1
+        else:
             # Не привязалась ни к одному расходу. Создаем новый расход Kaspi Pay
             resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
             draft_id = db.create_expense_draft(
@@ -4032,6 +4033,41 @@ def update_supply_draft(draft_id):
         update_fields['source'] = str(data['source'])
 
     if update_fields:
+        # Check if supplier_id is being updated, to auto-learn a supplier alias
+        if 'supplier_id' in update_fields and update_fields['supplier_id']:
+            try:
+                draft = db.get_supply_draft_with_items(draft_id)
+                if draft:
+                    old_supplier_name = draft.get('supplier_name')
+                    new_supplier_name = update_fields.get('supplier_name') or data.get('supplier_name')
+                    supplier_id = update_fields['supplier_id']
+                    
+                    if not new_supplier_name:
+                        # Try to get supplier name from matcher
+                        from matchers import get_supplier_matcher
+                        supplier_matcher = get_supplier_matcher(g.user_id)
+                        new_supplier_name = supplier_matcher.get_supplier_name(supplier_id)
+                        
+                    if old_supplier_name and new_supplier_name and old_supplier_name.strip().lower() != new_supplier_name.strip().lower():
+                        cleaned_old = old_supplier_name.strip()
+                        # Avoid generic placeholders
+                        if cleaned_old and cleaned_old not in ['Неизвестный поставщик', 'Поставка', 'Фарш'] and len(cleaned_old) > 2:
+                            logger.info(f"Auto-learning supplier alias: '{cleaned_old}' -> ID {supplier_id} ('{new_supplier_name}') for user {g.user_id}")
+                            db.add_supplier_alias(
+                                telegram_user_id=g.user_id,
+                                alias_text=cleaned_old,
+                                poster_supplier_id=supplier_id,
+                                poster_supplier_name=new_supplier_name,
+                                notes="Авто-обучено при редактировании черновика"
+                            )
+                            # Reload matcher cache
+                            from matchers import get_supplier_matcher
+                            supplier_matcher = get_supplier_matcher(g.user_id)
+                            supplier_matcher.load_suppliers()
+                            supplier_matcher.load_aliases()
+            except Exception as alias_err:
+                logger.error(f"Error saving auto-learned supplier alias: {alias_err}")
+
         success = db.update_supply_draft(draft_id, telegram_user_id=g.user_id, **update_fields)
 
         # Sync source to linked expense draft if changed
