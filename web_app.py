@@ -5743,10 +5743,7 @@ def api_cafe_debug_wedrink():
                 debug_info['method'] = f'get_categories (fallback after {str(e)})'
                 
             debug_info['categories_count'] = len(categories)
-            debug_info['all_categories'] = [
-                {'id': c.get('category_id'), 'name': c.get('category_name')}
-                for c in categories
-            ]
+            debug_info['all_categories'] = categories[:5] # just show first 5 objects to see their keys
             
             expense_cat_id = None
             for c in categories:
