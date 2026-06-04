@@ -5652,9 +5652,9 @@ def api_cafe_transfers():
                             
                         expense_cat_id = None
                         for c in categories:
-                            cat_name = c.get('category_name', '').lower()
+                            cat_name = (c.get('name') or c.get('category_name') or '').lower()
                             if 'единовремен' in cat_name or 'разовый' in cat_name:
-                                expense_cat_id = c.get('category_id')
+                                expense_cat_id = c.get('category_id') or c.get('id')
                                 break
                         
                         if expense_cat_id:
@@ -5673,7 +5673,7 @@ def api_cafe_transfers():
                                 results.append({'name': 'Расход WeDrink', 'amount': int(round(wedrink_sales)), 'tx_id': tx_id})
                                 logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
                         else:
-                            cat_names = [c.get('category_name') for c in categories]
+                            cat_names = [c.get('name') or c.get('category_name') for c in categories]
                             logger.error(f"[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense. Available categories: {cat_names}")
                     except Exception as e:
                         logger.error(f"[CAFE TRANSFER] Failed to process WeDrink expense: {e}")
@@ -5747,10 +5747,10 @@ def api_cafe_debug_wedrink():
             
             expense_cat_id = None
             for c in categories:
-                cat_name = c.get('category_name', '').lower()
+                cat_name = (c.get('name') or c.get('category_name') or '').lower()
                 if 'единовремен' in cat_name or 'разовый' in cat_name:
-                    expense_cat_id = c.get('category_id')
-                    debug_info['matched_category'] = {'id': expense_cat_id, 'name': c.get('category_name')}
+                    expense_cat_id = c.get('category_id') or c.get('id')
+                    debug_info['matched_category'] = {'id': expense_cat_id, 'name': c.get('name') or c.get('category_name')}
                     break
                     
             if not expense_cat_id:
