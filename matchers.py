@@ -32,6 +32,54 @@ def normalize_text_for_matching(text: str) -> str:
 
     return text
 
+def normalize_supplier_text(text: str) -> str:
+    """Normalize supplier name by removing quotes, legal forms, and standardizing spaces."""
+    if not text:
+        return ""
+    import re
+    # Lowercase
+    t = text.lower().strip()
+    # Remove quotes and common symbols
+    t = re.sub(r'["\'«»“”`~!@#$%^&*()_+=]', '', t)
+    # Remove common corporate prefixes/suffixes (legal forms)
+    prefixes = [
+        r'\bтоварищество\s+с\s+ограниченной\s+ответственностью\b',
+        r'\bограниченной\s+ответственностью\b',
+        r'\bтоварищество\b',
+        r'\bиндивидуальный\s+предприниматель\b',
+        r'\bакционерное\s+общество\b',
+        r'\bтоо\b',
+        r'\bип\b',
+        r'\bао\b',
+        r'\bллп\b',
+        r'\bllp\b',
+    ]
+    for pattern in prefixes:
+        t = re.sub(pattern, '', t)
+    # Strip remaining spaces and punctuation
+    t = t.strip(' .,-()')
+    # Replace multiple spaces with a single space
+    t = re.sub(r'\s+', ' ', t)
+    return t
+
+
+def transliterate_latin_to_cyrillic(text: str) -> str:
+    """Transliterate basic English phonetics of supplier names to Cyrillic."""
+    if not text:
+        return ""
+    translit_map = {
+        'shch': 'щ', 'sh': 'ш', 'ch': 'ч', 'zh': 'ж', 'yo': 'ё', 'yu': 'ю', 'ya': 'я', 'kh': 'х', 'ts': 'ц',
+        'a': 'а', 'b': 'б', 'v': 'в', 'g': 'г', 'd': 'д', 'e': 'е', 'z': 'з', 'i': 'и', 'j': 'й',
+        'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н', 'o': 'о', 'p': 'п', 'r': 'р', 's': 'с',
+        't': 'т', 'u': 'у', 'f': 'ф', 'h': 'х', 'c': 'к', 'y': 'и', 'x': 'кс', 'w': 'в', 'q': 'к'
+    }
+    res = text.lower()
+    # Sort keys by length descending to match multi-char sequences first
+    for key in sorted(translit_map.keys(), key=len, reverse=True):
+        res = res.replace(key, translit_map[key])
+    return res
+
+
 
 class CategoryMatcher:
     """Matcher for finance categories using aliases"""
@@ -250,6 +298,7 @@ class SupplierMatcher:
         self.telegram_user_id = telegram_user_id
         self.suppliers: Dict[int, Dict] = {}  # supplier_id -> supplier_info
         self.aliases: Dict[str, int] = {}  # alias -> supplier_id
+        self.normalized_aliases: Dict[str, int] = {}  # normalized_alias -> supplier_id
 
         # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
@@ -281,42 +330,80 @@ class SupplierMatcher:
                 }
 
                 # Add main name as alias
-                self.aliases[name.lower()] = supplier_id
+                name_clean = name.lower()
+                self.aliases[name_clean] = supplier_id
+                norm_name = normalize_supplier_text(name_clean)
+                if norm_name:
+                    self.normalized_aliases[norm_name] = supplier_id
 
                 # Add additional aliases
                 if aliases_str:
                     for alias in aliases_str.split('|'):
-                        self.aliases[alias.strip().lower()] = supplier_id
+                        alias_clean = alias.strip().lower()
+                        self.aliases[alias_clean] = supplier_id
+                        norm_alias = normalize_supplier_text(alias_clean)
+                        if norm_alias:
+                            self.normalized_aliases[norm_alias] = supplier_id
 
-        logger.info(f"Loaded {len(self.suppliers)} suppliers with {len(self.aliases)} aliases for user {self.telegram_user_id}")
+        logger.info(f"Loaded {len(self.suppliers)} suppliers with {len(self.aliases)} aliases ({len(self.normalized_aliases)} normalized) for user {self.telegram_user_id}")
 
     def match(self, text: str, score_cutoff: int = 80) -> Optional[int]:
         """Match supplier by text"""
         if not text:
             return None
 
+        # 1. First, try exact match on raw lower text
         text_lower = text.strip().lower()
-
-        # 1. Exact match
         if text_lower in self.aliases:
             supplier_id = self.aliases[text_lower]
-            logger.debug(f"Supplier exact match: '{text}' -> {supplier_id}")
+            logger.info(f"Supplier exact match: '{text}' -> {supplier_id}")
             return supplier_id
 
-        # 2. Fuzzy match
-        aliases_list = list(self.aliases.keys())
-        match = process.extractOne(
-            text_lower,
-            aliases_list,
-            scorer=fuzz.WRatio,
-            score_cutoff=score_cutoff
-        )
+        # 2. Try exact match on normalized text
+        norm_text = normalize_supplier_text(text)
+        if norm_text in self.normalized_aliases:
+            supplier_id = self.normalized_aliases[norm_text]
+            logger.info(f"Supplier exact match (normalized): '{text}' -> {supplier_id}")
+            return supplier_id
 
-        if match:
-            matched_alias = match[0]
-            score = match[1]
-            supplier_id = self.aliases[matched_alias]
-            logger.debug(f"Supplier fuzzy match: '{text}' -> {supplier_id} (score={score})")
+        # 3. Transliterate normalized text and try exact match
+        translit_text = transliterate_latin_to_cyrillic(norm_text)
+        if translit_text in self.normalized_aliases:
+            supplier_id = self.normalized_aliases[translit_text]
+            logger.info(f"Supplier exact match (transliterated): '{text}' -> {supplier_id}")
+            return supplier_id
+
+        # 4. Fuzzy match normalized and transliterated text against normalized aliases
+        candidates = [norm_text]
+        if translit_text != norm_text:
+            candidates.append(translit_text)
+            
+        norm_aliases_list = list(self.normalized_aliases.keys())
+        if not norm_aliases_list:
+            return None
+            
+        best_match = None
+        best_score = -1
+        
+        for candidate in candidates:
+            if not candidate:
+                continue
+            match = process.extractOne(
+                candidate,
+                norm_aliases_list,
+                scorer=fuzz.WRatio,
+                score_cutoff=score_cutoff
+            )
+            if match:
+                matched_alias = match[0]
+                score = match[1]
+                if score > best_score:
+                    best_score = score
+                    best_match = matched_alias
+
+        if best_match and best_score >= score_cutoff:
+            supplier_id = self.normalized_aliases[best_match]
+            logger.info(f"Supplier fuzzy match (normalized/translit): '{text}' -> {supplier_id} (score={best_score}, matched_alias='{best_match}')")
             return supplier_id
 
         logger.warning(f"Supplier not matched: '{text}'")

@@ -830,21 +830,35 @@ def api_last_supply(supplier_id):
             supplier_id=supplier_id
         )
 
-        # Group by item and get most recent for each (limit to last 50 unique items)
-        items_dict = {}
-        for record in recent_items:
-            item_id = record['ingredient_id']
-            if item_id not in items_dict and len(items_dict) < 50:
-                items_dict[item_id] = {
-                    'id': item_id,
-                    'name': record['ingredient_name'],
-                    'price': float(record['price']),
-                    'quantity': float(record['quantity']) if record.get('quantity') else 1.0,
-                    'unit': record.get('unit', 'шт'),
-                    'date': record['date']
-                }
+        items = []
+        if recent_items:
+            # The first record is the most recent one (sorted by date DESC)
+            latest_record = recent_items[0]
+            latest_supply_id = latest_record.get('supply_id')
+            latest_date = latest_record.get('date')
 
-        items = list(items_dict.values())
+            filtered_records = []
+            if latest_supply_id:
+                # Filter by the same supply_id
+                filtered_records = [r for r in recent_items if r.get('supply_id') == latest_supply_id]
+            else:
+                # Filter by the same date
+                filtered_records = [r for r in recent_items if r.get('date') == latest_date]
+
+            # Group by item and get details
+            items_dict = {}
+            for record in filtered_records:
+                item_id = record['ingredient_id']
+                if item_id not in items_dict:
+                    items_dict[item_id] = {
+                        'id': item_id,
+                        'name': record['ingredient_name'],
+                        'price': float(record['price']),
+                        'quantity': float(record['quantity']) if record.get('quantity') else 1.0,
+                        'unit': record.get('unit', 'шт'),
+                        'date': record['date']
+                    }
+            items = list(items_dict.values())
 
         return jsonify({
             'supplier_id': supplier_id,
@@ -2570,12 +2584,12 @@ def api_import_batch():
             )
             if success_id:
                 linked_supplies_count += 1
-        else:
             # Не привязалась ни к одному расходу. Создаем новый расход Kaspi Pay
+            resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
             draft_id = db.create_expense_draft(
                 telegram_user_id=user_id,
                 amount=total_sum,
-                description=supplier_name or 'Поставка (неизвестный поставщик)',
+                description=resolved_supplier_name or 'Поставка (неизвестный поставщик)',
                 expense_type='supply',
                 category='Прочее',
                 source='kaspi',

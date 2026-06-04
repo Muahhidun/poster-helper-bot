@@ -254,7 +254,7 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
    - Наименование товара / Товар / Название
    - Количество / Кол-во / Вес
    - Цена / Цена за ед. / Стоимость
-   - Сумма / Итого (можно игнорировать, мы посчитаем сами)
+   - Сумма / Итого (извлеки как "sum", это критически важно для проверки расчетов)
 
 3. **ЕСЛИ ЭТО РУКОПИСНЫЙ ТЕКСТ (НАПИСАНО РУЧКОЙ)**:
    - Часто накладная написана от руки.
@@ -264,7 +264,7 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
      1. name: слова до первой цифры ("помидор", "огурцы", "айсберг")
      2. qty: первая группа цифр до знака "х" (например 18.1, 7.6)
      3. price: группа цифр после знака "х" до знака "=" (например 1100, 900)
-     4. ИГНОРИРУЙ сумму после знака "=" (например 19910, 6840).
+     4. Извлеки сумму после знака "=" как "sum".
 
 4. **Единицы измерения**: кг, шт, л, упак
 
@@ -295,7 +295,7 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
    - Артикулы, коды товаров
    - НДС, налоги
    - Сумма без НДС, с НДС
-   - Нас интересуют только: название, количество, цена за единицу
+   - Нас интересуют только: название, количество, цена за единицу, и общая сумма по строке ("sum")
 
 5. **Если текст нечёткий**:
    - ВСЁ РАВНО попытайся распознать (сделай лучшее предположение)
@@ -313,7 +313,8 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
     {{
       "name": "<полное название товара из накладной>",
       "qty": <количество числом>,
-      "price": <цена за единицу числом>
+      "price": <цена за единицу числом>,
+      "sum": <общая сумма по строке (qty * price) из накладной>
     }}
   ],
   "unrecognized_items": [
@@ -326,8 +327,8 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
 ПРИМЕРЫ:
 
 Пример 1 (накладная от "Фирма ИртышИнтерФуд"):
-- Товар 1: Филе ЦБ, групп, охл | 2760.00 кг | 2160.00 тг/кг
-- Товар 2: Крыло ЦБ, групп, охл | 567.30 кг | 502.30 тг/кг
+- Товар 1: Филе ЦБ, групп, охл | 2760.00 кг | 2160.00 тг/кг | Сумма: 5961600.00
+- Товар 2: Крыло ЦБ, групп, охл | 567.30 кг | 502.30 тг/кг | Сумма: 284954.79
 
 Результат:
 {{
@@ -335,8 +336,8 @@ INVOICE_PARSER_PROMPT = """Ты — эксперт по распознавани
   "supplier": "Фирма ИртышИнтерФуд",
   "account": null,
   "items": [
-    {{"name": "Филе ЦБ, групп, охл", "qty": 2760.00, "price": 2160.00}},
-    {{"name": "Крыло ЦБ, групп, охл", "qty": 567.30, "price": 502.30}}
+    {{"name": "Филе ЦБ, групп, охл", "qty": 2760.00, "price": 2160.00, "sum": 5961600.00}},
+    {{"name": "Крыло ЦБ, групп, охл", "qty": 567.30, "price": 502.30, "sum": 284954.79}}
   ],
   "unrecognized_items": [],
   "total": null,
@@ -364,7 +365,7 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
 - type: тип расхода ("transaction" для зарплат, такси, хозтоваров, аренды; "supply" для покупки продуктов питания, например: фарш, сыр, помидоры, мясо)
 - category: примерная категория ("Зарплаты", "Хозтовары", "Транспорт", "Прочее")
 - items: если в строке с расходом прямо указаны детали (например, "Фарш 12кг по 2800" или "сыр 5кг х 2600" или "молоко 10л х 450"), выдели их в массив:
-  [{"name": "<название>", "qty": <кол-во>, "price": <цена за единицу>}]
+  [{"name": "<название>", "qty": <кол-во>, "price": <цена за единицу>, "sum": <сумма по строке (qty * price)>}]
 
 Б. Если это "printed_invoice":
 Извлеки данные накладной в объект "invoice":
@@ -374,6 +375,7 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
   - name: полное наименование товара
   - qty: количество (число)
   - price: цена за единицу (число)
+  - sum: общая сумма по строке (число)
   *ВАЖНО:* Пересчитывай фасовки! Если в названии указан вес упаковки (например "Фри 2.5кг"), а в количестве штуки (например 2 шт) по цене 4000 за шт, пересчитай в базовые единицы: qty=5.0, price=1600.0.
 
 ФОРМАТ JSON ОТВЕТА:
@@ -393,7 +395,7 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
       "description": "Фарш 10 кг",
       "type": "supply",
       "category": "Прочее",
-      "items": [{"name": "Фарш", "qty": 10.0, "price": 4600.0}]
+      "items": [{"name": "Фарш", "qty": 10.0, "price": 4600.0, "sum": 46000.0}]
     }
   ],
   
@@ -402,8 +404,8 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
     "supplier": "Название поставщика",
     "total_sum": 25400,
     "items": [
-      {"name": "Фри дольки", "qty": 10.0, "price": 1200.0},
-      {"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0}
+      {"name": "Фри дольки", "qty": 10.0, "price": 1200.0, "sum": 12000.0},
+      {"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0, "sum": 13400.0}
     ]
   }
 }
@@ -649,7 +651,7 @@ class ParserService:
                                 json_text = self._extract_json(response_text)
                                 parsed = json.loads(json_text)
                                 logger.info(f"✅ Invoice parsed successfully with Gemini. Items: {len(parsed.get('items', []))}")
-                                return parsed
+                                return self._reconcile_invoice_items(parsed)
                             else:
                                 error_text = await resp.text()
                                 logger.warning(f"Gemini API returned error status {resp.status}: {error_text}")
@@ -781,7 +783,7 @@ class ParserService:
                 logger.warning("Parsed invoice has no items")
                 return None
 
-            return parsed
+            return self._reconcile_invoice_items(parsed)
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse Claude Vision response as JSON: {e}")
@@ -834,7 +836,7 @@ class ParserService:
                             json_text = self._extract_json(response_text)
                             parsed = json.loads(json_text)
                             logger.info(f"✅ Batch image parsed successfully with Gemini. Type: {parsed.get('document_type')}")
-                            return parsed
+                            return self._reconcile_invoice_items(parsed)
                         else:
                             error_text = await resp.text()
                             logger.error(f"Gemini API error (status {resp.status}): {error_text}")
@@ -874,7 +876,7 @@ class ParserService:
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
             logger.info(f"✅ Batch image parsed successfully with OpenAI. Type: {parsed.get('document_type')}")
-            return parsed
+            return self._reconcile_invoice_items(parsed)
             
         except Exception as e:
             logger.error(f"Failed to parse batch image: {e}")
@@ -903,7 +905,7 @@ class ParserService:
 - type: тип расхода ("transaction" для зарплат, такси, хозтоваров, аренды; "supply" для покупки продуктов питания, например: фарш, сыр, помидоры, мясо)
 - category: примерная категория ("Зарплаты", "Хозтовары", "Транспорт", "Прочее")
 - items: если в строке с расходом прямо указаны детали (например, "Фарш 12кг по 2800" или "сыр 5кг х 2600" или "молоко 10л х 450"), выдели их в массив:
-  [{{"name": "<название>", "qty": <кол-во>, "price": <цена за единицу>}}]
+  [{{"name": "<название>", "qty": <кол-во>, "price": <цена за единицу>, "sum": <сумма по строке (qty * price)>}}]
 
 Б. Если это "printed_invoice":
 Извлеки данные накладной в объект "invoice":
@@ -913,6 +915,7 @@ class ParserService:
   - name: полное наименование товара
   - qty: количество (число)
   - price: цена за единицу (число)
+  - sum: общая сумма по строке (число)
 
 ФОРМАТ JSON ОТВЕТА:
 {{
@@ -931,7 +934,7 @@ class ParserService:
       "description": "Фарш 10 кг",
       "type": "supply",
       "category": "Прочее",
-      "items": [{{"name": "Фарш", "qty": 10.0, "price": 4600.0}}]
+      "items": [{{"name": "Фарш", "qty": 10.0, "price": 4600.0, "sum": 46000.0}}]
     }}
   ],
   
@@ -940,8 +943,8 @@ class ParserService:
     "supplier": "Название поставщика",
     "total_sum": 25400,
     "items": [
-      {{"name": "Фри дольки", "qty": 10.0, "price": 1200.0}},
-      {{"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0}}
+      {{"name": "Фри дольки", "qty": 10.0, "price": 1200.0, "sum": 12000.0}},
+      {{"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0, "sum": 13400.0}}
     ]
   }}
 }}
@@ -982,7 +985,7 @@ class ParserService:
                             json_text = self._extract_json(response_text)
                             parsed = json.loads(json_text)
                             logger.info(f"✅ Batch text parsed successfully with Gemini. Type: {parsed.get('document_type')}")
-                            return parsed
+                            return self._reconcile_invoice_items(parsed)
                         else:
                             error_text = await resp.text()
                             logger.error(f"Gemini API error (status {resp.status}): {error_text}")
@@ -1009,11 +1012,100 @@ class ParserService:
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
             logger.info(f"✅ Batch text parsed successfully with OpenAI. Type: {parsed.get('document_type')}")
-            return parsed
+            return self._reconcile_invoice_items(parsed)
             
         except Exception as e:
             logger.error(f"Failed to parse batch text: {e}")
             raise Exception(f"Text parsing error: {str(e)}")
+
+    def _reconcile_invoice_items(self, parsed: Optional[Dict]) -> Optional[Dict]:
+        """
+        Reconcile invoice items: verify and adjust qty, price, and total sum based on the row sums.
+        """
+        if not parsed:
+            return parsed
+            
+        doc_type = parsed.get('document_type')
+        if doc_type == 'printed_invoice' and 'invoice' in parsed:
+            parsed['invoice'] = self._reconcile_invoice_data(parsed['invoice'])
+        elif parsed.get('type') == 'supply':
+            # This is from parse_invoice_image which returns {type: 'supply', items: [...]}
+            parsed = self._reconcile_invoice_data(parsed)
+            
+        return parsed
+
+    def _reconcile_invoice_data(self, invoice: Dict) -> Dict:
+        if not invoice or 'items' not in invoice:
+            return invoice
+            
+        total_sum_calculated = 0.0
+        
+        for item in invoice.get('items', []):
+            name = item.get('name', '')
+            qty = item.get('qty')
+            price = item.get('price')
+            row_sum = item.get('sum')
+            
+            try:
+                qty = float(qty) if qty is not None else None
+                price = float(price) if price is not None else None
+                row_sum = float(row_sum) if row_sum is not None else None
+            except (ValueError, TypeError):
+                pass
+                
+            if row_sum is not None and row_sum > 0:
+                if qty is not None and price is not None and qty > 0 and price > 0:
+                    expected_sum = qty * price
+                    # Math check (with 1.0 margin of error)
+                    if abs(expected_sum - row_sum) > 1.0:
+                        logger.warning(f"Reconciliation mismatch for '{name}': {qty} * {price} = {expected_sum} vs actual sum {row_sum}")
+                        # 1. Try to correct quantity (if price is correct)
+                        # e.g., sum=14560, price=1820 -> new_qty=8
+                        new_qty = row_sum / price
+                        if abs(new_qty - round(new_qty)) < 0.01:
+                            logger.info(f"Reconciliation: corrected qty of '{name}' from {qty} to {round(new_qty)} based on price {price} and sum {row_sum}")
+                            qty = float(round(new_qty))
+                        else:
+                            # 2. Try to correct price
+                            new_price = row_sum / qty
+                            logger.info(f"Reconciliation: corrected price of '{name}' from {price} to {new_price} based on qty {qty} and sum {row_sum}")
+                            price = new_price
+                elif (qty is None or qty == 0) and price is not None and price > 0:
+                    qty = row_sum / price
+                    logger.info(f"Reconciliation: reconstructed qty of '{name}' as {qty} from sum {row_sum} and price {price}")
+                elif (price is None or price == 0) and qty is not None and qty > 0:
+                    price = row_sum / qty
+                    logger.info(f"Reconciliation: reconstructed price of '{name}' as {price} from sum {row_sum} and qty {qty}")
+            else:
+                # Fallback: if sum is missing, compute it
+                if qty is not None and price is not None:
+                    row_sum = qty * price
+                    
+            item['qty'] = qty
+            item['price'] = price
+            item['sum'] = row_sum
+            
+            if row_sum is not None:
+                total_sum_calculated += row_sum
+                
+        # Reconcile total sum
+        total_key = 'total_sum' if 'total_sum' in invoice else ('total' if 'total' in invoice else None)
+        if not total_key:
+            # If both are missing, determine which to add
+            total_key = 'total' if 'type' in invoice else 'total_sum'
+            
+        try:
+            total_sum = float(invoice.get(total_key, 0.0))
+            if total_sum <= 0 and total_sum_calculated > 0:
+                invoice[total_key] = total_sum_calculated
+            elif abs(total_sum - total_sum_calculated) > 5.0 and total_sum_calculated > 0:
+                logger.warning(f"Reconciliation: replacing {total_key} {total_sum} with calculated sum {total_sum_calculated}")
+                invoice[total_key] = total_sum_calculated
+        except (ValueError, TypeError):
+            if total_sum_calculated > 0:
+                invoice[total_key] = total_sum_calculated
+                    
+        return invoice
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from Claude response text"""
