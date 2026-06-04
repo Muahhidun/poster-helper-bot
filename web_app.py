@@ -2356,7 +2356,7 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
         if item_id and item_type == 'ingredient':
             matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id and r['original_unit'].strip().lower() == unit), None)
             if matching_rule:
-                coef = matching_rule['coefficient']
+                coef = float(matching_rule['coefficient'])
                 target_unit = matching_rule.get('target_unit', 'кг')
                 qty = parsed_quantity * coef
                 price = parsed_price_per_unit / coef
@@ -2364,6 +2364,7 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
             else:
                 default_price = habits_dict.get(item_id)
                 if default_price:
+                    default_price = float(default_price)
                     total_sum_item = parsed_quantity * parsed_price_per_unit
                     if parsed_price_per_unit > default_price * 1.5 and abs(total_sum_item / default_price - round(total_sum_item / default_price)) < 0.05:
                         calculated_qty = round(total_sum_item / default_price)
@@ -2551,6 +2552,26 @@ def api_import_batch():
         total_sum = invoice.get('total_sum') or 0.0
         supplier_name = invoice.get('supplier', '')
         
+        # Check if there is already a draft with the same total_sum and similar supplier name on the same date to avoid duplicate parsing
+        from matchers import normalize_supplier_text
+        from datetime import datetime
+        existing_drafts = db.get_supply_drafts(user_id, status="pending")
+        is_duplicate = False
+        inv_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+        
+        for d in existing_drafts:
+            d_date = d.get('invoice_date', '')
+            if d_date == inv_date:
+                if abs(d.get('total_sum', 0.0) - total_sum) < 5.0:
+                    d_supp_clean = normalize_supplier_text(d.get('supplier_name', ''))
+                    inv_supp_clean = normalize_supplier_text(supplier_name)
+                    if d_supp_clean == inv_supp_clean or (d_supp_clean and inv_supp_clean and (d_supp_clean in inv_supp_clean or inv_supp_clean in d_supp_clean)):
+                        logger.warning(f"Skipping duplicate supply draft for '{supplier_name}' with sum {total_sum} on {inv_date}")
+                        is_duplicate = True
+                        break
+        if is_duplicate:
+            continue
+            
         best_candidate = None
         best_score = 0
         
