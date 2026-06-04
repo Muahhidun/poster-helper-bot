@@ -4672,11 +4672,16 @@ def process_supply(draft_id):
                 # Poster creates finance transactions with description "Поставка №{supply_id} от «...»"
                 supply_ids_str = ','.join(str(s['supply_id']) for s in created_supplies)
                 poster_txn_id = f"supply_{supply_ids_str}"
-                # Update source and poster_transaction_id on expense draft
+                
+                # Calculate actual supply sum to update the linked expense draft
+                total_actual_amount = sum(s['total'] for s in created_supplies)
+                
+                # Update source, poster_transaction_id, and amount on expense draft
                 update_ok = db.update_expense_draft(
                     draft['linked_expense_draft_id'],
                     source=draft.get('source', 'cash'),
-                    poster_transaction_id=poster_txn_id
+                    poster_transaction_id=poster_txn_id,
+                    amount=total_actual_amount
                 )
                 logger.info(f"🔗 Linked expense draft #{draft['linked_expense_draft_id']} → {poster_txn_id} (update_ok={update_ok})")
                 # Mark as in Poster (keeps it visible with green status)
