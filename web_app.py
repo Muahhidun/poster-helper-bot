@@ -5766,7 +5766,6 @@ def api_cafe_debug_wedrink():
             
         return debug_info
 
-    from database import run_async
     return jsonify(run_async(run_debug()))
 
 
