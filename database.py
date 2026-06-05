@@ -842,6 +842,9 @@ class UserDatabase:
         # Run migration to add packaging rules and habits
         self._migrate_packaging_and_habits()
 
+        # Run migration for assistant chat history
+        self._migrate_assistant_chat()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -5198,6 +5201,180 @@ class UserDatabase:
 
         conn.close()
         return [dict(row) for row in rows]
+
+    def _migrate_assistant_chat(self):
+        """Create assistant_chat_messages table for conversational interface"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS assistant_chat_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        sender TEXT NOT NULL,
+                        message_text TEXT NOT NULL,
+                        media_paths TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS assistant_chat_messages (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        sender VARCHAR(20) NOT NULL,
+                        message_text TEXT NOT NULL,
+                        media_paths TEXT,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ Created assistant_chat_messages table")
+        except Exception as e:
+            logger.error(f"❌ Failed to create assistant_chat_messages table: {e}")
+
+    def get_assistant_chat_history(self, telegram_user_id: int, limit: int = 50) -> list:
+        """Retrieve recent messages in assistant chat history"""
+        conn = self._get_connection()
+        
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT sender, message_text, media_paths, created_at
+                FROM assistant_chat_messages
+                WHERE telegram_user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (telegram_user_id, limit))
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in rows]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT sender, message_text, media_paths, created_at
+                FROM assistant_chat_messages
+                WHERE telegram_user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (telegram_user_id, limit))
+            rows = cursor.fetchall()
+            
+        conn.close()
+        
+        # We want history in chronological order (oldest first)
+        results = [dict(row) for row in rows]
+        results.reverse()
+        
+        # Deserialize JSON media_paths if present
+        import json
+        for msg in results:
+            if msg.get('media_paths'):
+                try:
+                    msg['media_paths'] = json.loads(msg['media_paths'])
+                except Exception:
+                    msg['media_paths'] = []
+            else:
+                msg['media_paths'] = []
+                
+        return results
+
+    def add_assistant_chat_message(self, telegram_user_id: int, sender: str, message_text: str, media_paths: Optional[list] = None) -> int:
+        """Add a new chat message to the assistant history"""
+        import json
+        media_json = json.dumps(media_paths or [])
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        msg_id = None
+        if DB_TYPE == "sqlite":
+            cursor.execute("""
+                INSERT INTO assistant_chat_messages (telegram_user_id, sender, message_text, media_paths)
+                VALUES (?, ?, ?, ?)
+            """, (telegram_user_id, sender, message_text, media_json))
+            msg_id = cursor.lastrowid
+        else:
+            cursor.execute("""
+                INSERT INTO assistant_chat_messages (telegram_user_id, sender, message_text, media_paths)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            """, (telegram_user_id, sender, message_text, media_json))
+            res = cursor.fetchone()
+            msg_id = res[0] if res else None
+            
+        conn.commit()
+        conn.close()
+        return msg_id
+
+    def clear_assistant_chat_history(self, telegram_user_id: int) -> bool:
+        """Clear all chat messages for this user"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        if DB_TYPE == "sqlite":
+            cursor.execute("DELETE FROM assistant_chat_messages WHERE telegram_user_id = ?", (telegram_user_id,))
+        else:
+            cursor.execute("DELETE FROM assistant_chat_messages WHERE telegram_user_id = %s", (telegram_user_id,))
+            
+        conn.commit()
+        conn.close()
+        return True
+
+    def get_supplier_ingredient_profiles(self, telegram_user_id: int) -> dict:
+        """
+        Build profiles mapping supplier names to lists of ingredients
+        they typically supply, based on processed supplies from the last 60 days.
+        """
+        from datetime import datetime, timedelta
+        date_limit = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT s.supplier_name, i.item_name
+            FROM supply_drafts s
+            JOIN supply_draft_items i ON s.id = i.supply_draft_id
+            WHERE s.telegram_user_id = {} AND s.status = 'processed' AND s.invoice_date >= {}
+        """
+        
+        if DB_TYPE == "sqlite":
+            cursor.execute(query.format("?", "?"), (telegram_user_id, date_limit))
+            rows = cursor.fetchall()
+        else:
+            cursor.execute(query.format("%s", "%s"), (telegram_user_id, date_limit))
+            rows = cursor.fetchall()
+            
+        conn.close()
+        
+        # Build mapping: Supplier -> Set of ingredient names
+        profiles = {}
+        for row in rows:
+            if isinstance(row, dict) or (hasattr(row, 'keys') and not isinstance(row, tuple)):
+                supplier = row.get('supplier_name')
+                item = row.get('item_name')
+            else:
+                supplier = row[0]
+                item = row[1]
+                
+            if not supplier or not item:
+                continue
+                
+            supplier_clean = supplier.strip()
+            item_clean = item.strip().lower()
+            
+            if supplier_clean not in profiles:
+                profiles[supplier_clean] = set()
+            profiles[supplier_clean].add(item_clean)
+            
+        # Convert sets to sorted lists for JSON serialization
+        return {k: sorted(list(v)) for k, v in profiles.items()}
+
 
 
 # Singleton instance

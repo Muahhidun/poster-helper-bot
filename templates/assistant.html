@@ -1,0 +1,1872 @@
+{% extends "base.html" %}
+
+{% block title %}Ассистент-Бухгалтер — PizzBurg{% endblock %}
+
+{% block content %}
+<style>
+    /* Premium Glassmorphism & Modern Assistant Styles */
+    .assistant-container {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 24px;
+        margin-top: 16px;
+        height: calc(100vh - 96px);
+        min-height: 500px;
+    }
+
+    @media (max-width: 1024px) {
+        .assistant-container {
+            grid-template-columns: 1fr;
+            height: auto;
+        }
+    }
+
+    /* Left Column: Chat Messenger */
+    .chat-panel {
+        display: flex;
+        flex-direction: column;
+        background: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(229, 231, 235, 0.7);
+        border-radius: var(--radius-xl);
+        box-shadow: var(--shadow-lg);
+        overflow: hidden;
+        height: 100%;
+        position: relative;
+    }
+
+    .chat-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid rgba(229, 231, 235, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #ffffff;
+    }
+
+    .chat-title-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .chat-title-icon {
+        font-size: 24px;
+        background: #f0fdf4;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: #0f7b6c;
+    }
+
+    .chat-title {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0;
+        color: var(--text-primary);
+    }
+
+    .chat-subtitle {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin: 0;
+    }
+
+    .btn-clear-chat {
+        background: transparent;
+        border: 1px solid #e5e7eb;
+        padding: 6px 12px;
+        border-radius: var(--radius-md);
+        font-size: 13px;
+        color: #ef4444;
+        font-weight: 500;
+        transition: var(--transition-fast);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn-clear-chat:hover {
+        background: #fef2f2;
+        border-color: #fee2e2;
+    }
+
+    /* Message List Container */
+    .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        background: #fafaf9;
+    }
+
+    .chat-welcome-box {
+        text-align: center;
+        max-width: 460px;
+        margin: auto;
+        padding: 30px 20px;
+        background: #ffffff;
+        border-radius: var(--radius-xl);
+        border: 1px dashed rgba(229, 231, 235, 1);
+        color: var(--text-secondary);
+    }
+
+    .chat-welcome-box h4 {
+        color: var(--text-primary);
+        font-weight: 600;
+        margin-bottom: 12px;
+    }
+
+    .chat-welcome-box p {
+        font-size: 14px;
+        line-height: 1.5;
+        margin-bottom: 0;
+    }
+
+    /* Chat bubble designs */
+    .msg-bubble-wrapper {
+        display: flex;
+        width: 100%;
+        margin-bottom: 4px;
+    }
+
+    .msg-bubble-wrapper.user {
+        justify-content: flex-end;
+    }
+
+    .msg-bubble-wrapper.assistant {
+        justify-content: flex-start;
+    }
+
+    .msg-bubble {
+        max-width: 75%;
+        padding: 12px 16px;
+        border-radius: 16px;
+        font-size: 14px;
+        line-height: 1.5;
+        position: relative;
+        animation: bubbleAppear 0.2s ease-out;
+        box-shadow: var(--shadow-sm);
+    }
+
+    @keyframes bubbleAppear {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg-bubble-wrapper.user .msg-bubble {
+        background: #f0fdf4;
+        color: #166534;
+        border: 1px solid #dcfce7;
+        border-bottom-right-radius: 4px;
+    }
+
+    .msg-bubble-wrapper.assistant .msg-bubble {
+        background: #ffffff;
+        color: var(--text-primary);
+        border: 1px solid #e5e7eb;
+        border-bottom-left-radius: 4px;
+    }
+
+    .msg-bubble-media {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+
+    .msg-bubble-img {
+        width: 100%;
+        aspect-ratio: 1;
+        object-fit: cover;
+        border-radius: var(--radius-md);
+        border: 1px solid rgba(0,0,0,0.06);
+        cursor: zoom-in;
+        transition: transform 0.2s;
+    }
+
+    .msg-bubble-img:hover {
+        transform: scale(1.03);
+    }
+
+    .msg-meta {
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-top: 4px;
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+    }
+
+    /* Typing Indicator */
+    .typing-indicator {
+        display: none;
+        align-self: flex-start;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        padding: 12px 16px;
+        border-radius: 16px;
+        border-bottom-left-radius: 4px;
+        margin-left: 20px;
+        margin-bottom: 16px;
+        box-shadow: var(--shadow-sm);
+    }
+
+    .typing-dots {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        height: 10px;
+    }
+
+    .typing-dots span {
+        width: 6px;
+        height: 6px;
+        background-color: var(--text-muted);
+        border-radius: 50%;
+        animation: typingDot 1.4s infinite ease-in-out both;
+    }
+
+    .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+    .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+    @keyframes typingDot {
+        0%, 80%, 100% { transform: scale(0); }
+        40% { transform: scale(1); }
+    }
+
+    /* Input panel */
+    .chat-input-panel {
+        padding: 16px 20px;
+        background: #ffffff;
+        border-top: 1px solid rgba(229, 231, 235, 0.7);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .file-preview-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .file-preview-item {
+        position: relative;
+        width: 60px;
+        height: 60px;
+        border-radius: var(--radius-md);
+        border: 1px solid #e5e7eb;
+        overflow: hidden;
+    }
+
+    .file-preview-item img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .file-preview-remove {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        background: rgba(0,0,0,0.6);
+        color: white;
+        border: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        cursor: pointer;
+        padding: 0;
+    }
+
+    .chat-input-form-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+    }
+
+    .chat-textarea-wrapper {
+        flex: 1;
+        position: relative;
+        border: 1px solid #e5e7eb;
+        border-radius: var(--radius-xl);
+        background: #fcfcfb;
+        transition: border-color 0.2s, box-shadow 0.2s;
+        display: flex;
+        align-items: flex-end;
+        padding: 6px 12px;
+    }
+
+    .chat-textarea-wrapper:focus-within {
+        border-color: #0f7b6c;
+        box-shadow: 0 0 0 3px rgba(15, 123, 108, 0.1);
+        background: #ffffff;
+    }
+
+    .chat-textarea {
+        width: 100%;
+        border: none;
+        outline: none;
+        background: transparent;
+        resize: none;
+        font-size: 14px;
+        line-height: 1.45;
+        padding: 6px 0;
+        max-height: 150px;
+        min-height: 24px;
+        color: var(--text-primary);
+    }
+
+    .btn-input-attachment {
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: var(--transition-fast);
+        margin-right: 4px;
+        flex-shrink: 0;
+    }
+
+    .btn-input-attachment:hover {
+        background: #f3f4f6;
+        color: var(--text-primary);
+    }
+
+    .btn-voice-dictate {
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: var(--transition-fast);
+        flex-shrink: 0;
+    }
+
+    .btn-voice-dictate:hover {
+        background: #f3f4f6;
+        color: #ef4444;
+    }
+
+    .btn-voice-dictate.recording {
+        color: white;
+        background: #ef4444 !important;
+        animation: micPulse 1.5s infinite;
+    }
+
+    @keyframes micPulse {
+        0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+        70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    .btn-send-message {
+        background: #0f7b6c;
+        border: none;
+        color: white;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: var(--transition-fast);
+        flex-shrink: 0;
+    }
+
+    .btn-send-message:hover {
+        background: #0a6b5f;
+        transform: translateY(-1px);
+    }
+
+    .btn-send-message:active {
+        transform: translateY(0);
+    }
+
+    /* Drag over overlay */
+    .drag-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(15, 123, 108, 0.08);
+        border: 2px dashed #0f7b6c;
+        border-radius: var(--radius-xl);
+        z-index: 100;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(4px);
+        pointer-events: none;
+    }
+
+    .drag-overlay-inner {
+        background: white;
+        padding: 20px 30px;
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        text-align: center;
+        pointer-events: none;
+    }
+
+    /* Right Column: Drafts Sidebar */
+    .drafts-sidebar {
+        display: flex;
+        flex-direction: column;
+        background: #ffffff;
+        border: 1px solid rgba(229, 231, 235, 0.7);
+        border-radius: var(--radius-xl);
+        box-shadow: var(--shadow-md);
+        height: 100%;
+        overflow: hidden;
+    }
+
+    .drafts-sidebar-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid rgba(229, 231, 235, 0.7);
+    }
+
+    .sidebar-title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+
+    .sidebar-title {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0;
+        color: var(--text-primary);
+    }
+
+    /* Date Nav Picker inside sidebar header */
+    .date-nav-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn-date-nav {
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        width: 28px;
+        height: 28px;
+        border-radius: var(--radius-sm);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        cursor: pointer;
+        color: var(--text-primary);
+        transition: var(--transition-fast);
+    }
+
+    .btn-date-nav:hover {
+        background: #e5e7eb;
+    }
+
+    .sidebar-date-picker {
+        border: 1px solid #e5e7eb;
+        background: white;
+        padding: 2px 8px;
+        font-size: 13px;
+        border-radius: var(--radius-sm);
+        font-weight: 500;
+        color: var(--text-primary);
+        outline: none;
+    }
+
+    /* Modern Tabs inside sidebar */
+    .sidebar-tabs {
+        display: flex;
+        border-bottom: 1px solid #e5e7eb;
+        background: #fafaf9;
+    }
+
+    .sidebar-tab-btn {
+        flex: 1;
+        background: transparent;
+        border: none;
+        padding: 10px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        cursor: pointer;
+        position: relative;
+        transition: var(--transition-fast);
+        outline: none;
+    }
+
+    .sidebar-tab-btn:hover {
+        color: var(--text-primary);
+        background: rgba(0,0,0,0.02);
+    }
+
+    .sidebar-tab-btn.active {
+        color: #0f7b6c;
+        font-weight: 600;
+    }
+
+    .sidebar-tab-btn.active::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: #0f7b6c;
+    }
+
+    /* Drafts content container */
+    .drafts-tab-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+    }
+
+    .drafts-account-section {
+        display: none;
+    }
+
+    .drafts-account-section.active {
+        display: block;
+    }
+
+    /* Miniature compact table for sidebar */
+    .sidebar-table-wrapper {
+        overflow-x: auto;
+        border-radius: var(--radius-md);
+        border: 1px solid #e9e9e7;
+    }
+
+    .sidebar-table-wrapper table {
+        margin: 0;
+        width: 100%;
+        min-width: 500px;
+        border-collapse: collapse;
+    }
+
+    .sidebar-table-wrapper th {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        padding: 8px 10px;
+        background: #fafaf9;
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    .sidebar-table-wrapper td {
+        padding: 6px 10px;
+        border-bottom: 1px solid #f1f1ef;
+        font-size: 13px;
+        vertical-align: middle;
+    }
+
+    /* Inputs styled for compact sidebar tables */
+    .sidebar-table-wrapper input[type="number"],
+    .sidebar-table-wrapper input[type="text"] {
+        border: 1px solid transparent;
+        background: transparent;
+        padding: 4px 6px;
+        font-size: 13px;
+        border-radius: var(--radius-sm);
+        transition: var(--transition-fast);
+        width: 100%;
+        outline: none;
+    }
+
+    .sidebar-table-wrapper input[type="number"]:hover,
+    .sidebar-table-wrapper input[type="text"]:hover {
+        border-color: #e5e7eb;
+        background: #fbfbfa;
+    }
+
+    .sidebar-table-wrapper input[type="number"]:focus,
+    .sidebar-table-wrapper input[type="text"]:focus {
+        border-color: #0f7b6c;
+        background: #ffffff;
+        box-shadow: 0 0 0 2px rgba(15, 123, 108, 0.05);
+    }
+
+    .sidebar-table-wrapper .amount {
+        position: relative;
+    }
+
+    .sidebar-table-wrapper .amount input {
+        font-weight: 600;
+        color: var(--text-primary);
+        text-align: right;
+    }
+
+    /* Badges & custom UI toggles */
+    .btn-completion, .btn-type, .btn-poster-account {
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        padding: 3px 6px;
+        border-radius: var(--radius-sm);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: var(--transition-fast);
+        white-space: nowrap;
+        outline: none;
+    }
+
+    .btn-completion:hover, .btn-type:hover, .btn-poster-account:hover {
+        background: #e5e7eb;
+        color: var(--text-primary);
+    }
+
+    .btn-completion {
+        padding: 2px 4px;
+        font-size: 13px;
+        background: transparent;
+        border: none;
+    }
+
+    .btn-delete {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        font-size: 13px;
+        opacity: 0.6;
+        transition: opacity 0.2s;
+        outline: none;
+    }
+
+    .btn-delete:hover {
+        opacity: 1;
+    }
+
+    /* Autocomplete */
+    .autocomplete-wrapper {
+        position: relative;
+    }
+
+    .autocomplete-results {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-md);
+        z-index: 1000;
+        max-height: 200px;
+        overflow-y: auto;
+        display: none;
+    }
+
+    .autocomplete-item {
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: var(--transition-fast);
+    }
+
+    .autocomplete-item:hover, .autocomplete-item.active {
+        background: #f3f4f6;
+        color: var(--text-primary);
+    }
+
+    /* Actions Panel */
+    .sidebar-actions-panel {
+        padding: 12px 16px;
+        background: #fafaf9;
+        border-top: 1px solid #e5e7eb;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .action-buttons-group {
+        display: flex;
+        gap: 6px;
+    }
+
+    .btn-sidebar-action {
+        padding: 6px 12px;
+        font-size: 12px;
+        font-weight: 500;
+        border-radius: var(--radius-md);
+        transition: var(--transition-fast);
+        outline: none;
+        border: none;
+    }
+
+    .btn-sidebar-action.primary {
+        background: #0f7b6c;
+        color: white;
+    }
+
+    .btn-sidebar-action.primary:hover {
+        background: #0a6b5f;
+    }
+
+    .btn-sidebar-action.secondary {
+        background: #ef4444;
+        color: white;
+    }
+
+    .btn-sidebar-action.secondary:hover {
+        background: #dc2626;
+    }
+
+    .btn-sidebar-action.outline {
+        background: transparent;
+        border: 1px solid #e5e7eb;
+        color: var(--text-secondary);
+    }
+
+    .btn-sidebar-action.outline:hover {
+        background: #f3f4f6;
+        color: var(--text-primary);
+    }
+
+    .selected-summary {
+        font-size: 12px;
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+
+    .section-summary-row {
+        margin-top: 10px;
+        display: flex;
+        justify-content: flex-end;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    /* Alignment & Mismatch Styles */
+    .poster-amount-badge {
+        display: block;
+        font-size: 9px;
+        color: #e03e3e;
+        margin-top: 2px;
+        background: #fef2f2;
+        border: 1px solid #fee2e2;
+        padding: 1px 3px;
+        border-radius: 3px;
+        text-align: right;
+        font-weight: 500;
+    }
+
+    .reconciliation-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 8px;
+    }
+
+    .reconciliation-row input {
+        width: 80px;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 12px;
+        text-align: right;
+        outline: none;
+    }
+
+    .reconciliation-row input:focus {
+        border-color: #0f7b6c;
+    }
+
+    .difference-value.positive { color: #22c55e; }
+    .difference-value.negative { color: #ef4444; }
+
+    /* Zoom modal */
+    .zoom-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.85);
+        z-index: 20000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        cursor: zoom-out;
+    }
+
+    .zoom-modal img {
+        max-width: 90%;
+        max-height: 90%;
+        object-fit: contain;
+        border-radius: var(--radius-md);
+        box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    }
+
+    /* Statuses styling */
+    .draft-row.completed { background-color: rgba(34, 197, 94, 0.03); }
+    .draft-row.partial { background-color: rgba(234, 179, 8, 0.03); }
+    .draft-row.poster-mismatch { background-color: rgba(239, 68, 68, 0.02); }
+</style>
+
+<div class="assistant-container">
+    <!-- Left Panel: Chat Messenger -->
+    <div class="chat-panel" id="chat-panel">
+        <div class="chat-header">
+            <div class="chat-title-wrapper">
+                <div class="chat-title-icon">🤖</div>
+                <div>
+                    <h3 class="chat-title">Ассистент-Бухгалтер</h3>
+                    <p class="chat-subtitle">Gemini AI в вашей бухгалтерии</p>
+                </div>
+            </div>
+            <button type="button" class="btn-clear-chat" onclick="clearChat()">
+                🧹 Очистить чат
+            </button>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+            {% if not chat_history %}
+                <div class="chat-welcome-box fade-in-up">
+                    <h4>Добро пожаловать в Ассистента! 👋</h4>
+                    <p>
+                        Я могу помочь вам автоматически разносить расходы и поставки.
+                        <br><br>
+                        <strong>Примеры действий:</strong>
+                        <ul class="text-start mb-0 mt-2" style="font-size: 13px;">
+                            <li>Прикрепите фото накладной или рукописного отчета и напишите: <em>«Это мясо от Япоши, оплатил с каспи»</em>.</li>
+                            <li>Надиктуйте голосом: <em>«Купили огурцы на 8000 тенге из кассы, поставщик Алимжан»</em>.</li>
+                            <li>Вставьте список трат: <em>«Мадина 12000, Фарш 46000 с каспи»</em>.</li>
+                        </ul>
+                    </p>
+                </div>
+            {% else %}
+                {% for msg in chat_history %}
+                    <div class="msg-bubble-wrapper {{ msg.sender }}">
+                        <div class="msg-bubble">
+                            {% if msg.media_paths %}
+                                <div class="msg-bubble-media">
+                                    {% for path in msg.media_paths %}
+                                        <img src="{{ path }}" class="msg-bubble-img" onclick="zoomImage(this.src)">
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            <div class="msg-text">{{ msg.message_text|replace('\n', '<br>')|safe }}</div>
+                            <div class="msg-meta">
+                                <span>{{ msg.created_at }}</span>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+
+        <!-- Typing Indicator -->
+        <div class="typing-indicator" id="typing-indicator">
+            <div class="typing-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+
+        <!-- Input Box -->
+        <div class="chat-input-panel">
+            <div class="file-preview-bar" id="file-preview-bar"></div>
+            <div class="chat-input-form-row">
+                <button type="button" class="btn-input-attachment" id="btn-attachment" title="Прикрепить фото (накладная, весы, чек)">
+                    📎
+                </button>
+                <input type="file" id="chat-file-input" multiple accept="image/*" style="display: none;">
+
+                <div class="chat-textarea-wrapper">
+                    <textarea class="chat-textarea" id="chat-input" placeholder="Задайте вопрос или напишите расходы..." rows="1"></textarea>
+                </div>
+
+                <button type="button" class="btn-voice-dictate" id="btn-voice" title="Надиктовать голосом">
+                    🎤
+                </button>
+
+                <button type="button" class="btn-send-message" id="btn-send" title="Отправить">
+                    ➔
+                </button>
+            </div>
+        </div>
+
+        <!-- Drag Over Overlay -->
+        <div class="drag-overlay" id="drag-overlay">
+            <div class="drag-overlay-inner">
+                <h5>📥 Перетащите фото сюда</h5>
+                <p class="text-muted mb-0">Изображения будут прикреплены к вашему сообщению</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Panel: Drafts Sidebar -->
+    <div class="drafts-sidebar">
+        <div class="drafts-sidebar-header">
+            <div class="sidebar-title-row">
+                <h3 class="sidebar-title">Черновики дня</h3>
+                
+                <!-- Date Picker Navigation -->
+                <div class="date-nav-wrapper">
+                    <button type="button" class="btn-date-nav" onclick="navigateDay(-1)">&larr;</button>
+                    <input type="date" class="sidebar-date-picker" id="sidebar-date-picker" 
+                           value="{{ selected_date }}" data-today="{{ today }}">
+                    <button type="button" class="btn-date-nav" onclick="navigateDay(1)">&rarr;</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar Tabs -->
+        <div class="sidebar-tabs">
+            <button class="sidebar-tab-btn active" onclick="switchTab('cash')" id="tab-btn-cash">Наличка</button>
+            <button class="sidebar-tab-btn" onclick="switchTab('kaspi')" id="tab-btn-kaspi">Kaspi Pay</button>
+            <button class="sidebar-tab-btn" onclick="switchTab('halyk')" id="tab-btn-halyk">Halyk</button>
+        </div>
+
+        <!-- Drafts Content (Form wrapping all tabs to support action buttons) -->
+        <form id="drafts-form" method="POST" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+            <div class="drafts-tab-content">
+                <!-- Cash Account Tab -->
+                <div class="drafts-account-section active" id="tab-section-cash">
+                    <div class="reconciliation-row mb-3">
+                        <label for="cash-fact-input">Факт в кассе:</label>
+                        <input type="number" id="cash-fact-input" class="reconciliation-input" 
+                               value="{{ reconciliation.cash.fact_balance|default('', true) }}" placeholder="0" step="1">
+                        <span>Poster: <strong id="cash-poster-balance">{{ "{:,.0f}".format(account_totals.cash|default(0)) }}</strong>₸</span>
+                        <span>Разница: <strong id="cash-difference" class="difference-value">0</strong>₸</span>
+                    </div>
+
+                    <div class="sidebar-table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="cash"></th>
+                                    <th style="width:30px">✓</th>
+                                    <th style="width:80px">Сумма</th>
+                                    <th>Описание</th>
+                                    <th style="width:90px">Тип</th>
+                                    <th style="width:110px">Категория</th>
+                                    <th style="width:100px">Отдел</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="drafts-tbody-cash" data-account-type="cash">
+                                {% set account_type = 'cash' %}
+                                {% include 'assistant_drafts_table.html' %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="section-summary-row" id="summary-cash">
+                        Итого: &nbsp;<span class="sum" style="font-weight:700">0₸</span>
+                    </div>
+                </div>
+
+                <!-- Kaspi Pay Tab -->
+                <div class="drafts-account-section" id="tab-section-kaspi">
+                    <div class="reconciliation-row mb-3">
+                        <label for="kaspi-fact-input">Факт Kaspi:</label>
+                        <input type="number" id="kaspi-fact-input" class="reconciliation-input" 
+                               value="{{ reconciliation.kaspi.fact_balance|default('', true) }}" placeholder="0" step="1">
+                        <span>Poster: <strong id="kaspi-poster-balance">{{ "{:,.0f}".format(account_totals.kaspi|default(0)) }}</strong>₸</span>
+                        <span>Разница: <strong id="kaspi-difference" class="difference-value">0</strong>₸</span>
+                    </div>
+
+                    <div class="sidebar-table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
+                                    <th style="width:30px">✓</th>
+                                    <th style="width:80px">Сумма</th>
+                                    <th>Описание</th>
+                                    <th style="width:90px">Тип</th>
+                                    <th style="width:110px">Категория</th>
+                                    <th style="width:100px">Отдел</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="drafts-tbody-kaspi" data-account-type="kaspi">
+                                {% set account_type = 'kaspi' %}
+                                {% include 'assistant_drafts_table.html' %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="section-summary-row" id="summary-kaspi">
+                        Итого: &nbsp;<span class="sum" style="font-weight:700">0₸</span>
+                    </div>
+                </div>
+
+                <!-- Halyk Bank Tab -->
+                <div class="drafts-account-section" id="tab-section-halyk">
+                    <div class="reconciliation-row mb-3">
+                        <label for="halyk-fact-input">Факт Halyk:</label>
+                        <input type="number" id="halyk-fact-input" class="reconciliation-input" 
+                               value="{{ reconciliation.halyk.fact_balance|default('', true) }}" placeholder="0" step="1">
+                        <span>Poster: <strong id="halyk-poster-balance">{{ "{:,.0f}".format(account_totals.halyk|default(0)) }}</strong>₸</span>
+                        <span>Разница: <strong id="halyk-difference" class="difference-value">0</strong>₸</span>
+                    </div>
+
+                    <div class="sidebar-table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="halyk"></th>
+                                    <th style="width:30px">✓</th>
+                                    <th style="width:80px">Сумма</th>
+                                    <th>Описание</th>
+                                    <th style="width:90px">Тип</th>
+                                    <th style="width:110px">Категория</th>
+                                    <th style="width:100px">Отдел</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="drafts-tbody-halyk" data-account-type="halyk">
+                                {% set account_type = 'halyk' %}
+                                {% include 'assistant_drafts_table.html' %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="section-summary-row" id="summary-halyk">
+                        Итого: &nbsp;<span class="sum" style="font-weight:700">0₸</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Form Actions inside Sidebar -->
+            <div class="sidebar-actions-panel">
+                <span class="selected-summary">Выбрано: <span id="count">0</span></span>
+                <div class="action-buttons-group">
+                    <button type="submit" formaction="{{ url_for('process_drafts') }}" class="btn-sidebar-action primary">
+                        ✅ Создать в Poster
+                    </button>
+                    <button type="submit" formaction="{{ url_for('delete_drafts') }}" class="btn-sidebar-action secondary"
+                            onclick="return confirm('Удалить выбранные черновики?')">
+                        🗑️ Удалить
+                    </button>
+                    <button type="button" id="sync-poster-btn" class="btn-sidebar-action outline">
+                        🔄 Обновить
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Zoom Modal for images -->
+<div class="zoom-modal" id="zoom-modal" onclick="closeZoom()">
+    <img id="zoom-img" src="" alt="Увеличенное изображение">
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Global variables passed from server
+    const categories = {{ categories|tojson|safe }};
+    const posterAccounts = {{ poster_accounts|tojson|safe }};
+    const accounts = {{ accounts|tojson|safe }};
+    const selectedDate = "{{ selected_date }}";
+    
+    // Local list of uploaded files for current chat turn
+    let attachedFiles = [];
+    let searchTimeout = null;
+
+    // Helper to format category names (matches category_name or name)
+    function getCategoryName(c) {
+        return c.category_name || c.name || '';
+    }
+
+    // Scroll chat to bottom on load
+    function scrollChatToBottom(instant = false) {
+        const container = document.getElementById('chat-messages');
+        if (container) {
+            container.scrollTo({
+                top: container.scrollHeight,
+                behavior: instant ? 'instant' : 'smooth'
+            });
+        }
+    }
+
+    // Switch between Cash / Kaspi / Halyk sections in sidebar
+    function switchTab(type) {
+        document.querySelectorAll('.sidebar-tab-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.querySelectorAll('.drafts-account-section').forEach(sec => {
+            sec.classList.remove('active');
+        });
+
+        document.getElementById(`tab-btn-${type}`).classList.add('active');
+        document.getElementById(`tab-section-${type}`).classList.add('active');
+    }
+
+    // Date navigation
+    function navigateDay(offset) {
+        const picker = document.getElementById('sidebar-date-picker');
+        const date = new Date(picker.value);
+        date.setDate(date.getDate() + offset);
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        picker.value = `${yyyy}-${mm}-${dd}`;
+        window.location.href = `/assistant?date=${picker.value}`;
+    }
+
+    // Image Zoom modal
+    function zoomImage(src) {
+        const modal = document.getElementById('zoom-modal');
+        const img = document.getElementById('zoom-img');
+        img.src = src;
+        modal.style.display = 'flex';
+    }
+
+    function closeZoom() {
+        document.getElementById('zoom-modal').style.display = 'none';
+    }
+
+    // Clear Chat history API call
+    async function clearChat() {
+        if (!confirm('Очистить всю историю сообщений ассистента?')) return;
+        try {
+            const response = await fetch('/api/assistant/clear', { method: 'POST' });
+            if (response.ok) {
+                const container = document.getElementById('chat-messages');
+                container.innerHTML = `
+                    <div class="chat-welcome-box fade-in-up">
+                        <h4>Чат очищен 🧹</h4>
+                        <p>Я готов к новым задачам. Напишите, что у вас нового.</p>
+                    </div>
+                `;
+                showToast('История чата успешно очищена', 'success');
+            }
+        } catch (e) {
+            showToast('Ошибка при очистке чата', 'error');
+        }
+    }
+
+    // Update reconciliation differences for sections
+    function updateReconciliation(type) {
+        const factInput = document.getElementById(`${type}-fact-input`);
+        const posterSpan = document.getElementById(`${type}-poster-balance`);
+        const diffSpan = document.getElementById(`${type}-difference`);
+        
+        if (!factInput || !posterSpan || !diffSpan) return;
+
+        const fact = parseFloat(factInput.value) || 0;
+        
+        // Sum up total from table
+        const tbody = document.getElementById(`drafts-tbody-${type}`);
+        let draftsSum = 0;
+        tbody.querySelectorAll('.draft-row:not(.placeholder-row)').forEach(row => {
+            const amount = parseFloat(row.querySelector('.edit-amount').value) || 0;
+            const isIncome = parseInt(row.dataset.isIncome) || 0;
+            if (isIncome) {
+                draftsSum -= amount; // Income increases fact balance
+            } else {
+                draftsSum += amount; // Expense decreases fact balance
+            }
+        });
+
+        // Current balance in Poster
+        const posterText = posterSpan.textContent.replace(/[^0-9.-]/g, '');
+        const poster = parseFloat(posterText) || 0;
+        
+        // Poster balance is calculated after subtracting expenses (and adding incomes)
+        // Diff = Fact - (Poster - drafts_expenses + drafts_incomes)
+        const expected = poster - draftsSum;
+        const diff = fact - expected;
+
+        diffSpan.textContent = (diff >= 0 ? '+' : '') + diff.toLocaleString('ru-RU');
+        diffSpan.className = 'difference-value ' + (diff === 0 ? '' : (diff > 0 ? 'positive' : 'negative'));
+
+        // Save reconciliation via API
+        saveReconciliation(type, fact);
+    }
+
+    // Save fact balance
+    async function saveReconciliation(accountType, factValue) {
+        try {
+            await fetch('/api/shift-reconciliation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    date: selectedDate,
+                    account_type: accountType,
+                    fact_balance: factValue
+                })
+            });
+        } catch (e) {
+            console.error('Error saving reconciliation:', e);
+        }
+    }
+
+    // Recalculate totals for sections
+    function updateSummary() {
+        ['cash', 'kaspi', 'halyk'].forEach(type => {
+            const tbody = document.getElementById(`drafts-tbody-${type}`);
+            let total = 0;
+            tbody.querySelectorAll('.draft-row:not(.placeholder-row)').forEach(row => {
+                total += parseFloat(row.querySelector('.edit-amount').value) || 0;
+            });
+            
+            const summaryEl = document.querySelector(`#summary-${type} .sum`);
+            if (summaryEl) {
+                summaryEl.textContent = total.toLocaleString('ru-RU') + '₸';
+            }
+
+            updateReconciliation(type);
+        });
+    }
+
+    // Checkbox updates
+    function updateCount() {
+        const checked = document.querySelectorAll('.draft-checkbox:checked').length;
+        document.getElementById('count').textContent = checked;
+    }
+
+    // Autocomplete field logic
+    function setupAutocomplete(input) {
+        const resultsDiv = input.nextElementSibling;
+        
+        input.addEventListener('input', function() {
+            clearTimeout(searchTimeout);
+            const query = input.value.toLowerCase().trim();
+
+            if (query.length < 1) {
+                resultsDiv.style.display = 'none';
+                return;
+            }
+
+            const row = input.closest('tr');
+            const posterAccountId = row ? parseInt(row.dataset.posterAccountId) : null;
+
+            searchTimeout = setTimeout(() => {
+                let matches = categories.filter(c => {
+                    const displayName = getCategoryName(c);
+                    return displayName.toLowerCase().includes(query);
+                });
+
+                // Sort: current department first, then alphabetical
+                matches.sort((a, b) => {
+                    const aMatch = a.poster_account_id == posterAccountId ? 0 : 1;
+                    const bMatch = b.poster_account_id == posterAccountId ? 0 : 1;
+                    if (aMatch !== bMatch) return aMatch - bMatch;
+                    return getCategoryName(a).localeCompare(getCategoryName(b));
+                });
+
+                // Deduplicate
+                const seen = new Set();
+                matches = matches.filter(c => {
+                    const displayName = getCategoryName(c).toLowerCase();
+                    const key = `${displayName}-${c.poster_account_id || ''}`;
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                }).slice(0, 10);
+
+                if (matches.length === 0) {
+                    resultsDiv.innerHTML = `<div class="autocomplete-item" data-name="${input.value}">➕ Добавить "${input.value}"</div>`;
+                } else {
+                    resultsDiv.innerHTML = matches.map((c, i) => {
+                        const displayName = getCategoryName(c);
+                        const rawName = c.category_name || c.name || '';
+                        const accountTag = c.poster_account_name ? ` <small style="color:#999">(${c.poster_account_name})</small>` : '';
+                        return `<div class="autocomplete-item" data-name="${displayName}" data-raw="${rawName}" data-index="${i}">${displayName}${accountTag}</div>`;
+                    }).join('');
+                }
+                resultsDiv.style.display = 'block';
+            }, 100);
+        });
+
+        // Hide autocomplete on blur
+        input.addEventListener('blur', function() {
+            setTimeout(() => {
+                resultsDiv.style.display = 'none';
+            }, 200);
+        });
+    }
+
+    // Save field updates
+    async function updateField(id, field, value) {
+        try {
+            const data = {};
+            data[field] = value;
+            await fetch(`/expenses/update/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+        } catch (e) {
+            console.error('Error updating field:', e);
+        }
+    }
+
+    // Setup input listeners on tables
+    function setupTableListeners() {
+        // Amount input
+        document.querySelectorAll('.edit-amount').forEach(input => {
+            input.removeEventListener('change', handleAmountChange);
+            input.addEventListener('change', handleAmountChange);
+        });
+
+        // Description input
+        document.querySelectorAll('.edit-description').forEach(input => {
+            input.removeEventListener('change', handleDescriptionChange);
+            input.addEventListener('change', handleDescriptionChange);
+        });
+
+        // Category Autocomplete Setup
+        document.querySelectorAll('.edit-category').forEach(input => {
+            setupAutocomplete(input);
+        });
+    }
+
+    async function handleAmountChange(e) {
+        const input = e.target;
+        const id = input.dataset.id;
+        if (id) {
+            await updateField(id, 'amount', input.value);
+            input.classList.add('saved');
+            setTimeout(() => input.classList.remove('saved'), 300);
+            updateSummary();
+        }
+    }
+
+    async function handleDescriptionChange(e) {
+        const input = e.target;
+        const id = input.dataset.id;
+        if (id) {
+            await updateField(id, 'description', input.value);
+            input.classList.add('saved');
+            setTimeout(() => input.classList.remove('saved'), 300);
+        }
+    }
+
+    // Setup listeners on dynamic elements (buttons, checkboxes)
+    document.addEventListener('click', async function(e) {
+        // Select all within section
+        if (e.target.classList.contains('select-all-section')) {
+            const section = e.target.dataset.section;
+            const tbody = document.getElementById(`drafts-tbody-${section}`);
+            if (tbody) {
+                tbody.querySelectorAll('.draft-checkbox').forEach(cb => cb.checked = e.target.checked);
+            }
+            updateCount();
+        }
+
+        // Row checkbox click
+        if (e.target.classList.contains('draft-checkbox')) {
+            updateCount();
+        }
+
+        // Completion status cycle
+        if (e.target.closest('.btn-completion')) {
+            const btn = e.target.closest('.btn-completion');
+            const id = btn.dataset.id;
+            const currentStatus = btn.dataset.status || 'pending';
+            const nextStatus = currentStatus === 'pending' ? 'partial' :
+                              currentStatus === 'partial' ? 'completed' : 'pending';
+            const statusIcons = { pending: '⚪', partial: '🟡', completed: '✅' };
+
+            try {
+                const res = await fetch(`/expenses/update/${id}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ completion_status: nextStatus })
+                });
+                if (res.ok) {
+                    btn.dataset.status = nextStatus;
+                    btn.textContent = statusIcons[nextStatus];
+                    const row = btn.closest('tr');
+                    row.classList.remove('pending', 'partial', 'completed');
+                    row.classList.add(nextStatus);
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // Expense type toggle
+        if (e.target.closest('.btn-type')) {
+            const btn = e.target.closest('.btn-type');
+            const id = btn.dataset.id;
+            const currentType = btn.dataset.type || 'transaction';
+            const newType = currentType === 'supply' ? 'transaction' : 'supply';
+
+            try {
+                const res = await fetch(`/expenses/toggle-type/${id}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expense_type: newType })
+                });
+                if (res.ok) {
+                    btn.dataset.type = newType;
+                    btn.innerHTML = newType === 'supply' ? '📦 поставка' : '💰 транзакция';
+                    const row = btn.closest('tr');
+                    row.classList.remove('supply', 'transaction');
+                    row.classList.add(newType);
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // Poster account cycle
+        if (e.target.closest('.btn-poster-account')) {
+            const btn = e.target.closest('.btn-poster-account');
+            const id = btn.dataset.id;
+            const currentPosterAccountId = parseInt(btn.dataset.posterAccountId);
+            
+            const currentIndex = posterAccounts.findIndex(pa => pa.id == currentPosterAccountId);
+            const nextIndex = (currentIndex + 1) % posterAccounts.length;
+            const nextAccount = posterAccounts[nextIndex];
+
+            if (nextAccount) {
+                try {
+                    const res = await fetch(`/expenses/update/${id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ poster_account_id: nextAccount.id })
+                    });
+                    if (res.ok) {
+                        btn.dataset.posterAccountId = nextAccount.id;
+                        btn.textContent = nextAccount.name;
+                        btn.closest('tr').dataset.posterAccountId = nextAccount.id;
+                        btn.classList.add('saved');
+                        setTimeout(() => btn.classList.remove('saved'), 300);
+                    }
+                } catch (err) {
+                    console.error(err);
+                }
+            }
+        }
+
+        // Delete single draft row
+        if (e.target.closest('.btn-delete')) {
+            const btn = e.target.closest('.btn-delete');
+            if (!confirm('Удалить этот черновик?')) return;
+            const id = btn.dataset.id;
+
+            try {
+                const res = await fetch(`/expenses/delete/${id}`, { method: 'POST' });
+                if (res.ok) {
+                    btn.closest('tr').remove();
+                    updateSummary();
+                    updateCount();
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // Autocomplete item click
+        if (e.target.classList.contains('autocomplete-item')) {
+            const item = e.target;
+            const wrapper = item.closest('.autocomplete-wrapper');
+            const input = wrapper.querySelector('.edit-category');
+            const resultsDiv = wrapper.querySelector('.autocomplete-results');
+
+            const name = item.dataset.name;
+            const rawName = item.dataset.raw || '';
+            input.value = name;
+            resultsDiv.style.display = 'none';
+
+            // Auto-type switch when selecting supply categories
+            if (rawName.includes('supplies') || name.toLowerCase().includes('постав')) {
+                const row = input.closest('tr');
+                const typeBtn = row?.querySelector('.btn-type');
+                if (typeBtn && typeBtn.dataset.type !== 'supply') {
+                    typeBtn.click();
+                }
+            }
+
+            const id = input.dataset.id;
+            if (id) {
+                await updateField(id, 'category', name);
+                input.classList.add('saved');
+                setTimeout(() => input.classList.remove('saved'), 300);
+            }
+        }
+    });
+
+    // Auto-save category on direct input blur
+    document.addEventListener('blur', async function(e) {
+        if (e.target.classList.contains('edit-category')) {
+            const input = e.target;
+            const id = input.dataset.id;
+            // Short delay to let autocomplete selection register first
+            setTimeout(async () => {
+                if (id) {
+                    await updateField(id, 'category', input.value);
+                }
+            }, 200);
+        }
+    }, true);
+
+    // Sync button (Force fetch from poster on selected date)
+    document.getElementById('sync-poster-btn')?.addEventListener('click', async function() {
+        this.disabled = true;
+        const icon = this.innerHTML;
+        this.innerHTML = '⌛ Синхронизация...';
+
+        try {
+            const response = await fetch('/api/expenses/sync-from-poster', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: selectedDate })
+            });
+
+            if (response.ok) {
+                showToast('Синхронизация завершена', 'success');
+                // Reload page to fetch updated items
+                window.location.reload();
+            } else {
+                showToast('Ошибка при синхронизации', 'error');
+            }
+        } catch (e) {
+            showToast('Ошибка сети при синхронизации', 'error');
+        } finally {
+            this.disabled = false;
+            this.innerHTML = icon;
+        }
+    });
+
+    // Date picker change redirect
+    document.getElementById('sidebar-date-picker').addEventListener('change', function() {
+        window.location.href = `/assistant?date=${this.value}`;
+    });
+
+
+    // ==========================================
+    // CHAT ENGINE LOGIC
+    // ==========================================
+
+    const chatInput = document.getElementById('chat-input');
+    const chatFileInput = document.getElementById('chat-file-input');
+    const btnSend = document.getElementById('btn-send');
+    const btnAttachment = document.getElementById('btn-attachment');
+    const filePreviewBar = document.getElementById('file-preview-bar');
+    const chatMessages = document.getElementById('chat-messages');
+    const typingIndicator = document.getElementById('typing-indicator');
+
+    // Elastic textarea height adjustment
+    chatInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = (this.scrollHeight - 12) + 'px';
+    });
+
+    // Send on Enter (unless Shift is pressed)
+    chatInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // File selection trigger
+    btnAttachment.addEventListener('click', () => chatFileInput.click());
+    chatFileInput.addEventListener('change', handleFilesSelection);
+
+    function handleFilesSelection() {
+        const files = Array.from(chatFileInput.files);
+        files.forEach(file => {
+            if (!file.type.startsWith('image/')) {
+                showToast('Поддерживаются только изображения', 'warning');
+                return;
+            }
+            attachedFiles.push(file);
+        });
+        renderFilePreviews();
+        chatFileInput.value = ''; // Reset file input
+    }
+
+    function renderFilePreviews() {
+        filePreviewBar.innerHTML = '';
+        attachedFiles.forEach((file, index) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const item = document.createElement('div');
+                item.className = 'file-preview-item';
+                item.innerHTML = `
+                    <img src="${e.target.result}" alt="Preview">
+                    <button type="button" class="file-preview-remove" onclick="removeAttachedFile(${index})">&times;</button>
+                `;
+                filePreviewBar.appendChild(item);
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    window.removeAttachedFile = function(index) {
+        attachedFiles.splice(index, 1);
+        renderFilePreviews();
+    };
+
+    // Drag and Drop
+    const dragOverlay = document.getElementById('drag-overlay');
+    const chatPanel = document.getElementById('chat-panel');
+
+    window.addEventListener('dragenter', (e) => {
+        dragOverlay.style.display = 'flex';
+    });
+
+    dragOverlay.addEventListener('dragleave', (e) => {
+        dragOverlay.style.display = 'none';
+    });
+
+    window.addEventListener('dragover', (e) => {
+        e.preventDefault();
+    });
+
+    window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragOverlay.style.display = 'none';
+        
+        if (e.dataTransfer.files.length > 0) {
+            const files = Array.from(e.dataTransfer.files);
+            files.forEach(file => {
+                if (file.type.startsWith('image/')) {
+                    attachedFiles.push(file);
+                } else {
+                    showToast('Поддерживаются только изображения', 'warning');
+                }
+            });
+            renderFilePreviews();
+        }
+    });
+
+    // Send message to assistant API
+    async function sendMessage() {
+        const text = chatInput.value.trim();
+        if (text.length === 0 && attachedFiles.length === 0) return;
+
+        // Reset elastic input height
+        chatInput.value = '';
+        chatInput.style.height = 'auto';
+
+        // Add user message immediately to the UI
+        addUserMessageToUI(text, attachedFiles);
+        scrollChatToBottom();
+
+        // Prepare form data
+        const formData = new FormData();
+        formData.append('message', text);
+        formData.append('date', selectedDate);
+        attachedFiles.forEach(file => {
+            formData.append('files', file);
+        });
+
+        // Clear local files state
+        attachedFiles = [];
+        filePreviewBar.innerHTML = '';
+
+        // Show typing indicator
+        typingIndicator.style.display = 'block';
+        scrollChatToBottom();
+
+        try {
+            const response = await fetch('/api/assistant/message', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            // Hide typing indicator
+            typingIndicator.style.display = 'none';
+
+            if (data.success) {
+                // Add AI response bubble
+                addAssistantMessageToUI(data.response_text);
+                
+                // Update drafts table contents dynamically
+                document.getElementById('drafts-tbody-cash').innerHTML = data.cash_html;
+                document.getElementById('drafts-tbody-kaspi').innerHTML = data.kaspi_html;
+                document.getElementById('drafts-tbody-halyk').innerHTML = data.halyk_html;
+                
+                // Re-bind autocomplete and change listeners to the newly rendered rows
+                setupTableListeners();
+                updateSummary();
+            } else {
+                addAssistantMessageToUI("К сожалению, произошла ошибка на бэкенде. Попробуйте еще раз.");
+            }
+        } catch (e) {
+            typingIndicator.style.display = 'none';
+            addAssistantMessageToUI("Ошибка сети. Убедитесь, что сервер работает.");
+        } finally {
+            scrollChatToBottom();
+        }
+    }
+
+    function addUserMessageToUI(text, files) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-bubble-wrapper user';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble';
+
+        // Read files asynchronously for rendering previews in user bubble
+        if (files.length > 0) {
+            const mediaDiv = document.createElement('div');
+            mediaDiv.className = 'msg-bubble-media';
+            bubble.appendChild(mediaDiv);
+
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = document.createElement('img');
+                    img.className = 'msg-bubble-img';
+                    img.src = e.target.result;
+                    img.onclick = () => zoomImage(e.target.result);
+                    mediaDiv.appendChild(img);
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        if (text) {
+            const textDiv = document.createElement('div');
+            textDiv.className = 'msg-text';
+            textDiv.innerHTML = text.replace(/\n/g, '<br>');
+            bubble.appendChild(textDiv);
+        }
+
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'msg-meta';
+        const now = new Date();
+        metaDiv.innerHTML = `<span>Сегодня в ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}</span>`;
+        bubble.appendChild(metaDiv);
+
+        wrapper.appendChild(bubble);
+        
+        // Remove welcome box if present
+        const welcome = chatMessages.querySelector('.chat-welcome-box');
+        if (welcome) welcome.remove();
+
+        chatMessages.appendChild(wrapper);
+    }
+
+    function addAssistantMessageToUI(text) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-bubble-wrapper assistant';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble';
+
+        const textDiv = document.createElement('div');
+        textDiv.className = 'msg-text';
+        textDiv.innerHTML = text.replace(/\n/g, '<br>');
+        bubble.appendChild(textDiv);
+
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'msg-meta';
+        const now = new Date();
+        metaDiv.innerHTML = `<span>Сегодня в ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}</span>`;
+        bubble.appendChild(metaDiv);
+
+        wrapper.appendChild(bubble);
+        chatMessages.appendChild(wrapper);
+    }
+
+
+    // ==========================================
+    // VOICE SPEECH RECOGNITION (DICTATION)
+    // ==========================================
+
+    const btnVoice = document.getElementById('btn-voice');
+    let recognition = null;
+    let isRecording = false;
+
+    // Check browser support for webkitSpeechRecognition or SpeechRecognition
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'ru-RU'; // Default language Russian
+
+        recognition.onstart = () => {
+            isRecording = true;
+            btnVoice.classList.add('recording');
+            chatInput.placeholder = 'Слушаю вас... Говорите';
+        };
+
+        recognition.onend = () => {
+            isRecording = false;
+            btnVoice.classList.remove('recording');
+            chatInput.placeholder = 'Задайте вопрос или напишите расходы...';
+        };
+
+        recognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            showToast('Не удалось распознать речь: ' + event.error, 'warning');
+            isRecording = false;
+            btnVoice.classList.remove('recording');
+        };
+
+        recognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            if (transcript) {
+                const currentText = chatInput.value;
+                chatInput.value = currentText + (currentText ? ' ' : '') + transcript;
+                
+                // Adjust textarea height
+                chatInput.style.height = 'auto';
+                chatInput.style.height = (chatInput.scrollHeight - 12) + 'px';
+            }
+        };
+
+        btnVoice.addEventListener('click', () => {
+            if (isRecording) {
+                recognition.stop();
+            } else {
+                recognition.start();
+            }
+        });
+    } else {
+        // No support
+        btnVoice.style.display = 'none';
+        console.warn('SpeechRecognition API not supported in this browser.');
+    }
+
+
+    // Initial setup on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        updateSummary();
+        setupTableListeners();
+        scrollChatToBottom(true);
+    });
+
+</script>
+{% endblock %}

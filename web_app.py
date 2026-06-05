@@ -1472,6 +1472,423 @@ def list_expenses():
                           account_totals=account_totals)
 
 
+@app.route('/assistant')
+def view_assistant():
+    """Render the interactive AI Bookkeeper Assistant page"""
+    db = get_database()
+    today = _kz_now().strftime("%Y-%m-%d")
+    selected_date = request.args.get('date', today)
+
+    # Validate date
+    try:
+        datetime.strptime(selected_date, "%Y-%m-%d")
+    except ValueError:
+        selected_date = today
+
+    # Load drafts for date
+    all_drafts = db.get_expense_drafts(g.user_id, status="all")
+    drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == selected_date]
+
+    # Load categories, accounts, poster accounts
+    categories = []
+    accounts = []
+    poster_accounts_list = []
+    poster_transactions = []
+    
+    try:
+        from poster_client import PosterClient
+        poster_accounts = db.get_accounts(g.user_id)
+        if poster_accounts:
+            for acc in poster_accounts:
+                poster_accounts_list.append({
+                    'id': acc['id'],
+                    'name': acc['account_name'],
+                    'is_primary': acc.get('is_primary', False)
+                })
+
+            cache_key = f"cats_accs_{g.user_id}"
+            cached = _cache_get(cache_key)
+
+            async def load_data():
+                date_str = selected_date.replace("-", "")
+                async def fetch_for_account(acc, need_cats_accs):
+                    client = PosterClient(
+                        telegram_user_id=g.user_id,
+                        poster_token=acc['poster_token'],
+                        poster_user_id=acc['poster_user_id'],
+                        poster_base_url=acc['poster_base_url']
+                    )
+                    try:
+                        if need_cats_accs:
+                            cats, accs, transactions = await asyncio.gather(
+                                client.get_categories(),
+                                client.get_accounts(),
+                                client.get_transactions(date_str, date_str)
+                            )
+                        else:
+                            cats, accs = [], []
+                            transactions = await client.get_transactions(date_str, date_str)
+                        return acc, cats, accs, transactions
+                    finally:
+                        await client.close()
+
+                need_cats_accs = cached is None
+                results = await asyncio.gather(
+                    *[fetch_for_account(acc, need_cats_accs) for acc in poster_accounts]
+                )
+
+                all_categories = []
+                all_accounts = []
+                all_transactions = []
+                for acc, cats, accs, transactions in results:
+                    if need_cats_accs:
+                        for c in cats:
+                            if str(c.get('type', '1')) != '1':
+                                continue
+                            c['poster_account_id'] = acc['id']
+                            c['poster_account_name'] = acc['account_name']
+                            all_categories.append(c)
+
+                        for a in accs:
+                            a['poster_account_id'] = acc['id']
+                            a['poster_account_name'] = acc['account_name']
+                        all_accounts.extend(accs)
+
+                    for t in transactions:
+                        t['poster_account_id'] = acc['id']
+                        t['poster_account_name'] = acc['account_name']
+                    all_transactions.extend(transactions)
+
+                if need_cats_accs:
+                    _cache_set(cache_key, {'categories': all_categories, 'accounts': all_accounts})
+
+                return all_categories, all_accounts, all_transactions
+
+            result_cats, result_accs, poster_transactions = run_async(load_data())
+            if cached:
+                categories = cached['categories']
+                accounts = cached['accounts']
+            else:
+                categories = result_cats
+                accounts = result_accs
+    except Exception as e:
+        logger.error(f"Error loading assistant categories/accounts: {e}")
+
+    # Calculate account totals
+    account_totals = {'kaspi': 0, 'halyk': 0, 'cash': 0}
+    for acc in accounts:
+        name_lower = (acc.get('account_name') or acc.get('name', '')).lower()
+        balance = float(acc.get('balance') or 0) / 100
+        if 'kaspi' in name_lower:
+            account_totals['kaspi'] += balance
+        elif 'халык' in name_lower or 'halyk' in name_lower:
+            account_totals['halyk'] += balance
+        elif 'оставил' in name_lower:
+            account_totals['cash'] += balance
+
+    # Load chat history
+    chat_history = db.get_assistant_chat_history(g.user_id, limit=30)
+
+    return render_template('assistant.html',
+                           drafts=drafts,
+                           categories=categories,
+                           accounts=accounts,
+                           poster_accounts=poster_accounts_list,
+                           poster_transactions=poster_transactions,
+                           selected_date=selected_date,
+                           today=today,
+                           account_totals=account_totals,
+                           chat_history=chat_history)
+
+
+@app.route('/api/assistant/message', methods=['POST'])
+def api_assistant_message():
+    """Receive message from assistant chat, query Gemini, perform actions, and return response"""
+    db = get_database()
+    user_id = g.user_id
+    
+    # Get parameters
+    message = request.form.get('message', '').strip()
+    date_str = request.form.get('date', _kz_now().strftime("%Y-%m-%d"))
+    
+    # Get files
+    uploaded_files = request.files.getlist('files') or request.files.getlist('files[]')
+    
+    # Save files to disk and prepare base64 for Gemini
+    import os
+    import tempfile
+    import uuid
+    
+    media_files = []
+    saved_media_paths = []
+    
+    upload_dir = os.path.join(app.root_path, 'static', 'uploads', 'assistant')
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    for file in uploaded_files:
+        if not file or not file.filename:
+            continue
+            
+        filename = file.filename.lower()
+        file_ext = os.path.splitext(filename)[1]
+        unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+        save_path = os.path.join(upload_dir, unique_filename)
+        
+        try:
+            file_data = file.read()
+            # Save to disk
+            with open(save_path, 'wb') as f:
+                f.write(file_data)
+            
+            relative_path = f"/static/uploads/assistant/{unique_filename}"
+            saved_media_paths.append(relative_path)
+            
+            # Add to media_files for Gemini
+            media_type = file.mimetype or 'image/jpeg'
+            media_files.append({
+                'mime_type': media_type,
+                'data': file_data
+            })
+        except Exception as e:
+            logger.error(f"Error saving assistant upload file {filename}: {e}")
+            
+    # Save user message to database
+    db.add_assistant_chat_message(user_id, 'user', message, saved_media_paths)
+    
+    # Fetch context: history, drafts, profiles
+    chat_history = db.get_assistant_chat_history(user_id, limit=30)
+    all_drafts = db.get_expense_drafts(user_id, status="all")
+    active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
+    
+    supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+    
+    # Call Gemini Agent
+    from parser_service import get_parser_service
+    parser = get_parser_service()
+    
+    try:
+        agent_response = run_async(parser.call_gemini_assistant_agent(
+            user_message=message,
+            chat_history=chat_history,
+            active_drafts=active_drafts,
+            supplier_profiles=supplier_profiles,
+            media_files=media_files
+        ))
+    except Exception as e:
+        logger.error(f"Error in Gemini assistant execution: {e}")
+        agent_response = {
+            "response_text": f"Произошла ошибка при вызове ИИ-помощника: {str(e)}",
+            "actions": []
+        }
+        
+    response_text = agent_response.get('response_text', 'Не удалось получить ответ.')
+    actions = agent_response.get('actions', [])
+    
+    # Process actions
+    from matchers import resolve_supplier_name_and_id
+    
+    for action in actions:
+        act_type = action.get('action')
+        
+        # 1. Create Expense
+        if act_type == 'create_expense':
+            db.create_expense_draft(
+                telegram_user_id=user_id,
+                amount=action.get('amount'),
+                description=action.get('description'),
+                expense_type=action.get('expense_type', 'transaction'),
+                category=action.get('category', 'Прочее'),
+                source=action.get('source', 'cash'),
+                created_at=date_str
+            )
+            
+        # 2. Update Expense
+        elif act_type == 'update_expense':
+            db.update_expense_draft(
+                action.get('id'),
+                amount=action.get('amount'),
+                description=action.get('description'),
+                category=action.get('category'),
+                source=action.get('source')
+            )
+            
+        # 3. Add Supply Items
+        elif act_type == 'add_supply_items':
+            expense_draft_id = action.get('expense_draft_id')
+            items = action.get('items', [])
+            
+            # Find supply draft linked to this expense
+            supplies = db.get_supply_drafts(user_id, status="all")
+            supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
+            
+            if supply:
+                supply_draft_id = supply['id']
+                
+                from matchers import get_ingredient_matcher, get_product_matcher
+                ing_matcher = get_ingredient_matcher(user_id)
+                prod_matcher = get_product_matcher(user_id)
+                accounts_list = db.get_accounts(user_id)
+                account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
+                
+                for item in items:
+                    name = item.get('name', 'Товар')
+                    qty = float(item.get('qty') or 1)
+                    price = float(item.get('price') or 0)
+                    
+                    item_id = None
+                    item_type = 'ingredient'
+                    matched_name = None
+                    account_name = None
+                    account_id = None
+                    
+                    match_result = ing_matcher.match(name)
+                    if match_result:
+                        item_id, matched_name, _, _, account_name = match_result
+                        item_type = 'ingredient'
+                    else:
+                        prod_match_result = prod_matcher.match(name)
+                        if prod_match_result:
+                            item_id, matched_name, _, _, account_name = prod_match_result
+                            item_type = 'product'
+                            
+                    if account_name:
+                        account_id = account_name_to_id.get(account_name)
+                        
+                    db.add_supply_draft_item(
+                        supply_draft_id=supply_draft_id,
+                        item_name=name,
+                        quantity=qty,
+                        price_per_unit=price,
+                        poster_ingredient_id=item_id,
+                        poster_ingredient_name=matched_name,
+                        poster_account_id=account_id,
+                        poster_account_name=account_name,
+                        item_type=item_type
+                    )
+            else:
+                logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
+                
+        # 4. Create Supply
+        elif act_type == 'create_supply':
+            supplier_name = action.get('supplier_name', 'Поставщик')
+            total_sum = action.get('total_sum', 0)
+            source = action.get('source', 'kaspi')
+            items = action.get('items', [])
+            
+            # Resolve supplier name and ID using fuzzy logic
+            resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
+            
+            # Create expense draft of type 'supply'
+            expense_draft_id = db.create_expense_draft(
+                telegram_user_id=user_id,
+                amount=total_sum,
+                description=resolved_supplier_name or supplier_name or 'Поставка',
+                expense_type='supply',
+                category='Прочее',
+                source=source,
+                created_at=date_str
+            )
+            
+            # Create empty supply draft
+            supply_draft_id = db.create_empty_supply_draft(
+                telegram_user_id=user_id,
+                supplier_name=resolved_supplier_name or supplier_name,
+                invoice_date=date_str,
+                total_sum=total_sum,
+                linked_expense_draft_id=expense_draft_id,
+                source=source,
+                supplier_id=resolved_supplier_id
+            )
+            
+            if supply_draft_id:
+                from matchers import get_ingredient_matcher, get_product_matcher
+                ing_matcher = get_ingredient_matcher(user_id)
+                prod_matcher = get_product_matcher(user_id)
+                accounts_list = db.get_accounts(user_id)
+                account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
+                
+                for item in items:
+                    name = item.get('name', 'Товар')
+                    qty = float(item.get('qty') or 1)
+                    price = float(item.get('price') or 0)
+                    
+                    item_id = None
+                    item_type = 'ingredient'
+                    matched_name = None
+                    account_name = None
+                    account_id = None
+                    
+                    match_result = ing_matcher.match(name)
+                    if match_result:
+                        item_id, matched_name, _, _, account_name = match_result
+                        item_type = 'ingredient'
+                    else:
+                        prod_match_result = prod_matcher.match(name)
+                        if prod_match_result:
+                            item_id, matched_name, _, _, account_name = prod_match_result
+                            item_type = 'product'
+                            
+                    if account_name:
+                        account_id = account_name_to_id.get(account_name)
+                        
+                    db.add_supply_draft_item(
+                        supply_draft_id=supply_draft_id,
+                        item_name=name,
+                        quantity=qty,
+                        price_per_unit=price,
+                        poster_ingredient_id=item_id,
+                        poster_ingredient_name=matched_name,
+                        poster_account_id=account_id,
+                        poster_account_name=account_name,
+                        item_type=item_type
+                    )
+                    
+    # Save assistant message to database
+    db.add_assistant_chat_message(user_id, 'assistant', response_text)
+    
+    # Reload drafts, categories, and accounts to render updated HTML
+    updated_drafts_all = db.get_expense_drafts(user_id, status="all")
+    updated_drafts = [d for d in updated_drafts_all if d.get('created_at') and str(d['created_at'])[:10] == date_str]
+    
+    # Fetch list of accounts and poster_accounts for rendering
+    poster_accounts_list = []
+    poster_accounts = db.get_accounts(user_id)
+    if poster_accounts:
+        for acc in poster_accounts:
+            poster_accounts_list.append({
+                'id': acc['id'],
+                'name': acc['account_name'],
+                'is_primary': acc.get('is_primary', False)
+            })
+            
+    # Load categories and accounts from cache
+    cache_key = f"cats_accs_{user_id}"
+    cached = _cache_get(cache_key)
+    categories = cached['categories'] if cached else []
+    accounts = cached['accounts'] if cached else []
+    
+    # Render updated HTML tables
+    cash_html = render_template('assistant_drafts_table.html', drafts=updated_drafts, account_type='cash', accounts=accounts, poster_accounts=poster_accounts_list)
+    kaspi_html = render_template('assistant_drafts_table.html', drafts=updated_drafts, account_type='kaspi', accounts=accounts, poster_accounts=poster_accounts_list)
+    halyk_html = render_template('assistant_drafts_table.html', drafts=updated_drafts, account_type='halyk', accounts=accounts, poster_accounts=poster_accounts_list)
+    
+    return jsonify({
+        'success': True,
+        'response_text': response_text,
+        'cash_html': cash_html,
+        'kaspi_html': kaspi_html,
+        'halyk_html': halyk_html
+    })
+
+
+@app.route('/api/assistant/clear', methods=['POST'])
+def api_assistant_clear():
+    """Clear assistant chat history"""
+    db = get_database()
+    db.clear_assistant_chat_history(g.user_id)
+    return jsonify({'success': True})
+
+
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
 def toggle_expense_type(draft_id):
     """Toggle expense type between transaction and supply.

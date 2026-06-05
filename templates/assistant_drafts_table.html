@@ -1,0 +1,96 @@
+{% for draft in drafts %}
+{% set ns = namespace(account_name='', source='') %}
+{% for acc in accounts if acc.account_id == draft.account_id %}
+    {% set ns.account_name = acc.name|lower %}
+{% endfor %}
+{% set ns.source = draft.source|default('')|lower %}
+
+{% set is_row_match = false %}
+{% if account_type == 'cash' %}
+    {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
+    {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name or ns.source == 'halyk' %}
+    {% if not is_kaspi and not is_halyk %}
+        {% set is_row_match = true %}
+    {% endif %}
+{% elif account_type == 'kaspi' %}
+    {% set is_kaspi = 'kaspi' in ns.account_name or ns.source == 'kaspi' %}
+    {% if is_kaspi %}
+        {% set is_row_match = true %}
+    {% endif %}
+{% elif account_type == 'halyk' %}
+    {% set is_halyk = 'халык' in ns.account_name or 'halyk' in ns.account_name or ns.source == 'halyk' %}
+    {% if is_halyk %}
+        {% set is_row_match = true %}
+    {% endif %}
+{% endif %}
+
+{% if is_row_match %}
+<tr class="draft-row {% if draft.expense_type == 'supply' %}supply{% else %}transaction{% endif %} {% if draft.is_income %}income{% endif %} {% if draft.completion_status == 'completed' %}completed{% elif draft.completion_status == 'partial' %}partial{% endif %} {% if draft.poster_amount is not none and (draft.amount|float - draft.poster_amount|float)|abs >= 0.01 %}poster-mismatch{% endif %}"
+    data-id="{{ draft.id }}"
+    data-amount="{{ draft.amount|int }}"
+    data-description="{{ draft.description }}"
+    data-category="{{ draft.category or '' }}"
+    data-account-id="{{ draft.account_id or '' }}"
+    data-poster-account-id="{{ draft.poster_account_id or '' }}"
+    data-completion-status="{{ draft.completion_status or 'pending' }}"
+    data-is-income="{{ draft.is_income|default(0)|int }}"
+    data-account-type="{{ account_type }}">
+    <td>
+        <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
+    </td>
+    <td class="completion-status">
+        <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
+            {% if draft.completion_status == 'completed' %}✅
+            {% elif draft.completion_status == 'partial' %}🟡
+            {% else %}⚪{% endif %}
+        </button>
+    </td>
+    <td class="amount">
+        <input type="number" class="edit-amount" value="{{ draft.amount|int }}"
+               data-id="{{ draft.id }}" step="1"
+               data-poster-amount="{{ draft.poster_amount|default('', true) }}">
+    </td>
+    <td class="description">
+        <input type="text" class="edit-description" value="{{ draft.description }}"
+               data-id="{{ draft.id }}">
+    </td>
+    <td class="type">
+        <button type="button" class="btn-type"
+                data-id="{{ draft.id }}"
+                data-type="{{ draft.expense_type }}"
+                data-is-income="{{ draft.is_income|default(0)|int }}">
+            {% if draft.expense_type == 'supply' %}
+                📦 поставка
+            {% elif draft.is_income %}
+                💵 доход
+            {% else %}
+                💰 транзакция
+            {% endif %}
+        </button>
+    </td>
+    <td class="category">
+        <div class="autocomplete-wrapper">
+            <input type="text" class="edit-category"
+                   value="{{ draft.category or '' }}"
+                   data-id="{{ draft.id }}"
+                   placeholder="Категория..."
+                   autocomplete="off">
+            <div class="autocomplete-results"></div>
+        </div>
+    </td>
+    <td class="poster-account">
+        <button type="button" class="btn-poster-account"
+                data-id="{{ draft.id }}"
+                data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}">
+            {% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}
+            {% for pa in poster_accounts %}
+                {% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}
+            {% endfor %}
+        </button>
+    </td>
+    <td class="actions">
+        <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
+    </td>
+</tr>
+{% endif %}
+{% endfor %}
