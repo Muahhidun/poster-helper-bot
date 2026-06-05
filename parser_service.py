@@ -1278,10 +1278,61 @@ class ParserService:
                     else:
                         error_text = await resp.text()
                         logger.error(f"Gemini API error in assistant (status {resp.status}): {error_text}")
+                        if OPENAI_API_KEY:
+                            return await self._fallback_to_openai_assistant(prompt_context, media_files)
                         return {"response_text": f"Ошибка API Gemini: {resp.status}", "actions": []}
         except Exception as e:
             logger.error(f"Failed calling Gemini assistant agent: {e}")
+            if OPENAI_API_KEY:
+                return await self._fallback_to_openai_assistant(prompt_context, media_files)
             return {"response_text": f"Произошла ошибка при обращении к ИИ: {str(e)}", "actions": []}
+
+    async def _fallback_to_openai_assistant(
+        self,
+        prompt_context: str,
+        media_files: Optional[List[Dict]] = None
+    ) -> Dict:
+        """Fallback assistant query using OpenAI GPT-4o-mini"""
+        logger.info("⚠️ Falling back to OpenAI GPT-4o-mini for assistant agent...")
+        try:
+            messages = [
+                {"role": "system", "content": ASSISTANT_SYSTEM_PROMPT},
+            ]
+            
+            user_content = []
+            if media_files:
+                user_content.append({"type": "text", "text": prompt_context})
+                for media in media_files:
+                    base64_data = base64.standard_b64encode(media['data']).decode("utf-8")
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{media['mime_type']};base64,{base64_data}"
+                        }
+                    })
+                messages.append({"role": "user", "content": user_content})
+            else:
+                messages.append({"role": "user", "content": prompt_context})
+
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                response_format={"type": "json_object"}
+            )
+            response_text = response.choices[0].message.content.strip()
+            json_text = self._extract_json(response_text)
+            parsed = json.loads(json_text)
+            
+            logger.info("✅ Fallback to OpenAI GPT-4o-mini successful.")
+            return parsed
+        except Exception as e:
+            logger.error(f"Failed in OpenAI fallback assistant call: {e}", exc_info=True)
+            return {
+                "response_text": f"Произошла ошибка при обращении к ИИ (Gemini недоступен с ошибкой, резервный OpenAI также вернул ошибку: {str(e)})",
+                "actions": []
+            }
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from Claude response text"""
