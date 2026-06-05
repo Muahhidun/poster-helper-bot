@@ -1908,7 +1908,8 @@ def api_assistant_message():
             logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
                     
     # Save assistant message to database
-    db.add_assistant_chat_message(user_id, 'assistant', response_text)
+    model_used = agent_response.get('_model_used', 'gemini-3.5-flash')
+    db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=model_used)
     
     # Reload drafts, categories, and accounts to render updated HTML
     updated_drafts_all = db.get_expense_drafts(user_id, status="all")
@@ -1939,6 +1940,7 @@ def api_assistant_message():
     return jsonify({
         'success': True,
         'response_text': response_text,
+        'model_name': model_used,
         'cash_html': cash_html,
         'kaspi_html': kaspi_html,
         'halyk_html': halyk_html

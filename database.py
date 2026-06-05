@@ -5215,6 +5215,7 @@ class UserDatabase:
                         sender TEXT NOT NULL,
                         message_text TEXT NOT NULL,
                         media_paths TEXT,
+                        model_name TEXT,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
                     )
@@ -5227,6 +5228,7 @@ class UserDatabase:
                         sender VARCHAR(20) NOT NULL,
                         message_text TEXT NOT NULL,
                         media_paths TEXT,
+                        model_name TEXT,
                         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
                     )
@@ -5234,6 +5236,20 @@ class UserDatabase:
             conn.commit()
             conn.close()
             logger.info("✅ Created assistant_chat_messages table")
+
+            # Migration: add model_name column if it does not exist
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE assistant_chat_messages ADD COLUMN model_name TEXT DEFAULT NULL")
+                else:
+                    cursor.execute("ALTER TABLE assistant_chat_messages ADD COLUMN IF NOT EXISTS model_name TEXT DEFAULT NULL")
+                conn.commit()
+                conn.close()
+                logger.info("✅ Migrated assistant_chat_messages: added model_name column")
+            except Exception as e:
+                pass
         except Exception as e:
             logger.error(f"❌ Failed to create assistant_chat_messages table: {e}")
 
@@ -5244,7 +5260,7 @@ class UserDatabase:
         if DB_TYPE == "sqlite":
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT sender, message_text, media_paths, created_at
+                SELECT sender, message_text, media_paths, model_name, created_at
                 FROM assistant_chat_messages
                 WHERE telegram_user_id = ?
                 ORDER BY created_at DESC
@@ -5256,7 +5272,7 @@ class UserDatabase:
         else:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT sender, message_text, media_paths, created_at
+                SELECT sender, message_text, media_paths, model_name, created_at
                 FROM assistant_chat_messages
                 WHERE telegram_user_id = %s
                 ORDER BY created_at DESC
@@ -5283,7 +5299,7 @@ class UserDatabase:
                 
         return results
 
-    def add_assistant_chat_message(self, telegram_user_id: int, sender: str, message_text: str, media_paths: Optional[list] = None) -> int:
+    def add_assistant_chat_message(self, telegram_user_id: int, sender: str, message_text: str, media_paths: Optional[list] = None, model_name: Optional[str] = None) -> int:
         """Add a new chat message to the assistant history"""
         import json
         media_json = json.dumps(media_paths or [])
@@ -5294,16 +5310,16 @@ class UserDatabase:
         msg_id = None
         if DB_TYPE == "sqlite":
             cursor.execute("""
-                INSERT INTO assistant_chat_messages (telegram_user_id, sender, message_text, media_paths)
-                VALUES (?, ?, ?, ?)
-            """, (telegram_user_id, sender, message_text, media_json))
+                INSERT INTO assistant_chat_messages (telegram_user_id, sender, message_text, media_paths, model_name)
+                VALUES (?, ?, ?, ?, ?)
+            """, (telegram_user_id, sender, message_text, media_json, model_name))
             msg_id = cursor.lastrowid
         else:
             cursor.execute("""
-                INSERT INTO assistant_chat_messages (telegram_user_id, sender, message_text, media_paths)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO assistant_chat_messages (telegram_user_id, sender, message_text, media_paths, model_name)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
-            """, (telegram_user_id, sender, message_text, media_json))
+            """, (telegram_user_id, sender, message_text, media_json, model_name))
             res = cursor.fetchone()
             msg_id = res[0] if res else None
             

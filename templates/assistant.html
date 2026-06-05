@@ -908,8 +908,16 @@
                                 </div>
                             {% endif %}
                             <div class="msg-text">{{ msg.message_text|replace('\n', '<br>')|safe }}</div>
-                            <div class="msg-meta">
-                                <span>{{ msg.created_at }}</span>
+                            <div class="msg-meta" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px;">
+                                {% if msg.sender == 'assistant' and msg.model_name %}
+                                    {% set is_fallback = 'Резерв' in msg.model_name or 'GPT' in msg.model_name %}
+                                    {% if is_fallback %}
+                                        <span style="font-size: 10px; background: rgba(239, 68, 68, 0.08); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); padding: 1px 6px; border-radius: 4px; font-weight: 500;">🤖 {{ msg.model_name }}</span>
+                                    {% else %}
+                                        <span style="font-size: 10px; background: rgba(15, 123, 108, 0.08); color: #0f7b6c; border: 1px solid rgba(15, 123, 108, 0.2); padding: 1px 6px; border-radius: 4px; font-weight: 500;">🤖 {{ msg.model_name }}</span>
+                                    {% endif %}
+                                {% endif %}
+                                <span style="color: var(--text-muted); font-size: 10px; margin-left: auto;">{{ msg.created_at }}</span>
                             </div>
                         </div>
                     </div>
@@ -1738,7 +1746,7 @@
 
             if (data.success) {
                 // Add AI response bubble
-                addAssistantMessageToUI(data.response_text);
+                addAssistantMessageToUI(data.response_text, data.model_name);
                 
                 // Update drafts table contents dynamically
                 document.getElementById('drafts-tbody-cash').innerHTML = data.cash_html;
@@ -1807,7 +1815,7 @@
         chatMessages.appendChild(wrapper);
     }
 
-    function addAssistantMessageToUI(text) {
+    function addAssistantMessageToUI(text, modelName = '') {
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-bubble-wrapper assistant';
 
@@ -1821,8 +1829,28 @@
 
         const metaDiv = document.createElement('div');
         metaDiv.className = 'msg-meta';
+        metaDiv.style.display = 'flex';
+        metaDiv.style.alignItems = 'center';
+        metaDiv.style.justifyContent = 'space-between';
+        metaDiv.style.gap = '10px';
+        metaDiv.style.marginTop = '6px';
+        
         const now = new Date();
-        metaDiv.innerHTML = `<span>Сегодня в ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}</span>`;
+        const timeStr = `Сегодня в ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        
+        let modelBadge = '';
+        if (modelName) {
+            const isFallback = modelName.includes('Резерв') || modelName.includes('GPT');
+            const badgeBg = isFallback ? 'rgba(239, 68, 68, 0.08)' : 'rgba(15, 123, 108, 0.08)';
+            const badgeColor = isFallback ? '#ef4444' : '#0f7b6c';
+            const badgeBorder = isFallback ? '1px solid rgba(239, 68, 68, 0.2)' : '1px solid rgba(15, 123, 108, 0.2)';
+            modelBadge = `<span style="font-size: 10px; background: ${badgeBg}; color: ${badgeColor}; border: ${badgeBorder}; padding: 1px 6px; border-radius: 4px; font-weight: 500;">🤖 ${modelName}</span>`;
+        }
+        
+        metaDiv.innerHTML = `
+            ${modelBadge}
+            <span style="color: var(--text-muted); font-size: 10px; margin-left: auto;">${timeStr}</span>
+        `;
         bubble.appendChild(metaDiv);
 
         wrapper.appendChild(bubble);
