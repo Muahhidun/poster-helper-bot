@@ -7,17 +7,29 @@
     /* Premium Glassmorphism & Modern Assistant Styles */
     .assistant-container {
         display: grid;
-        grid-template-columns: 1.2fr 0.8fr;
+        grid-template-columns: 1.05fr 0.95fr;
         gap: 24px;
         margin-top: 16px;
         height: calc(100vh - 96px);
         min-height: 500px;
+        transition: grid-template-columns 0.2s ease;
+    }
+
+    .assistant-container.hide-sidebar {
+        grid-template-columns: 1fr;
+    }
+
+    .assistant-container.hide-sidebar .drafts-sidebar {
+        display: none;
     }
 
     @media (max-width: 1024px) {
         .assistant-container {
-            grid-template-columns: 1fr;
+            grid-template-columns: 1fr !important;
             height: auto;
+        }
+        .assistant-container.hide-sidebar .drafts-sidebar {
+            display: none !important;
         }
     }
 
@@ -581,7 +593,7 @@
     }
 
     .sidebar-table-wrapper td {
-        padding: 6px 10px;
+        padding: 6px 6px;
         border-bottom: 1px solid #f1f1ef;
         font-size: 13px;
         vertical-align: middle;
@@ -592,12 +604,23 @@
     .sidebar-table-wrapper input[type="text"] {
         border: 1px solid transparent;
         background: transparent;
-        padding: 4px 6px;
+        padding: 4px 4px;
         font-size: 13px;
         border-radius: var(--radius-sm);
         transition: var(--transition-fast);
         width: 100%;
         outline: none;
+    }
+
+    /* Disable spinners for number inputs */
+    .sidebar-table-wrapper input[type="number"]::-webkit-outer-spin-button,
+    .sidebar-table-wrapper input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+
+    .sidebar-table-wrapper input[type="number"] {
+        -moz-appearance: textfield;
     }
 
     .sidebar-table-wrapper input[type="number"]:hover,
@@ -848,9 +871,14 @@
                     <p class="chat-subtitle">Gemini AI в вашей бухгалтерии</p>
                 </div>
             </div>
-            <button type="button" class="btn-clear-chat" onclick="clearChat()">
-                🧹 Очистить чат
-            </button>
+            <div style="display: flex; gap: 8px;">
+                <button type="button" class="btn-clear-chat" onclick="toggleSidebar()" id="btn-toggle-sidebar" style="color: var(--text-secondary); border-color: #e5e7eb; display: flex; align-items: center; gap: 4px;">
+                    📋 <span id="toggle-sidebar-text">Скрыть черновики</span>
+                </button>
+                <button type="button" class="btn-clear-chat" onclick="clearChat()">
+                    🧹 Очистить чат
+                </button>
+            </div>
         </div>
 
         <div class="chat-messages" id="chat-messages">
@@ -972,11 +1000,11 @@
                                 <tr>
                                     <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="cash"></th>
                                     <th style="width:30px">✓</th>
-                                    <th style="width:80px">Сумма</th>
+                                    <th style="width:95px">Сумма</th>
                                     <th>Описание</th>
-                                    <th style="width:90px">Тип</th>
-                                    <th style="width:110px">Категория</th>
-                                    <th style="width:100px">Отдел</th>
+                                    <th style="width:85px">Тип</th>
+                                    <th style="width:115px">Категория</th>
+                                    <th style="width:90px">Отдел</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1007,11 +1035,11 @@
                                 <tr>
                                     <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
                                     <th style="width:30px">✓</th>
-                                    <th style="width:80px">Сумма</th>
+                                    <th style="width:95px">Сумма</th>
                                     <th>Описание</th>
-                                    <th style="width:90px">Тип</th>
-                                    <th style="width:110px">Категория</th>
-                                    <th style="width:100px">Отдел</th>
+                                    <th style="width:85px">Тип</th>
+                                    <th style="width:115px">Категория</th>
+                                    <th style="width:90px">Отдел</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1042,11 +1070,11 @@
                                 <tr>
                                     <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="halyk"></th>
                                     <th style="width:30px">✓</th>
-                                    <th style="width:80px">Сумма</th>
+                                    <th style="width:95px">Сумма</th>
                                     <th>Описание</th>
-                                    <th style="width:90px">Тип</th>
-                                    <th style="width:110px">Категория</th>
-                                    <th style="width:100px">Отдел</th>
+                                    <th style="width:85px">Тип</th>
+                                    <th style="width:115px">Категория</th>
+                                    <th style="width:90px">Отдел</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1861,8 +1889,30 @@
     }
 
 
+    // Toggle drafts sidebar visibility
+    function toggleSidebar() {
+        const container = document.querySelector('.assistant-container');
+        const isHidden = container.classList.toggle('hide-sidebar');
+        localStorage.setItem('assistant_hide_sidebar', isHidden ? 'true' : 'false');
+        
+        const toggleBtnText = document.getElementById('toggle-sidebar-text');
+        if (toggleBtnText) {
+            toggleBtnText.textContent = isHidden ? 'Показать черновики' : 'Скрыть черновики';
+        }
+    }
+
     // Initial setup on page load
     document.addEventListener('DOMContentLoaded', () => {
+        // Restore sidebar state
+        const hideSidebarSaved = localStorage.getItem('assistant_hide_sidebar') === 'true';
+        if (hideSidebarSaved) {
+            const container = document.querySelector('.assistant-container');
+            if (container) container.classList.add('hide-sidebar');
+            const toggleBtnText = document.getElementById('toggle-sidebar-text');
+            if (toggleBtnText) {
+                toggleBtnText.textContent = 'Показать черновики';
+            }
+        }
         updateSummary();
         setupTableListeners();
         scrollChatToBottom(true);
