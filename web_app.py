@@ -1699,164 +1699,213 @@ def api_assistant_message():
     response_text = agent_response.get('response_text', 'Не удалось получить ответ.')
     actions = agent_response.get('actions', [])
     
-    # Process actions
-    from matchers import resolve_supplier_name_and_id
-    
+    # Process actions safely
     for action in actions:
-        act_type = action.get('action')
-        
-        # 1. Create Expense
-        if act_type == 'create_expense':
-            db.create_expense_draft(
-                telegram_user_id=user_id,
-                amount=action.get('amount'),
-                description=action.get('description'),
-                expense_type=action.get('expense_type', 'transaction'),
-                category=action.get('category', 'Прочее'),
-                source=action.get('source', 'cash'),
-                created_at=date_str
-            )
+        try:
+            act_type = action.get('action')
             
-        # 2. Update Expense
-        elif act_type == 'update_expense':
-            db.update_expense_draft(
-                action.get('id'),
-                amount=action.get('amount'),
-                description=action.get('description'),
-                category=action.get('category'),
-                source=action.get('source')
-            )
-            
-        # 3. Add Supply Items
-        elif act_type == 'add_supply_items':
-            expense_draft_id = action.get('expense_draft_id')
-            items = action.get('items', [])
-            
-            # Find supply draft linked to this expense
-            supplies = db.get_supply_drafts(user_id, status="all")
-            supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
-            
-            if supply:
-                supply_draft_id = supply['id']
-                
-                from matchers import get_ingredient_matcher, get_product_matcher
-                ing_matcher = get_ingredient_matcher(user_id)
-                prod_matcher = get_product_matcher(user_id)
-                accounts_list = db.get_accounts(user_id)
-                account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
-                
-                for item in items:
-                    name = item.get('name', 'Товар')
-                    qty = float(item.get('qty') or 1)
-                    price = float(item.get('price') or 0)
+            # 1. Create Expense
+            if act_type == 'create_expense':
+                amount_val = action.get('amount')
+                try:
+                    amount = float(amount_val) if amount_val is not None else 0
+                except (ValueError, TypeError):
+                    amount = 0
                     
-                    item_id = None
-                    item_type = 'ingredient'
-                    matched_name = None
-                    account_name = None
-                    account_id = None
-                    
-                    match_result = ing_matcher.match(name)
-                    if match_result:
-                        item_id, matched_name, _, _, account_name = match_result
-                        item_type = 'ingredient'
-                    else:
-                        prod_match_result = prod_matcher.match(name)
-                        if prod_match_result:
-                            item_id, matched_name, _, _, account_name = prod_match_result
-                            item_type = 'product'
+                db.create_expense_draft(
+                    telegram_user_id=user_id,
+                    amount=amount,
+                    description=action.get('description'),
+                    expense_type=action.get('expense_type', 'transaction'),
+                    category=action.get('category', 'Прочее'),
+                    source=action.get('source', 'cash'),
+                    created_at=date_str
+                )
+                
+            # 2. Update Expense
+            elif act_type == 'update_expense':
+                draft_id = action.get('id')
+                if draft_id and not str(draft_id).startswith('placeholder'):
+                    amount_val = action.get('amount')
+                    amount = None
+                    if amount_val is not None:
+                        try:
+                            amount = float(amount_val)
+                        except (ValueError, TypeError):
+                            amount = None
                             
-                    if account_name:
-                        account_id = account_name_to_id.get(account_name)
-                        
-                    db.add_supply_draft_item(
-                        supply_draft_id=supply_draft_id,
-                        item_name=name,
-                        quantity=qty,
-                        price_per_unit=price,
-                        poster_ingredient_id=item_id,
-                        poster_ingredient_name=matched_name,
-                        poster_account_id=account_id,
-                        poster_account_name=account_name,
-                        item_type=item_type
+                    db.update_expense_draft(
+                        draft_id,
+                        amount=amount,
+                        description=action.get('description'),
+                        category=action.get('category'),
+                        source=action.get('source')
                     )
-            else:
-                logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
                 
-        # 4. Create Supply
-        elif act_type == 'create_supply':
-            supplier_name = action.get('supplier_name', 'Поставщик')
-            total_sum = action.get('total_sum', 0)
-            source = action.get('source', 'kaspi')
-            items = action.get('items', [])
-            
-            # Resolve supplier name and ID using fuzzy logic
-            resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
-            
-            # Create expense draft of type 'supply'
-            expense_draft_id = db.create_expense_draft(
-                telegram_user_id=user_id,
-                amount=total_sum,
-                description=resolved_supplier_name or supplier_name or 'Поставка',
-                expense_type='supply',
-                category='Прочее',
-                source=source,
-                created_at=date_str
-            )
-            
-            # Create empty supply draft
-            supply_draft_id = db.create_empty_supply_draft(
-                telegram_user_id=user_id,
-                supplier_name=resolved_supplier_name or supplier_name,
-                invoice_date=date_str,
-                total_sum=total_sum,
-                linked_expense_draft_id=expense_draft_id,
-                source=source,
-                supplier_id=resolved_supplier_id
-            )
-            
-            if supply_draft_id:
-                from matchers import get_ingredient_matcher, get_product_matcher
-                ing_matcher = get_ingredient_matcher(user_id)
-                prod_matcher = get_product_matcher(user_id)
-                accounts_list = db.get_accounts(user_id)
-                account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
+            # 3. Add Supply Items
+            elif act_type == 'add_supply_items':
+                expense_draft_id = action.get('expense_draft_id')
+                items = action.get('items', [])
                 
-                for item in items:
-                    name = item.get('name', 'Товар')
-                    qty = float(item.get('qty') or 1)
-                    price = float(item.get('price') or 0)
+                # Find supply draft linked to this expense
+                supplies = db.get_supply_drafts(user_id, status="all")
+                supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
+                
+                if supply:
+                    supply_draft_id = supply['id']
                     
-                    item_id = None
-                    item_type = 'ingredient'
-                    matched_name = None
-                    account_name = None
-                    account_id = None
+                    from matchers import get_ingredient_matcher, get_product_matcher
+                    ing_matcher = get_ingredient_matcher(user_id)
+                    prod_matcher = get_product_matcher(user_id)
+                    accounts_list = db.get_accounts(user_id)
+                    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
                     
-                    match_result = ing_matcher.match(name)
-                    if match_result:
-                        item_id, matched_name, _, _, account_name = match_result
-                        item_type = 'ingredient'
-                    else:
-                        prod_match_result = prod_matcher.match(name)
-                        if prod_match_result:
-                            item_id, matched_name, _, _, account_name = prod_match_result
-                            item_type = 'product'
+                    for item in items:
+                        try:
+                            name = item.get('name', 'Товар')
+                            qty_val = item.get('qty')
+                            price_val = item.get('price')
                             
-                    if account_name:
-                        account_id = account_name_to_id.get(account_name)
-                        
-                    db.add_supply_draft_item(
-                        supply_draft_id=supply_draft_id,
-                        item_name=name,
-                        quantity=qty,
-                        price_per_unit=price,
-                        poster_ingredient_id=item_id,
-                        poster_ingredient_name=matched_name,
-                        poster_account_id=account_id,
-                        poster_account_name=account_name,
-                        item_type=item_type
-                    )
+                            try:
+                                qty = float(qty_val) if qty_val is not None else 1.0
+                            except (ValueError, TypeError):
+                                qty = 1.0
+                                
+                            try:
+                                price = float(price_val) if price_val is not None else 0.0
+                            except (ValueError, TypeError):
+                                price = 0.0
+                                
+                            item_id = None
+                            item_type = 'ingredient'
+                            matched_name = None
+                            account_name = None
+                            account_id = None
+                            
+                            match_result = ing_matcher.match(name)
+                            if match_result:
+                                item_id, matched_name, _, _, account_name = match_result
+                                item_type = 'ingredient'
+                            else:
+                                prod_match_result = prod_matcher.match(name)
+                                if prod_match_result:
+                                    item_id, matched_name, _, _, account_name = prod_match_result
+                                    item_type = 'product'
+                                    
+                            if account_name:
+                                account_id = account_name_to_id.get(account_name)
+                                
+                            db.add_supply_draft_item(
+                                supply_draft_id=supply_draft_id,
+                                item_name=name,
+                                quantity=qty,
+                                price_per_unit=price,
+                                poster_ingredient_id=item_id,
+                                poster_ingredient_name=matched_name,
+                                poster_account_id=account_id,
+                                poster_account_name=account_name,
+                                item_type=item_type
+                            )
+                        except Exception as item_err:
+                            logger.error(f"Error processing supply item {item}: {item_err}")
+                else:
+                    logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
+                    
+            # 4. Create Supply
+            elif act_type == 'create_supply':
+                supplier_name = action.get('supplier_name', 'Поставщик')
+                total_sum_val = action.get('total_sum', 0)
+                try:
+                    total_sum = float(total_sum_val) if total_sum_val is not None else 0.0
+                except (ValueError, TypeError):
+                    total_sum = 0.0
+                    
+                source = action.get('source', 'kaspi')
+                items = action.get('items', [])
+                
+                # Resolve supplier name and ID using fuzzy logic
+                resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
+                
+                # Create expense draft of type 'supply'
+                expense_draft_id = db.create_expense_draft(
+                    telegram_user_id=user_id,
+                    amount=total_sum,
+                    description=resolved_supplier_name or supplier_name or 'Поставка',
+                    expense_type='supply',
+                    category='Прочее',
+                    source=source,
+                    created_at=date_str
+                )
+                
+                # Create empty supply draft
+                supply_draft_id = db.create_empty_supply_draft(
+                    telegram_user_id=user_id,
+                    supplier_name=resolved_supplier_name or supplier_name,
+                    invoice_date=date_str,
+                    total_sum=total_sum,
+                    linked_expense_draft_id=expense_draft_id,
+                    source=source,
+                    supplier_id=resolved_supplier_id
+                )
+                
+                if supply_draft_id:
+                    from matchers import get_ingredient_matcher, get_product_matcher
+                    ing_matcher = get_ingredient_matcher(user_id)
+                    prod_matcher = get_product_matcher(user_id)
+                    accounts_list = db.get_accounts(user_id)
+                    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
+                    
+                    for item in items:
+                        try:
+                            name = item.get('name', 'Товар')
+                            qty_val = item.get('qty')
+                            price_val = item.get('price')
+                            
+                            try:
+                                qty = float(qty_val) if qty_val is not None else 1.0
+                            except (ValueError, TypeError):
+                                qty = 1.0
+                                
+                            try:
+                                price = float(price_val) if price_val is not None else 0.0
+                            except (ValueError, TypeError):
+                                price = 0.0
+                                
+                            item_id = None
+                            item_type = 'ingredient'
+                            matched_name = None
+                            account_name = None
+                            account_id = None
+                            
+                            match_result = ing_matcher.match(name)
+                            if match_result:
+                                item_id, matched_name, _, _, account_name = match_result
+                                item_type = 'ingredient'
+                            else:
+                                prod_match_result = prod_matcher.match(name)
+                                if prod_match_result:
+                                    item_id, matched_name, _, _, account_name = prod_match_result
+                                    item_type = 'product'
+                                    
+                            if account_name:
+                                account_id = account_name_to_id.get(account_name)
+                                
+                            db.add_supply_draft_item(
+                                supply_draft_id=supply_draft_id,
+                                item_name=name,
+                                quantity=qty,
+                                price_per_unit=price,
+                                poster_ingredient_id=item_id,
+                                poster_ingredient_name=matched_name,
+                                poster_account_id=account_id,
+                                poster_account_name=account_name,
+                                item_type=item_type
+                            )
+                        except Exception as item_err:
+                            logger.error(f"Error processing supply item {item}: {item_err}")
+                            
+        except Exception as action_err:
+            logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
                     
     # Save assistant message to database
     db.add_assistant_chat_message(user_id, 'assistant', response_text)

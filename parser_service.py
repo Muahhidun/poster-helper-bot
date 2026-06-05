@@ -500,8 +500,8 @@ class ParserService:
     """Service for parsing text using Claude API and OpenAI Vision"""
 
     def __init__(self):
-        self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-        self.openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+        self.openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
     async def parse_transaction(self, text: str) -> Optional[Dict]:
         """
