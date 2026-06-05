@@ -1586,6 +1586,20 @@ def view_assistant():
         elif 'оставил' in name_lower:
             account_totals['cash'] += balance
 
+    # Load shift reconciliation data for selected date
+    reconciliation_rows = db.get_shift_reconciliation(g.user_id, selected_date)
+    reconciliation = {
+        'cash': {'fact_balance': None},
+        'kaspi': {'fact_balance': None},
+        'halyk': {'fact_balance': None}
+    }
+    for row in reconciliation_rows:
+        source = row.get('account_type')
+        if source in reconciliation:
+            reconciliation[source] = {
+                'fact_balance': row.get('fact_balance')
+            }
+
     # Load chat history
     chat_history = db.get_assistant_chat_history(g.user_id, limit=30)
 
@@ -1598,6 +1612,7 @@ def view_assistant():
                            selected_date=selected_date,
                            today=today,
                            account_totals=account_totals,
+                           reconciliation=reconciliation,
                            chat_history=chat_history)
 
 
