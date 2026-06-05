@@ -903,7 +903,13 @@
                             {% if msg.media_paths %}
                                 <div class="msg-bubble-media">
                                     {% for path in msg.media_paths %}
-                                        <img src="{{ path }}" class="msg-bubble-img" onclick="zoomImage(this.src)">
+                                        {% if path.lower().endswith('.pdf') %}
+                                            <a href="{{ path }}" target="_blank" class="msg-bubble-pdf-link" style="display: flex; align-items: center; gap: 6px; background: #ffffff; border: 1px solid #e5e7eb; padding: 6px 12px; border-radius: 8px; text-decoration: none; color: #b91c1c; font-size: 12px; font-weight: 500; margin: 4px 0;">
+                                                <span>📄 PDF: {{ path.split('/')[-1] }}</span>
+                                            </a>
+                                        {% else %}
+                                            <img src="{{ path }}" class="msg-bubble-img" onclick="zoomImage(this.src)">
+                                        {% endif %}
                                     {% endfor %}
                                 </div>
                             {% endif %}
@@ -941,7 +947,7 @@
                 <button type="button" class="btn-input-attachment" id="btn-attachment" title="Прикрепить фото (накладная, весы, чек)">
                     📎
                 </button>
-                <input type="file" id="chat-file-input" multiple accept="image/*" style="display: none;">
+                <input type="file" id="chat-file-input" multiple accept="image/*,application/pdf" style="display: none;">
 
                 <div class="chat-textarea-wrapper">
                     <textarea class="chat-textarea" id="chat-input" placeholder="Задайте вопрос или напишите расходы..." rows="1"></textarea>
@@ -1639,8 +1645,8 @@
     function handleFilesSelection() {
         const files = Array.from(chatFileInput.files);
         files.forEach(file => {
-            if (!file.type.startsWith('image/')) {
-                showToast('Поддерживаются только изображения', 'warning');
+            if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
+                showToast('Поддерживаются только изображения и PDF файлы', 'warning');
                 return;
             }
             attachedFiles.push(file);
@@ -1652,17 +1658,33 @@
     function renderFilePreviews() {
         filePreviewBar.innerHTML = '';
         attachedFiles.forEach((file, index) => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const item = document.createElement('div');
-                item.className = 'file-preview-item';
+            const item = document.createElement('div');
+            item.className = 'file-preview-item';
+            
+            if (file.type === 'application/pdf') {
+                item.style.display = 'flex';
+                item.style.flexDirection = 'column';
+                item.style.alignItems = 'center';
+                item.style.justifyContent = 'center';
+                item.style.background = '#fef2f2';
+                item.style.border = '1px solid #fca5a5';
                 item.innerHTML = `
-                    <img src="${e.target.result}" alt="Preview">
+                    <span style="font-size: 20px;">📄</span>
+                    <span style="font-size: 8px; color: #b91c1c; font-weight: 600; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; padding: 0 4px;" title="${file.name}">${file.name}</span>
                     <button type="button" class="file-preview-remove" onclick="removeAttachedFile(${index})">&times;</button>
                 `;
                 filePreviewBar.appendChild(item);
-            };
-            reader.readAsDataURL(file);
+            } else {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    item.innerHTML = `
+                        <img src="${e.target.result}" alt="Preview">
+                        <button type="button" class="file-preview-remove" onclick="removeAttachedFile(${index})">&times;</button>
+                    `;
+                    filePreviewBar.appendChild(item);
+                };
+                reader.readAsDataURL(file);
+            }
         });
     }
 
@@ -1694,10 +1716,10 @@
         if (e.dataTransfer.files.length > 0) {
             const files = Array.from(e.dataTransfer.files);
             files.forEach(file => {
-                if (file.type.startsWith('image/')) {
+                if (file.type.startsWith('image/') || file.type === 'application/pdf') {
                     attachedFiles.push(file);
                 } else {
-                    showToast('Поддерживаются только изображения', 'warning');
+                    showToast('Поддерживаются только изображения и PDF файлы', 'warning');
                 }
             });
             renderFilePreviews();
@@ -1781,15 +1803,34 @@
             bubble.appendChild(mediaDiv);
 
             files.forEach(file => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const img = document.createElement('img');
-                    img.className = 'msg-bubble-img';
-                    img.src = e.target.result;
-                    img.onclick = () => zoomImage(e.target.result);
-                    mediaDiv.appendChild(img);
-                };
-                reader.readAsDataURL(file);
+                if (file.type === 'application/pdf') {
+                    const pdfLink = document.createElement('a');
+                    pdfLink.className = 'msg-bubble-pdf-link';
+                    pdfLink.style.display = 'flex';
+                    pdfLink.style.alignItems = 'center';
+                    pdfLink.style.gap = '6px';
+                    pdfLink.style.background = '#ffffff';
+                    pdfLink.style.border = '1px solid #e5e7eb';
+                    pdfLink.style.padding = '6px 12px';
+                    pdfLink.style.borderRadius = '8px';
+                    pdfLink.style.textDecoration = 'none';
+                    pdfLink.style.color = '#b91c1c';
+                    pdfLink.style.fontSize = '12px';
+                    pdfLink.style.fontWeight = '500';
+                    pdfLink.style.margin = '4px 0';
+                    pdfLink.innerHTML = `<span>📄 PDF: ${file.name}</span>`;
+                    mediaDiv.appendChild(pdfLink);
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = document.createElement('img');
+                        img.className = 'msg-bubble-img';
+                        img.src = e.target.result;
+                        img.onclick = () => zoomImage(e.target.result);
+                        mediaDiv.appendChild(img);
+                    };
+                    reader.readAsDataURL(file);
+                }
             });
         }
 

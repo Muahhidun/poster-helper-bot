@@ -1303,6 +1303,9 @@ class ParserService:
             if media_files:
                 user_content.append({"type": "text", "text": prompt_context})
                 for media in media_files:
+                    # OpenAI GPT-4o-mini only supports image uploads, skip PDFs/other formats
+                    if not media.get('mime_type', '').startswith('image/'):
+                        continue
                     base64_data = base64.standard_b64encode(media['data']).decode("utf-8")
                     user_content.append({
                         "type": "image_url",
