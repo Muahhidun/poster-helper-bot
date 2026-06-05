@@ -1904,6 +1904,182 @@ def api_assistant_message():
                         except Exception as item_err:
                             logger.error(f"Error processing supply item {item}: {item_err}")
                             
+            # 5. Find POS Receipt
+            elif act_type == 'find_pos_receipt':
+                amount_val = action.get('amount')
+                order_number = action.get('order_number')
+                
+                clean_order_number = None
+                if order_number is not None:
+                    import re
+                    digits = re.findall(r'\d+', str(order_number))
+                    if digits:
+                        clean_order_number = int(digits[0])
+
+                target_amount = None
+                if amount_val is not None:
+                    try:
+                        target_amount = float(amount_val)
+                    except (ValueError, TypeError):
+                        pass
+
+                if not clean_order_number and not target_amount:
+                    response_text = "Пожалуйста, укажите сумму чека или номер заказа, чтобы я мог найти его."
+                    continue
+
+                poster_accounts = db.get_accounts(user_id)
+                if not poster_accounts:
+                    response_text = "У вас не настроены аккаунты Poster. Не могу выполнить поиск чеков."
+                    continue
+
+                try:
+                    date_param = date_str.replace('-', '')
+                except Exception:
+                    date_param = _kz_now().strftime("%Y%m%d")
+
+                found_matches = []
+
+                for account in poster_accounts:
+                    from poster_client import PosterClient
+                    client = PosterClient(
+                        telegram_user_id=user_id,
+                        poster_token=account['poster_token'],
+                        poster_user_id=account['poster_user_id'],
+                        poster_base_url=account['poster_base_url']
+                    )
+                    
+                    try:
+                        async def _fetch():
+                            return await client._request('GET', 'dash.getTransactions', params={
+                                'dateFrom': date_param,
+                                'dateTo': date_param
+                            })
+                        result = run_async(_fetch())
+                        transactions = result.get('response', [])
+                        
+                        for tx in transactions:
+                            tx_id = tx.get('transaction_id')
+                            if not tx_id:
+                                continue
+                            
+                            tx_id_int = int(tx_id)
+                            payed_sum_kzt = float(tx.get('payed_sum', 0)) / 100
+                            
+                            is_match = False
+                            
+                            if clean_order_number is not None:
+                                if tx_id_int == clean_order_number or str(clean_order_number) in str(tx_id_int):
+                                    is_match = True
+                            
+                            if target_amount is not None:
+                                # Допускаем разницу из-за скидки (например, сумма чека от 60% до 105% от указанной)
+                                if 0.6 * target_amount <= payed_sum_kzt <= 1.05 * target_amount:
+                                    is_match = True
+
+                            if is_match:
+                                products_str = "неизвестно"
+                                try:
+                                    async def _fetch_prods():
+                                        return await client._request('GET', 'dash.getTransactionProducts', params={
+                                            'transaction_id': tx_id_int
+                                        })
+                                    prod_result = run_async(_fetch_prods())
+                                    products = prod_result.get('response', [])
+                                    if products:
+                                        products_list = []
+                                        for p in products:
+                                            p_name = p.get('product_name', 'Товар')
+                                            p_qty = float(p.get('count', 1))
+                                            products_list.append(f"{p_name} ({p_qty:g} шт)")
+                                        products_str = ", ".join(products_list)
+                                except Exception as prod_err:
+                                    logger.warning(f"Error fetching products for tx {tx_id_int}: {prod_err}")
+                                
+                                close_time = tx.get('date_close', '')
+                                if close_time and isinstance(close_time, str) and len(close_time) >= 16:
+                                    close_time = close_time[11:16]
+                                
+                                status_str = "Открыт" if tx.get('status') == '1' else "Закрыт" if tx.get('status') == '2' else f"Статус {tx.get('status')}"
+                                
+                                diff = abs(payed_sum_kzt - target_amount) if target_amount is not None else 0
+                                
+                                found_matches.append({
+                                    'transaction_id': tx_id_int,
+                                    'poster_account_id': account['id'],
+                                    'account_name': account['account_name'],
+                                    'payed_sum': payed_sum_kzt,
+                                    'products': products_str,
+                                    'time': close_time,
+                                    'status': status_str,
+                                    'diff': diff
+                                })
+                    except Exception as client_err:
+                        logger.error(f"Error fetching transactions for account {account['account_name']}: {client_err}")
+                    finally:
+                        run_async(client.close())
+                
+                if not found_matches:
+                    response_text = f"Чеков за сегодня по вашему запросу не найдено (сумма: {amount_val if amount_val else 'не указана'}, номер заказа: {order_number if order_number else 'не указан'})."
+                elif len(found_matches) == 1:
+                    match = found_matches[0]
+                    response_text = (
+                        f"Найден чек №{match['transaction_id']} в отделе '{match['account_name']}' на сумму {match['payed_sum']:,.0f}₸ ({match['time']}, {match['status']}).\n"
+                        f"Состав чека: {match['products']}.\n\n"
+                        f"Точно он? Удаляем?\n\n"
+                        f"[Метаданные: ID чека: {match['transaction_id']}, ID аккаунта: {match['poster_account_id']}]"
+                    )
+                else:
+                    found_matches.sort(key=lambda x: x['diff'])
+                    lines = [f"Найдено несколько подходящих чеков за сегодня:"]
+                    for idx, match in enumerate(found_matches[:3]):
+                        lines.append(
+                            f"{idx+1}. Чек №{match['transaction_id']} ('{match['account_name']}') на сумму {match['payed_sum']:,.0f}₸ ({match['time']}). Состав: {match['products']}."
+                        )
+                    lines.append("\nПожалуйста, уточните номер заказа (например, напишите 'удали чек №...' или выберите нужный).")
+                    response_text = "\n".join(lines)
+
+            # 6. Delete POS Receipt
+            elif act_type == 'delete_pos_receipt':
+                tx_id = action.get('transaction_id')
+                poster_account_id = action.get('poster_account_id')
+                
+                if not tx_id:
+                    response_text = "Не передан ID чека для удаления."
+                    continue
+                    
+                poster_accounts = db.get_accounts(user_id)
+                account = None
+                if poster_account_id:
+                    account = next((a for a in poster_accounts if a['id'] == int(poster_account_id)), None)
+                if not account and poster_accounts:
+                    account = poster_accounts[0]
+                    
+                if not account:
+                    response_text = "Аккаунт Poster не найден для удаления чека."
+                    continue
+                    
+                from poster_client import PosterClient
+                client = PosterClient(
+                    telegram_user_id=user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+                
+                try:
+                    async def _remove():
+                        return await client.remove_transaction(int(tx_id))
+                    success = run_async(_remove())
+                    if success:
+                        response_text = f"Чек №{tx_id} успешно удалён из Poster (отдел '{account['account_name']}')."
+                    else:
+                        response_text = f"Не удалось удалить чек №{tx_id} из Poster."
+                except Exception as del_err:
+                    logger.error(f"Error deleting transaction {tx_id}: {del_err}")
+                    response_text = f"Ошибка при удалении чека №{tx_id}: {str(del_err)}"
+                finally:
+                    run_async(client.close())
+                            
         except Exception as action_err:
             logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
                     
