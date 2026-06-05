@@ -1953,6 +1953,48 @@ def api_assistant_clear():
     return jsonify({'success': True})
 
 
+@app.route('/api/assistant/transcribe', methods=['POST'])
+def api_assistant_transcribe():
+    """Transcribe voice note using OpenAI Whisper"""
+    if 'audio' not in request.files:
+        return jsonify({'error': 'Файл аудио не передан'}), 400
+        
+    audio_file = request.files['audio']
+    if not audio_file or not audio_file.filename:
+        return jsonify({'error': 'Пустой файл аудио'}), 400
+
+    from config import OPENAI_API_KEY
+    if not OPENAI_API_KEY:
+        return jsonify({'error': 'Ключ OpenAI API не настроен на сервере'}), 500
+
+    import tempfile
+    import os
+    from openai import OpenAI
+
+    try:
+        suffix = os.path.splitext(audio_file.filename)[1] or '.webm'
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_audio:
+            audio_file.save(temp_audio.name)
+            temp_path = temp_audio.name
+
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            with open(temp_path, 'rb') as f:
+                transcription = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    language="ru"
+                )
+            text = transcription.text
+            return jsonify({'success': True, 'text': text})
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+    except Exception as e:
+        logger.error(f"Error in Whisper audio transcription: {e}", exc_info=True)
+        return jsonify({'error': f"Ошибка распознавания голоса: {str(e)}"}), 500
+
+
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
 def toggle_expense_type(draft_id):
     """Toggle expense type between transaction and supply.

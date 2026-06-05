@@ -1832,60 +1832,128 @@
     // ==========================================
 
     const btnVoice = document.getElementById('btn-voice');
-    let recognition = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
     let isRecording = false;
+    let streamRef = null;
 
-    // Check browser support for webkitSpeechRecognition or SpeechRecognition
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    // Check browser support for MediaRecorder
+    const isVoiceSupported = !!(navigator.mediaDevices && window.MediaRecorder);
 
-    if (SpeechRecognition) {
-        recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.lang = 'ru-RU'; // Default language Russian
-
-        recognition.onstart = () => {
-            isRecording = true;
-            btnVoice.classList.add('recording');
-            chatInput.placeholder = 'Слушаю вас... Говорите';
-        };
-
-        recognition.onend = () => {
-            isRecording = false;
-            btnVoice.classList.remove('recording');
-            chatInput.placeholder = 'Задайте вопрос или напишите расходы...';
-        };
-
-        recognition.onerror = (event) => {
-            console.error('Speech recognition error:', event.error);
-            showToast('Не удалось распознать речь: ' + event.error, 'warning');
-            isRecording = false;
-            btnVoice.classList.remove('recording');
-        };
-
-        recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            if (transcript) {
-                const currentText = chatInput.value;
-                chatInput.value = currentText + (currentText ? ' ' : '') + transcript;
-                
-                // Adjust textarea height
-                chatInput.style.height = 'auto';
-                chatInput.style.height = (chatInput.scrollHeight - 12) + 'px';
-            }
-        };
-
-        btnVoice.addEventListener('click', () => {
+    if (isVoiceSupported) {
+        btnVoice.addEventListener('click', async () => {
             if (isRecording) {
-                recognition.stop();
+                // Stop recording
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
             } else {
-                recognition.start();
+                // Start recording
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    streamRef = stream;
+                    audioChunks = [];
+                    
+                    // Determine mimeType (prefer audio/webm, fallback to ogg, fallback to browser default)
+                    let mimeType = 'audio/webm';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = 'audio/ogg';
+                    }
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = ''; // Let browser choose
+                    }
+
+                    if (mimeType) {
+                        mediaRecorder = new MediaRecorder(stream, { mimeType });
+                    } else {
+                        mediaRecorder = new MediaRecorder(stream);
+                    }
+
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+
+                    mediaRecorder.onstart = () => {
+                        isRecording = true;
+                        btnVoice.classList.add('recording');
+                        chatInput.placeholder = 'Слушаю вас... Нажмите кнопку микрофона еще раз для завершения';
+                    };
+
+                    mediaRecorder.onstop = async () => {
+                        isRecording = false;
+                        btnVoice.classList.remove('recording');
+                        chatInput.placeholder = 'Задайте вопрос или напишите расходы...';
+                        
+                        // Stop all tracks to release microphone
+                        if (streamRef) {
+                            streamRef.getTracks().forEach(track => track.stop());
+                        }
+
+                        // Create audio blob
+                        const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+                        if (audioBlob.size < 1000) {
+                            showToast('Запись слишком короткая', 'warning');
+                            return;
+                        }
+
+                        // Send to backend
+                        const formData = new FormData();
+                        const fileExt = (mediaRecorder.mimeType && mediaRecorder.mimeType.includes('ogg')) ? 'ogg' : 'webm';
+                        formData.append('audio', audioBlob, `voice.${fileExt}`);
+
+                        // Show loading state
+                        const originalPlaceholder = chatInput.placeholder;
+                        chatInput.disabled = true;
+                        chatInput.placeholder = '⏳ ИИ распознает вашу речь...';
+                        btnVoice.style.opacity = '0.5';
+                        btnVoice.style.pointerEvents = 'none';
+
+                        try {
+                            const response = await fetch('/api/assistant/transcribe', {
+                                method: 'POST',
+                                body: formData
+                            });
+                            const data = await response.json();
+                            
+                            if (data.success && data.text && data.text.trim()) {
+                                const currentText = chatInput.value;
+                                chatInput.value = currentText + (currentText ? ' ' : '') + data.text.trim();
+                                
+                                // Adjust textarea height
+                                chatInput.style.height = 'auto';
+                                chatInput.style.height = (chatInput.scrollHeight - 12) + 'px';
+                                showToast('Речь распознана через ИИ!', 'success');
+                            } else if (data.error) {
+                                showToast(data.error, 'danger');
+                            } else {
+                                showToast('Не удалось распознать речь', 'warning');
+                            }
+                        } catch (e) {
+                            console.error('Transcription error:', e);
+                            showToast('Ошибка сети при распознавании речи', 'danger');
+                        } finally {
+                            chatInput.disabled = false;
+                            chatInput.placeholder = originalPlaceholder;
+                            btnVoice.style.opacity = '1';
+                            btnVoice.style.pointerEvents = 'auto';
+                            chatInput.focus();
+                        }
+                    };
+
+                    mediaRecorder.start();
+                } catch (err) {
+                    console.error('Microphone access denied:', err);
+                    showToast('Нет доступа к микрофону. Разрешите доступ в настройках браузера.', 'danger');
+                }
             }
         });
     } else {
-        // No support
-        btnVoice.style.display = 'none';
-        console.warn('SpeechRecognition API not supported in this browser.');
+        btnVoice.addEventListener('click', () => {
+            showToast('Запись звука не поддерживается вашим браузером (нужно подключение по HTTPS)', 'warning');
+        });
+        console.warn('MediaRecorder or getUserMedia is not supported in this browser.');
     }
 
 
