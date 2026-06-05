@@ -661,6 +661,22 @@
         outline: none;
     }
 
+    .btn-type {
+        font-size: 15px;
+        padding: 2px 4px;
+        background: transparent;
+        border: none;
+        line-height: 1;
+    }
+
+    .btn-poster-account {
+        font-size: 10px;
+        padding: 2px 4px;
+        max-width: 50px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
     .btn-completion:hover, .btn-type:hover, .btn-poster-account:hover {
         background: #e5e7eb;
         color: var(--text-primary);
@@ -1016,9 +1032,9 @@
                                     <th style="width:30px">✓</th>
                                     <th style="width:95px">Сумма</th>
                                     <th>Описание</th>
-                                    <th style="width:85px">Тип</th>
+                                    <th style="width:40px" title="Тип">📦</th>
                                     <th style="width:115px">Категория</th>
-                                    <th style="width:90px">Отдел</th>
+                                    <th style="width:55px">Отдел</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1051,9 +1067,9 @@
                                     <th style="width:30px">✓</th>
                                     <th style="width:95px">Сумма</th>
                                     <th>Описание</th>
-                                    <th style="width:85px">Тип</th>
+                                    <th style="width:40px" title="Тип">📦</th>
                                     <th style="width:115px">Категория</th>
-                                    <th style="width:90px">Отдел</th>
+                                    <th style="width:55px">Отдел</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1086,9 +1102,9 @@
                                     <th style="width:30px">✓</th>
                                     <th style="width:95px">Сумма</th>
                                     <th>Описание</th>
-                                    <th style="width:85px">Тип</th>
+                                    <th style="width:40px" title="Тип">📦</th>
                                     <th style="width:115px">Категория</th>
-                                    <th style="width:90px">Отдел</th>
+                                    <th style="width:55px">Отдел</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1473,7 +1489,8 @@
                 });
                 if (res.ok) {
                     btn.dataset.type = newType;
-                    btn.innerHTML = newType === 'supply' ? '📦 поставка' : '💰 транзакция';
+                    btn.innerHTML = newType === 'supply' ? '📦' : (btn.dataset.isIncome === '1' ? '💵' : '💰');
+                    btn.title = newType === 'supply' ? 'Поставка' : (btn.dataset.isIncome === '1' ? 'Доход' : 'Транзакция');
                     const row = btn.closest('tr');
                     row.classList.remove('supply', 'transaction');
                     row.classList.add(newType);
@@ -1503,6 +1520,7 @@
                     if (res.ok) {
                         btn.dataset.posterAccountId = nextAccount.id;
                         btn.textContent = nextAccount.name;
+                        btn.title = nextAccount.name;
                         btn.closest('tr').dataset.posterAccountId = nextAccount.id;
                         btn.classList.add('saved');
                         setTimeout(() => btn.classList.remove('saved'), 300);

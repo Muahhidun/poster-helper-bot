@@ -58,15 +58,8 @@
         <button type="button" class="btn-type"
                 data-id="{{ draft.id }}"
                 data-type="{{ draft.expense_type }}"
-                data-is-income="{{ draft.is_income|default(0)|int }}">
-            {% if draft.expense_type == 'supply' %}
-                📦 поставка
-            {% elif draft.is_income %}
-                💵 доход
-            {% else %}
-                💰 транзакция
-            {% endif %}
-        </button>
+                data-is-income="{{ draft.is_income|default(0)|int }}"
+                title="{% if draft.expense_type == 'supply' %}Поставка{% elif draft.is_income %}Доход{% else %}Транзакция{% endif %}">{% if draft.expense_type == 'supply' %}📦{% elif draft.is_income %}💵{% else %}💰{% endif %}</button>
     </td>
     <td class="category">
         <div class="autocomplete-wrapper">
@@ -81,7 +74,8 @@
     <td class="poster-account">
         <button type="button" class="btn-poster-account"
                 data-id="{{ draft.id }}"
-                data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}">
+                data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}"
+                title="{% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}{% for pa in poster_accounts %}{% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}{% endfor %}">
             {% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}
             {% for pa in poster_accounts %}
                 {% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}
