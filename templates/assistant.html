@@ -1625,6 +1625,9 @@
     btnAttachment.addEventListener('click', () => chatFileInput.click());
     chatFileInput.addEventListener('change', handleFilesSelection);
 
+    // Send button click trigger
+    btnSend.addEventListener('click', sendMessage);
+
     function handleFilesSelection() {
         const files = Array.from(chatFileInput.files);
         files.forEach(file => {
