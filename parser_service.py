@@ -1220,6 +1220,9 @@ class ParserService:
         profiles_str = json.dumps(supplier_profiles, ensure_ascii=False, indent=2)
 
         prompt_context = f"""
+=== ИНФОРМАЦИЯ О СИСТЕМЕ ===
+Активная модель ИИ: {GEMINI_MODEL} (если пользователь спросит, какую модель ты используешь или какая модель отвечает, назови именно её)
+
 === ИСТОРИЯ ПЕРЕПИСКИ ===
 {history_str}
 
