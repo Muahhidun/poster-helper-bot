@@ -2436,6 +2436,7 @@ def api_import_batch():
             logger.error(f"Error parsing batch text: {e}")
             
     # 2. Обрабатываем загруженные файлы
+    image_tasks = []
     for file in uploaded_files:
         if not file or not file.filename:
             continue
@@ -2475,19 +2476,29 @@ def api_import_batch():
                 
         # б) Картинки
         elif any(filename.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-            try:
-                media_type = file.mimetype or 'image/jpeg'
-                parsed_image = run_async(parser.parse_batch_image(file_data, media_type))
-                if parsed_image:
-                    doc_type = parsed_image.get('document_type')
-                    if doc_type == 'cashier_sheet':
-                        cashier_expenses.extend(parsed_image.get('expenses', []))
-                    elif doc_type == 'printed_invoice':
-                        invoice_data = parsed_image.get('invoice')
-                        if invoice_data:
-                            printed_invoices.append(invoice_data)
-            except Exception as e:
-                logger.error(f"Error parsing image file {filename}: {e}")
+            media_type = file.mimetype or 'image/jpeg'
+            image_tasks.append((filename, file_data, media_type))
+            
+    # Запускаем распознавание картинок параллельно, чтобы избежать таймаутов на больших пачках
+    if image_tasks:
+        async def parse_all_images():
+            coros = [parser.parse_batch_image(data, m_type) for _, data, m_type in image_tasks]
+            return await asyncio.gather(*coros, return_exceptions=True)
+            
+        results = run_async(parse_all_images())
+        
+        for (filename, _, _), parsed_image in zip(image_tasks, results):
+            if isinstance(parsed_image, Exception):
+                logger.error(f"Error parsing image file {filename} in batch: {parsed_image}")
+                continue
+            if parsed_image:
+                doc_type = parsed_image.get('document_type')
+                if doc_type == 'cashier_sheet':
+                    cashier_expenses.extend(parsed_image.get('expenses', []))
+                elif doc_type == 'printed_invoice':
+                    invoice_data = parsed_image.get('invoice')
+                    if invoice_data:
+                        printed_invoices.append(invoice_data)
                 
     # 3. Сохраняем расходы и связываем их
     saved_drafts = []
