@@ -1028,13 +1028,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="cash"></th>
                                     <th style="width:30px">✓</th>
-                                    <th style="width:95px">Сумма</th>
+                                    <th style="width:65px">Сумма</th>
                                     <th>Описание</th>
                                     <th style="width:40px" title="Тип">📦</th>
-                                    <th style="width:115px">Категория</th>
-                                    <th style="width:55px">Отдел</th>
+                                    <th style="width:135px">Категория</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1063,13 +1061,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="kaspi"></th>
                                     <th style="width:30px">✓</th>
-                                    <th style="width:95px">Сумма</th>
+                                    <th style="width:65px">Сумма</th>
                                     <th>Описание</th>
                                     <th style="width:40px" title="Тип">📦</th>
-                                    <th style="width:115px">Категория</th>
-                                    <th style="width:55px">Отдел</th>
+                                    <th style="width:135px">Категория</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1098,13 +1094,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th style="width:30px"><input type="checkbox" class="select-all-section" data-section="halyk"></th>
                                     <th style="width:30px">✓</th>
-                                    <th style="width:95px">Сумма</th>
+                                    <th style="width:65px">Сумма</th>
                                     <th>Описание</th>
                                     <th style="width:40px" title="Тип">📦</th>
-                                    <th style="width:115px">Категория</th>
-                                    <th style="width:55px">Отдел</th>
+                                    <th style="width:135px">Категория</th>
                                     <th style="width:30px"></th>
                                 </tr>
                             </thead>
@@ -1121,20 +1115,10 @@
             </div>
 
             <!-- Form Actions inside Sidebar -->
-            <div class="sidebar-actions-panel">
-                <span class="selected-summary">Выбрано: <span id="count">0</span></span>
-                <div class="action-buttons-group">
-                    <button type="submit" formaction="{{ url_for('process_drafts') }}" class="btn-sidebar-action primary">
-                        ✅ Создать в Poster
-                    </button>
-                    <button type="submit" formaction="{{ url_for('delete_drafts') }}" class="btn-sidebar-action secondary"
-                            onclick="return confirm('Удалить выбранные черновики?')">
-                        🗑️ Удалить
-                    </button>
-                    <button type="button" id="sync-poster-btn" class="btn-sidebar-action outline">
-                        🔄 Обновить
-                    </button>
-                </div>
+            <div class="sidebar-actions-panel" style="justify-content: center;">
+                <button type="button" id="sync-poster-btn" class="btn-sidebar-action outline" style="width: 100%; text-align: center;">
+                    🔄 Обновить
+                </button>
             </div>
         </form>
     </div>
@@ -1306,11 +1290,7 @@
         });
     }
 
-    // Checkbox updates
-    function updateCount() {
-        const checked = document.querySelectorAll('.draft-checkbox:checked').length;
-        document.getElementById('count').textContent = checked;
-    }
+
 
     // Autocomplete field logic
     function setupAutocomplete(input) {
@@ -1432,20 +1412,6 @@
 
     // Setup listeners on dynamic elements (buttons, checkboxes)
     document.addEventListener('click', async function(e) {
-        // Select all within section
-        if (e.target.classList.contains('select-all-section')) {
-            const section = e.target.dataset.section;
-            const tbody = document.getElementById(`drafts-tbody-${section}`);
-            if (tbody) {
-                tbody.querySelectorAll('.draft-checkbox').forEach(cb => cb.checked = e.target.checked);
-            }
-            updateCount();
-        }
-
-        // Row checkbox click
-        if (e.target.classList.contains('draft-checkbox')) {
-            updateCount();
-        }
 
         // Completion status cycle
         if (e.target.closest('.btn-completion')) {
@@ -1542,7 +1508,6 @@
                 if (res.ok) {
                     btn.closest('tr').remove();
                     updateSummary();
-                    updateCount();
                 }
             } catch (err) {
                 console.error(err);

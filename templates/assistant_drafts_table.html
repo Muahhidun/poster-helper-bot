@@ -35,9 +35,7 @@
     data-completion-status="{{ draft.completion_status or 'pending' }}"
     data-is-income="{{ draft.is_income|default(0)|int }}"
     data-account-type="{{ account_type }}">
-    <td>
-        <input type="checkbox" name="draft_ids" value="{{ draft.id }}" class="draft-checkbox">
-    </td>
+
     <td class="completion-status">
         <button type="button" class="btn-completion" data-id="{{ draft.id }}" data-status="{{ draft.completion_status or 'pending' }}" title="Статус выполнения">
             {% if draft.completion_status == 'completed' %}✅
@@ -71,17 +69,7 @@
             <div class="autocomplete-results"></div>
         </div>
     </td>
-    <td class="poster-account">
-        <button type="button" class="btn-poster-account"
-                data-id="{{ draft.id }}"
-                data-poster-account-id="{{ draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else '' }}"
-                title="{% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}{% for pa in poster_accounts %}{% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}{% endfor %}">
-            {% set current_pa_id = draft.poster_account_id or (poster_accounts|selectattr('is_primary')|first).id if poster_accounts else None %}
-            {% for pa in poster_accounts %}
-                {% if pa.id == current_pa_id %}{{ pa.name }}{% endif %}
-            {% endfor %}
-        </button>
-    </td>
+
     <td class="actions">
         <button type="button" class="btn-delete" data-id="{{ draft.id }}" title="Удалить">🗑️</button>
     </td>
