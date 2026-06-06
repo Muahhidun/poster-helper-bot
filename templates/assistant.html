@@ -1667,6 +1667,34 @@
         }
     });
 
+    // Paste files/images from clipboard support (Universal Clipboard macOS/iOS)
+    chatInput.addEventListener('paste', function(e) {
+        const clipboardData = e.clipboardData || window.clipboardData;
+        if (!clipboardData) return;
+        
+        const items = clipboardData.items;
+        let hasFiles = false;
+        
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.kind === 'file') {
+                const file = item.getAsFile();
+                if (file) {
+                    if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+                        attachedFiles.push(file);
+                        hasFiles = true;
+                    } else {
+                        showToast('Поддерживаются только изображения и PDF файлы', 'warning');
+                    }
+                }
+            }
+        }
+        
+        if (hasFiles) {
+            renderFilePreviews();
+        }
+    });
+
     // File selection trigger
     btnAttachment.addEventListener('click', () => chatFileInput.click());
     chatFileInput.addEventListener('change', handleFilesSelection);
