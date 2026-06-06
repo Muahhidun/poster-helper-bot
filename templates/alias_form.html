@@ -3,57 +3,218 @@
 {% block title %}{% if mode == 'new' %}Добавить{% else %}Редактировать{% endif %} Alias{% endblock %}
 
 {% block content %}
-<h2>{% if mode == 'new' %}➕ Добавить{% else %}✏️ Редактировать{% endif %} Alias</h2>
+<style>
+    .alias-form-page {
+        animation: fadeInUp 0.4s ease-out;
+        margin-top: 30px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
 
-<form method="post" class="mt-4">
-    <div class="mb-3">
-        <label for="alias_text" class="form-label">Alias текст <span class="text-danger">*</span></label>
-        <input type="text" class="form-control" id="alias_text" name="alias_text"
-               value="{{ alias.alias_text if alias else '' }}" required>
-        <div class="form-text">Текст, который будет использоваться для поиска товара (например, "Кола ПЭТ 1л×12")</div>
-    </div>
+    .form-card {
+        background: #ffffff;
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--border-color);
+        box-shadow: var(--shadow-md);
+        padding: 32px;
+        width: 100%;
+        max-width: 600px;
+        margin-bottom: 40px;
+    }
 
-    <div class="mb-3">
-        <label class="form-label">Тип <span class="text-danger">*</span></label><br>
-        <div class="form-check form-check-inline">
-            <input class="form-check-input" type="radio" name="source" id="ingredient" value="ingredient"
-                   {% if not alias or alias.source == 'ingredient' %}checked{% endif %} required>
-            <label class="form-check-label" for="ingredient">Ингредиент</label>
-        </div>
-        <div class="form-check form-check-inline">
-            <input class="form-check-input" type="radio" name="source" id="product" value="product"
-                   {% if alias and alias.source == 'product' %}checked{% endif %}>
-            <label class="form-check-label" for="product">Продукт</label>
-        </div>
-    </div>
+    .form-title {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 22px;
+        margin-bottom: 24px;
+        text-align: center;
+    }
 
-    <div class="mb-3">
-        <label for="poster_item_name" class="form-label">Товар (начните вводить для поиска) <span class="text-danger">*</span></label>
-        <input type="text" class="form-control" id="poster_item_name" name="poster_item_name"
-               value="{{ alias.poster_item_name if alias else '' }}"
-               list="items_list" required autocomplete="off">
-        <datalist id="items_list">
-            {% for item in items %}
-            <option value="{{ item.name }}" data-id="{{ item.id }}">{{ item.name }} (ID: {{ item.id }})</option>
-            {% endfor %}
-        </datalist>
-        <input type="hidden" id="poster_item_id" name="poster_item_id"
-               value="{{ alias.poster_item_id if alias else '' }}" required>
-        <div class="form-text">Выберите товар из списка Poster</div>
-    </div>
+    .form-label {
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 14px;
+        margin-bottom: 6px;
+    }
 
-    <div class="mb-3">
-        <label for="notes" class="form-label">Примечание (опционально)</label>
-        <input type="text" class="form-control" id="notes" name="notes"
-               value="{{ alias.notes if alias else '' }}">
-        <div class="form-text">Дополнительная информация о alias</div>
-    </div>
+    .form-control, .form-select {
+        border-radius: var(--radius-lg) !important;
+        border: 1px solid #d1d5db;
+        padding: 10px 14px;
+        font-size: 14px;
+        transition: var(--transition-fast);
+        height: auto;
+    }
+    
+    .form-control:focus, .form-select:focus {
+        border-color: var(--accent-green) !important;
+        box-shadow: 0 0 0 3px rgba(15, 123, 108, 0.1) !important;
+        outline: none;
+    }
 
-    <div class="mt-4">
-        <a href="{{ url_for('list_aliases') }}" class="btn btn-secondary">Отмена</a>
-        <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+    .form-text {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+    }
+
+    /* Segmented Radio Control */
+    .segmented-control {
+        display: flex;
+        background: #f3f4f6;
+        padding: 4px;
+        border-radius: var(--radius-lg);
+        gap: 2px;
+        margin-bottom: 8px;
+    }
+
+    .segmented-control-option {
+        flex: 1;
+        position: relative;
+    }
+
+    .segmented-control-option input[type="radio"] {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        border: 0;
+    }
+
+    .segmented-control-label {
+        display: block;
+        text-align: center;
+        padding: 8px 12px;
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        background: transparent;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: var(--transition-fast);
+        user-select: none;
+    }
+
+    .segmented-control-option input[type="radio"]:checked + .segmented-control-label {
+        background: #ffffff;
+        color: var(--accent-green);
+        box-shadow: var(--shadow-sm);
+    }
+
+    /* Buttons styling */
+    .btn-premium {
+        background: var(--accent-green);
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        box-shadow: var(--shadow-sm);
+        cursor: pointer;
+        text-decoration: none;
+    }
+    
+    .btn-premium:hover {
+        background: var(--accent-green-hover);
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(15, 123, 108, 0.15);
+    }
+    
+    .btn-premium:active {
+        transform: translateY(0);
+    }
+
+    .btn-premium-secondary {
+        background: #f3f4f6;
+        color: var(--text-primary);
+        border: 1px solid #e5e7eb;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 500;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+    }
+
+    .btn-premium-secondary:hover {
+        background: #e5e7eb;
+        color: var(--text-primary);
+    }
+</style>
+
+<div class="alias-form-page">
+    <div class="form-card">
+        <h2 class="form-title">
+            {% if mode == 'new' %}➕ Добавить Alias{% else %}✏️ Редактировать Alias{% endif %}
+        </h2>
+
+        <form method="post">
+            <div class="mb-3">
+                <label for="alias_text" class="form-label">Alias текст <span class="text-danger">*</span></label>
+                <input type="text" class="form-control" id="alias_text" name="alias_text"
+                       value="{{ alias.alias_text if alias else '' }}" required placeholder="Например: Кола ПЭТ 1л×12">
+                <div class="form-text">Текст, который будет использоваться для поиска товара</div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Тип <span class="text-danger">*</span></label>
+                <div class="segmented-control">
+                    <div class="segmented-control-option">
+                        <input type="radio" name="source" id="ingredient" value="ingredient"
+                               {% if not alias or alias.source == 'ingredient' %}checked{% endif %} required>
+                        <label class="segmented-control-label" for="ingredient">Ингредиент</label>
+                    </div>
+                    <div class="segmented-control-option">
+                        <input type="radio" name="source" id="product" value="product"
+                               {% if alias and alias.source == 'product' %}checked{% endif %}>
+                        <label class="segmented-control-label" for="product">Продукт</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="poster_item_name" class="form-label">Товар Poster <span class="text-danger">*</span></label>
+                <input type="text" class="form-control" id="poster_item_name" name="poster_item_name"
+                       value="{{ alias.poster_item_name if alias else '' }}"
+                       list="items_list" required autocomplete="off" placeholder="Начните вводить для поиска...">
+                <datalist id="items_list">
+                    {% for item in items %}
+                    <option value="{{ item.name }}" data-id="{{ item.id }}">{{ item.name }} (ID: {{ item.id }})</option>
+                    {% endfor %}
+                </datalist>
+                <input type="hidden" id="poster_item_id" name="poster_item_id"
+                       value="{{ alias.poster_item_id if alias else '' }}" required>
+                <div class="form-text">Выберите товар из выпадающего списка Poster</div>
+            </div>
+
+            <div class="mb-3">
+                <label for="notes" class="form-label">Примечание (опционально)</label>
+                <input type="text" class="form-control" id="notes" name="notes"
+                       value="{{ alias.notes if alias else '' }}" placeholder="Дополнительная информация...">
+                <div class="form-text">Любые полезные пометки о сопоставлении</div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 mt-4">
+                <a href="{{ url_for('list_aliases') }}" class="btn-premium-secondary">Отмена</a>
+                <button type="submit" class="btn-premium">💾 Сохранить</button>
+            </div>
+        </form>
     </div>
-</form>
+</div>
 {% endblock %}
 
 {% block scripts %}

@@ -3,78 +3,336 @@
 {% block title %}Ежедневные транзакции{% endblock %}
 
 {% block content %}
-<div class="dt-page">
-    <div class="d-flex justify-content-between align-items-center mb-3 mt-3">
-        <h4 style="margin:0; font-weight: 700; color: #1f2937;">Ежедневные транзакции</h4>
-        <button class="btn btn-success btn-sm" onclick="openAddModal()">+ Добавить</button>
-    </div>
-    <p class="text-muted" style="font-size:13px; margin-bottom:16px;">
-        Транзакции создаются автоматически каждый день в 12:00. Здесь можно редактировать, отключать или добавлять новые.
-    </p>
+<style>
+    /* Premium Page Design */
+    .dt-page {
+        animation: fadeInUp 0.4s ease-out;
+        margin-top: 20px;
+    }
+    
+    .page-header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+    
+    .page-title {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 24px;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
 
-    <div class="table-responsive">
-        <table class="table table-hover" style="font-size:14px;" id="configTable">
-            <thead>
-                <tr style="background:#f8f9fa;">
-                    <th style="width:5%">#</th>
-                    <th style="width:18%">Категория</th>
-                    <th style="width:15%">Счёт</th>
-                    <th style="width:12%">Сумма</th>
-                    <th style="width:20%">Комментарий</th>
-                    <th style="width:10%">Тип</th>
-                    <th style="width:8%">Вкл</th>
-                    <th style="width:12%">Действия</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for c in configs %}
-                <tr id="row-{{ c.id }}" class="{% if not c.is_enabled %}table-secondary{% endif %}">
-                    <td class="text-muted">{{ loop.index }}</td>
-                    <td>
-                        <span class="fw-medium">{{ c.category_name or '—' }}</span>
-                    </td>
-                    <td>
-                        <span class="text-muted" style="font-size:12px;">{{ c.account_from_name or ('ID ' + c.account_from_id|string) }}</span>
-                        {% if c.transaction_type == 2 and c.account_to_name %}
-                        <br><span style="font-size:11px;">→ {{ c.account_to_name }}</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <span class="fw-bold {% if c.amount > 1 %}text-danger{% endif %}">
-                            {{ '{:,}'.format(c.amount).replace(',', ' ') }}₸
-                        </span>
-                    </td>
-                    <td>{{ c.comment or '—' }}</td>
-                    <td>
-                        {% if c.transaction_type == 2 %}
-                        <span class="badge bg-info">Перевод</span>
-                        {% else %}
-                        <span class="badge bg-warning text-dark">Расход</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox"
-                                   id="toggle-{{ c.id }}"
-                                   {% if c.is_enabled %}checked{% endif %}
-                                   onchange="toggleConfig({{ c.id }}, this.checked)">
-                        </div>
-                    </td>
-                    <td>
-                        <button class="btn btn-outline-primary btn-sm me-1" onclick="openEditModal({{ c.id }})" title="Редактировать">
-                            &#9998;
-                        </button>
-                        <button class="btn btn-outline-danger btn-sm" onclick="deleteConfig({{ c.id }})" title="Удалить">
-                            &times;
-                        </button>
-                    </td>
-                </tr>
-                {% endfor %}
-                {% if not configs %}
-                <tr><td colspan="8" class="text-center text-muted py-4">Нет настроенных транзакций</td></tr>
-                {% endif %}
-            </tbody>
-        </table>
+    .page-subtitle {
+        color: var(--text-secondary);
+        font-size: 13.5px;
+        margin-bottom: 24px;
+        margin-top: -16px;
+    }
+    
+    /* Modern Card Container for Tables */
+    .table-card {
+        background: #ffffff;
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
+        overflow: hidden;
+        margin-bottom: 40px;
+    }
+    
+    .table {
+        margin: 0;
+        border: none;
+    }
+    
+    .table th {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        background: #fafaf9;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid #f3f4f6;
+        font-size: 13.5px;
+        vertical-align: middle;
+        color: var(--text-primary);
+    }
+    
+    .table tbody tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .table tbody tr {
+        transition: background-color var(--transition-fast);
+    }
+    
+    .table tbody tr:hover {
+        background-color: rgba(15, 123, 108, 0.01) !important;
+    }
+
+    /* Disabled Row Visual */
+    .table tbody tr.disabled-row {
+        opacity: 0.6;
+        background-color: #fafafa !important;
+    }
+
+    .table tbody tr.disabled-row:hover {
+        background-color: #fafafa !important;
+    }
+    
+    /* Premium Badge styling */
+    .badge-premium {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid transparent;
+        display: inline-block;
+    }
+    
+    .badge-premium.expense {
+        color: var(--accent-orange);
+        background: rgba(217, 115, 13, 0.06);
+        border-color: rgba(217, 115, 13, 0.15);
+    }
+    
+    .badge-premium.transfer {
+        color: var(--accent-blue);
+        background: rgba(11, 107, 203, 0.06);
+        border-color: rgba(11, 107, 203, 0.15);
+    }
+
+    /* Custom form switch checked color */
+    .form-check-input:checked {
+        background-color: var(--accent-green) !important;
+        border-color: var(--accent-green) !important;
+    }
+
+    .form-check-input {
+        cursor: pointer;
+    }
+    
+    /* Compact Action Buttons */
+    .btn-action {
+        width: 32px;
+        height: 32px;
+        border-radius: var(--radius-md);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: var(--transition-fast);
+        outline: none;
+        padding: 0;
+    }
+    
+    .btn-action:hover {
+        background: #f3f4f6;
+        color: var(--text-primary);
+    }
+    
+    .btn-action.edit:hover {
+        border-color: #fbbf24;
+        background: #fffbeb;
+        color: #d97706;
+    }
+    
+    .btn-action.delete:hover {
+        border-color: #fca5a5;
+        background: #fef2f2;
+        color: #dc2626;
+    }
+
+    /* Modern Premium Buttons */
+    .btn-premium {
+        background: var(--accent-green);
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+        box-shadow: var(--shadow-sm);
+        text-decoration: none;
+    }
+    
+    .btn-premium:hover {
+        background: var(--accent-green-hover);
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(15, 123, 108, 0.15);
+    }
+    
+    .btn-premium:active {
+        transform: translateY(0);
+    }
+
+    .btn-premium-secondary {
+        background: #f3f4f6;
+        color: var(--text-primary);
+        border: 1px solid #e5e7eb;
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: 500;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 40px;
+        text-decoration: none;
+    }
+
+    .btn-premium-secondary:hover {
+        background: #e5e7eb;
+        color: var(--text-primary);
+    }
+
+    /* Premium inputs styling */
+    .form-control, .form-select {
+        border-radius: var(--radius-lg) !important;
+        border: 1px solid #d1d5db;
+        padding: 8px 14px;
+        font-size: 14px;
+        transition: var(--transition-fast);
+        height: 40px;
+    }
+    
+    .form-control:focus, .form-select:focus {
+        border-color: var(--accent-green) !important;
+        box-shadow: 0 0 0 3px rgba(15, 123, 108, 0.1) !important;
+        outline: none;
+    }
+
+    /* Modal premium restyling */
+    .modal-content {
+        border-radius: var(--radius-xl) !important;
+        border: none !important;
+        box-shadow: var(--shadow-lg) !important;
+    }
+
+    .modal-header {
+        border-bottom: 1px solid var(--border-color) !important;
+        background: #fafaf9;
+        border-top-left-radius: var(--radius-xl) !important;
+        border-top-right-radius: var(--radius-xl) !important;
+        padding: 16px 24px !important;
+    }
+
+    .modal-footer {
+        border-top: 1px solid var(--border-color) !important;
+        background: #fafaf9;
+        border-bottom-left-radius: var(--radius-xl) !important;
+        border-bottom-right-radius: var(--radius-xl) !important;
+        padding: 16px 24px !important;
+    }
+
+    .modal-body {
+        padding: 24px !important;
+    }
+</style>
+
+<div class="dt-page">
+    <div class="page-header-row">
+        <h2 class="page-title">⚙️ Ежедневные транзакции</h2>
+        <button class="btn-premium" onclick="openAddModal()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            Добавить
+        </button>
+    </div>
+    <div class="page-subtitle">
+        Транзакции создаются автоматически каждый день в 12:00. Здесь можно редактировать, отключать или добавлять новые.
+    </div>
+
+    <div class="table-card">
+        <div class="table-responsive">
+            <table class="table align-middle" id="configTable">
+                <thead>
+                    <tr>
+                        <th style="width:5%">#</th>
+                        <th style="width:20%">Категория</th>
+                        <th style="width:18%">Счёт</th>
+                        <th style="width:14%">Сумма</th>
+                        <th style="width:22%">Комментарий</th>
+                        <th style="width:10%">Тип</th>
+                        <th style="width:6%">Вкл</th>
+                        <th style="width:10%" class="text-end">Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in configs %}
+                    <tr id="row-{{ c.id }}" class="{% if not c.is_enabled %}disabled-row{% endif %}">
+                        <td class="text-muted">{{ loop.index }}</td>
+                        <td>
+                            <span class="fw-semibold">{{ c.category_name or '—' }}</span>
+                        </td>
+                        <td>
+                            <span class="fw-medium">{{ c.account_from_name or ('ID ' + c.account_from_id|string) }}</span>
+                            {% if c.transaction_type == 2 and c.account_to_name %}
+                            <div class="text-muted small mt-1">→ {{ c.account_to_name }}</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="fw-bold {% if c.amount > 1 %}text-danger{% endif %}">
+                                {{ '{:,}'.format(c.amount).replace(',', ' ') }} ₸
+                            </span>
+                        </td>
+                        <td><span class="text-muted">{{ c.comment or '—' }}</span></td>
+                        <td>
+                            {% if c.transaction_type == 2 %}
+                            <span class="badge-premium transfer">Перевод</span>
+                            {% else %}
+                            <span class="badge-premium expense">Расход</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="form-check form-switch m-0 p-0 d-flex justify-content-start align-items-center">
+                                <input class="form-check-input ms-0" type="checkbox"
+                                       id="toggle-{{ c.id }}"
+                                       {% if c.is_enabled %}checked{% endif %}
+                                       onchange="toggleConfig({{ c.id }}, this.checked)">
+                            </div>
+                        </td>
+                        <td>
+                            <div class="d-flex gap-1 justify-content-end">
+                                <button class="btn-action edit" onclick="openEditModal({{ c.id }})" title="Редактировать">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+                                </button>
+                                <button class="btn-action delete" onclick="deleteConfig({{ c.id }})" title="Удалить">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not configs %}
+                    <tr><td colspan="8" class="text-center text-muted py-4">Нет настроенных транзакций</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
@@ -83,14 +341,14 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="modalTitle">Добавить транзакцию</h5>
+                <h5 class="modal-title fw-bold" id="modalTitle">Добавить транзакцию</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="editId" value="">
 
                 <div class="mb-3">
-                    <label class="form-label fw-medium">Тип</label>
+                    <label class="form-label">Тип</label>
                     <select id="fTransactionType" class="form-select" onchange="onTypeChange()">
                         <option value="0">Расход</option>
                         <option value="2">Перевод</option>
@@ -98,18 +356,18 @@
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label fw-medium">Категория</label>
+                    <label class="form-label">Категория</label>
                     <select id="fCategoryId" class="form-select">
                         <option value="0">— выберите —</option>
                     </select>
                 </div>
                 <div class="mb-3" id="catNameRow" style="display:none;">
-                    <label class="form-label fw-medium">Название категории (вручную)</label>
+                    <label class="form-label">Название категории (вручную)</label>
                     <input type="text" id="fCategoryName" class="form-control" placeholder="Например: Повара">
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label fw-medium">Счёт (откуда)</label>
+                    <label class="form-label">Счёт (откуда)</label>
                     <select id="fAccountFromId" class="form-select">
                         <option value="4">Оставил в кассе (ID 4)</option>
                         <option value="1">Каспи Пей (ID 1)</option>
@@ -117,7 +375,7 @@
                 </div>
 
                 <div class="mb-3" id="accountToRow" style="display:none;">
-                    <label class="form-label fw-medium">Счёт (куда)</label>
+                    <label class="form-label">Счёт (куда)</label>
                     <select id="fAccountToId" class="form-select">
                         <option value="">— нет —</option>
                         <option value="5">Деньги дома (ID 5)</option>
@@ -128,22 +386,22 @@
 
                 <div class="row">
                     <div class="col-6 mb-3">
-                        <label class="form-label fw-medium">Сумма (₸)</label>
+                        <label class="form-label">Сумма (₸)</label>
                         <input type="number" id="fAmount" class="form-control" min="1" value="1">
                     </div>
                     <div class="col-6 mb-3">
-                        <label class="form-label fw-medium">Порядок</label>
+                        <label class="form-label">Порядок</label>
                         <input type="number" id="fSortOrder" class="form-control" min="0" value="0">
                     </div>
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label fw-medium">Комментарий</label>
+                    <label class="form-label">Комментарий</label>
                     <input type="text" id="fComment" class="form-control" placeholder="Например: Заготовка">
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label fw-medium">Заведение</label>
+                    <label class="form-label">Заведение</label>
                     <select id="fAccountName" class="form-select">
                         <option value="Pizzburg">Pizzburg</option>
                         <option value="Pizzburg-cafe">Pizzburg-cafe</option>
@@ -151,8 +409,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
-                <button type="button" class="btn btn-success" onclick="saveConfig()">Сохранить</button>
+                <button type="button" class="btn-premium-secondary" data-bs-dismiss="modal">Отмена</button>
+                <button type="button" class="btn-premium" onclick="saveConfig()">Сохранить</button>
             </div>
         </div>
     </div>
@@ -380,7 +638,7 @@ function toggleConfig(id, enabled) {
         if (result.success) {
             var row = document.getElementById('row-' + id);
             if (row) {
-                row.className = enabled ? '' : 'table-secondary';
+                row.className = enabled ? '' : 'disabled-row';
             }
             showToast(enabled ? 'Включено' : 'Отключено', 'success', 2000);
         } else {

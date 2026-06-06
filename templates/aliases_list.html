@@ -3,186 +3,483 @@
 {% block title %}Управление алиасами и автозаполнением{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>📋 Управление правилами сопоставлений</h2>
-    <div class="d-flex gap-2">
-        <form method="post" action="{{ url_for('sync_aliases_catalog') }}">
-            <button type="submit" class="btn btn-outline-primary">🔄 Обновить справочники из Poster</button>
+<style>
+    /* Premium Page Design */
+    .aliases-page {
+        animation: fadeInUp 0.4s ease-out;
+        margin-top: 20px;
+    }
+    
+    .page-header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+    
+    .page-title {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 24px;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    /* Modern Filter Section */
+    .filter-card {
+        background: #ffffff;
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--border-color);
+        padding: 16px 20px;
+        box-shadow: var(--shadow-sm);
+        margin-bottom: 24px;
+    }
+    
+    .form-control, .form-select {
+        border-radius: var(--radius-lg) !important;
+        border: 1px solid #d1d5db;
+        padding: 8px 14px;
+        font-size: 14px;
+        transition: var(--transition-fast);
+        height: 40px;
+    }
+    
+    .form-control:focus, .form-select:focus {
+        border-color: var(--accent-green) !important;
+        box-shadow: 0 0 0 3px rgba(15, 123, 108, 0.1) !important;
+        outline: none;
+    }
+    
+    /* Modern Premium Buttons */
+    .btn-premium {
+        background: var(--accent-green);
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+        box-shadow: var(--shadow-sm);
+    }
+    
+    .btn-premium:hover {
+        background: var(--accent-green-hover);
+        color: white;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(15, 123, 108, 0.15);
+    }
+    
+    .btn-premium:active {
+        transform: translateY(0);
+    }
+    
+    .btn-premium-outline {
+        background: transparent;
+        border: 1.5px solid var(--accent-green);
+        color: var(--accent-green);
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: 600;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+    }
+    
+    .btn-premium-outline:hover {
+        background: rgba(15, 123, 108, 0.05);
+        color: var(--accent-green-hover);
+        border-color: var(--accent-green-hover);
+    }
+
+    .btn-premium-secondary {
+        background: #f3f4f6;
+        color: var(--text-primary);
+        border: 1px solid #e5e7eb;
+        padding: 8px 16px;
+        font-size: 14px;
+        font-weight: 500;
+        border-radius: var(--radius-lg);
+        transition: var(--transition-fast);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 40px;
+    }
+
+    .btn-premium-secondary:hover {
+        background: #e5e7eb;
+        color: var(--text-primary);
+    }
+    
+    /* Navigation Tabs Restyling */
+    .nav-tabs {
+        border-bottom: 2px solid #e9e9e7;
+        gap: 4px;
+        margin-bottom: 24px !important;
+    }
+    
+    .nav-tabs .nav-link {
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-weight: 500;
+        padding: 12px 20px;
+        font-size: 14px;
+        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        position: relative;
+        transition: var(--transition-fast);
+    }
+    
+    .nav-tabs .nav-link:hover {
+        color: var(--text-primary);
+        background: rgba(0,0,0,0.02);
+    }
+    
+    .nav-tabs .nav-link.active {
+        color: var(--accent-green) !important;
+        background: transparent !important;
+        font-weight: 600;
+    }
+    
+    .nav-tabs .nav-link.active::after {
+        content: '';
+        position: absolute;
+        bottom: -2px;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--accent-green);
+    }
+    
+    /* Modern Card Container for Tables */
+    .table-card {
+        background: #ffffff;
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
+        overflow: hidden;
+        margin-bottom: 40px;
+    }
+    
+    .table {
+        margin: 0;
+        border: none;
+    }
+    
+    .table th {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        background: #fafaf9;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid #f3f4f6;
+        font-size: 13.5px;
+        vertical-align: middle;
+        color: var(--text-primary);
+    }
+    
+    .table tbody tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .table tbody tr {
+        transition: background-color var(--transition-fast);
+    }
+    
+    .table tbody tr:hover {
+        background-color: rgba(15, 123, 108, 0.01) !important;
+    }
+    
+    /* Premium Badge styling */
+    .badge-premium {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid transparent;
+        display: inline-block;
+    }
+    
+    .badge-premium.ingredient {
+        color: var(--accent-green);
+        background: rgba(15, 123, 108, 0.06);
+        border-color: rgba(15, 123, 108, 0.15);
+    }
+    
+    .badge-premium.product {
+        color: var(--accent-blue);
+        background: rgba(11, 107, 203, 0.06);
+        border-color: rgba(11, 107, 203, 0.15);
+    }
+
+    .badge-premium.secondary-badge {
+        color: var(--text-secondary);
+        background: #f3f4f6;
+        border-color: #e5e7eb;
+    }
+    
+    /* Compact Action Buttons */
+    .btn-action {
+        width: 32px;
+        height: 32px;
+        border-radius: var(--radius-md);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: var(--transition-fast);
+        outline: none;
+        padding: 0;
+    }
+    
+    .btn-action:hover {
+        background: #f3f4f6;
+        color: var(--text-primary);
+    }
+    
+    .btn-action.edit:hover {
+        border-color: #fbbf24;
+        background: #fffbeb;
+        color: #d97706;
+    }
+    
+    .btn-action.delete:hover {
+        border-color: #fca5a5;
+        background: #fef2f2;
+        color: #dc2626;
+    }
+
+    .info-alert-box {
+        background: #f0fdf4;
+        border: 1px solid #dcfce7;
+        border-radius: var(--radius-lg);
+        color: #166534;
+        padding: 14px 18px;
+        font-size: 13.5px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+</style>
+
+<div class="aliases-page">
+    <!-- Top Row -->
+    <div class="page-header-row">
+        <h2 class="page-title">📋 Управление сопоставлениями</h2>
+        <div class="d-flex gap-2">
+            <form method="post" action="{{ url_for('sync_aliases_catalog') }}">
+                <button type="submit" class="btn-premium-outline">🔄 Обновить из Poster</button>
+            </form>
+            <a href="{{ url_for('new_alias') }}" class="btn-premium">➕ Добавить алиас</a>
+        </div>
+    </div>
+
+    <!-- Filters Section -->
+    <div class="filter-card">
+        <form method="get" class="row g-3">
+            <div class="col-md-6">
+                <input type="text" name="search" class="form-control" placeholder="Поиск по названию или алиасу..." value="{{ search }}">
+            </div>
+            <div class="col-md-3">
+                <select name="source" class="form-select">
+                    <option value="all" {% if source_filter == 'all' %}selected{% endif %}>Все типы алиасов</option>
+                    <option value="ingredient" {% if source_filter == 'ingredient' %}selected{% endif %}>Ингредиенты</option>
+                    <option value="product" {% if source_filter == 'product' %}selected{% endif %}>Продукты</option>
+                </select>
+            </div>
+            <div class="col-md-3 d-flex gap-2">
+                <button type="submit" class="btn-premium flex-grow-1 justify-content-center" style="height: 40px;">🔍 Найти</button>
+                <a href="{{ url_for('list_aliases') }}" class="btn-premium-secondary flex-grow-1 text-decoration-none">Сбросить</a>
+            </div>
         </form>
-        <a href="{{ url_for('new_alias') }}" class="btn btn-success">➕ Добавить алиас</a>
     </div>
-</div>
 
-<!-- Search / Filter form -->
-<form method="get" class="row g-3 mb-4">
-    <div class="col-md-6">
-        <input type="text" name="search" class="form-control" placeholder="Поиск по названию или алиасу..." value="{{ search }}">
-    </div>
-    <div class="col-md-3">
-        <select name="source" class="form-select">
-            <option value="all" {% if source_filter == 'all' %}selected{% endif %}>Все типы алиасов</option>
-            <option value="ingredient" {% if source_filter == 'ingredient' %}selected{% endif %}>Только Ингредиенты</option>
-            <option value="product" {% if source_filter == 'product' %}selected{% endif %}>Только Продукты</option>
-        </select>
-    </div>
-    <div class="col-md-3">
-        <button type="submit" class="btn btn-primary">🔍 Найти</button>
-        <a href="{{ url_for('list_aliases') }}" class="btn btn-secondary">Сбросить</a>
-    </div>
-</form>
+    <!-- Navigation Tabs -->
+    <ul class="nav nav-tabs" id="aliasTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="aliases-tab" data-bs-toggle="tab" data-bs-target="#aliases" type="button" role="tab" aria-controls="aliases" aria-selected="true">
+                🏷️ Алиасы ингредиентов ({{ aliases|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules" type="button" role="tab" aria-controls="rules" aria-selected="false">
+                ⚖️ Правила умных фасовок ({{ packaging_rules|length }})
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="habits-tab" data-bs-toggle="tab" data-bs-target="#habits" type="button" role="tab" aria-controls="habits" aria-selected="false">
+                💰 Привычные цены ({{ habits|length }})
+            </button>
+        </li>
+    </ul>
 
-<!-- Navigation Tabs -->
-<ul class="nav nav-tabs mb-4" id="aliasTabs" role="tablist">
-    <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="aliases-tab" data-bs-toggle="tab" data-bs-target="#aliases" type="button" role="tab" aria-controls="aliases" aria-selected="true">
-            🏷️ Алиасы ингредиентов ({{ aliases|length }})
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules" type="button" role="tab" aria-controls="rules" aria-selected="false">
-            ⚖️ Правила умных фасовок ({{ packaging_rules|length }})
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="habits-tab" data-bs-toggle="tab" data-bs-target="#habits" type="button" role="tab" aria-controls="habits" aria-selected="false">
-            💰 Привычные цены ({{ habits|length }})
-        </button>
-    </li>
-</ul>
-
-<!-- Tab Contents -->
-<div class="tab-content" id="aliasTabsContent">
-    
-    <!-- Tab 1: Aliases -->
-    <div class="tab-pane fade show active" id="aliases" role="tabpanel" aria-labelledby="aliases-tab">
-        <div class="table-responsive">
-            <table class="table table-striped table-hover align-middle">
-                <thead>
-                    <tr>
-                        <th style="width: 5%;">ID</th>
-                        <th style="width: 30%;">Текст из накладной (Alias)</th>
-                        <th style="width: 30%;">Ингредиент в Poster</th>
-                        <th style="width: 10%;">Тип</th>
-                        <th style="width: 15%;">Примечание</th>
-                        <th style="width: 10%;" class="text-end">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% if aliases %}
-                        {% for alias in aliases %}
-                        <tr>
-                            <td>{{ alias.id }}</td>
-                            <td class="fw-bold">{{ alias.alias_text }}</td>
-                            <td>{{ alias.poster_item_name }}</td>
-                            <td>
-                                <span class="badge bg-{{ 'primary' if alias.source == 'ingredient' else 'success' }}">
-                                    {{ alias.source }}
-                                </span>
-                            </td>
-                            <td><span class="text-muted small">{{ alias.notes if alias.notes else '-' }}</span></td>
-                            <td class="text-end">
-                                <a href="{{ url_for('edit_alias', alias_id=alias.id) }}" class="btn btn-sm btn-outline-warning" title="Редактировать">✏️</a>
-                                <form method="post" action="{{ url_for('delete_alias', alias_id=alias.id) }}" style="display:inline;">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить этот alias?')" title="Удалить">🗑️</button>
-                                </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr>
-                            <td colspan="6" class="text-center text-muted py-4">Нет сохраненных алиасов.</td>
-                        </tr>
-                    {% endif %}
-                </tbody>
-            </table>
+    <!-- Tab Contents -->
+    <div class="tab-content" id="aliasTabsContent">
+        
+        <!-- Tab 1: Aliases -->
+        <div class="tab-pane fade show active" id="aliases" role="tabpanel" aria-labelledby="aliases-tab">
+            <div class="table-card">
+                <div class="table-responsive">
+                    <table class="table align-middle">
+                        <thead>
+                            <tr>
+                                <th style="width: 5%;">ID</th>
+                                <th style="width: 30%;">Текст из накладной (Alias)</th>
+                                <th style="width: 30%;">Ингредиент в Poster</th>
+                                <th style="width: 10%;">Тип</th>
+                                <th style="width: 15%;">Примечание</th>
+                                <th style="width: 10%;" class="text-end">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if aliases %}
+                                {% for alias in aliases %}
+                                <tr>
+                                    <td class="text-muted">{{ alias.id }}</td>
+                                    <td class="fw-bold">{{ alias.alias_text }}</td>
+                                    <td>{{ alias.poster_item_name }}</td>
+                                    <td>
+                                        <span class="badge-premium {{ alias.source }}">
+                                            {% if alias.source == 'ingredient' %}ингредиент{% else %}продукт{% endif %}
+                                        </span>
+                                    </td>
+                                    <td><span class="text-muted small">{{ alias.notes if alias.notes else '-' }}</span></td>
+                                    <td class="text-end">
+                                        <div class="d-inline-flex gap-1">
+                                            <a href="{{ url_for('edit_alias', alias_id=alias.id) }}" class="btn-action edit" title="Редактировать">✏️</a>
+                                            <form method="post" action="{{ url_for('delete_alias', alias_id=alias.id) }}" style="margin: 0;">
+                                                <button type="submit" class="btn-action delete" onclick="return confirm('Удалить этот alias?')" title="Удалить">🗑️</button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">Нет сохраненных алиасов.</td>
+                                </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
+        
+        <!-- Tab 2: Smart Packaging Rules -->
+        <div class="tab-pane fade" id="rules" role="tabpanel" aria-labelledby="rules-tab">
+            <div class="info-alert-box">
+                <span>💡</span>
+                <span>Здесь показаны правила перевода штук/упаковок в базовые единицы (например, 1 шт соуса терияки -> 0.23 кг). Правила создаются автоматически, когда вы редактируете количество в черновиках.</span>
+            </div>
+            <div class="table-card">
+                <div class="table-responsive">
+                    <table class="table align-middle">
+                        <thead>
+                            <tr>
+                                <th style="width: 5%;">ID</th>
+                                <th style="width: 35%;">Ингредиент</th>
+                                <th style="width: 20%;">Исходная упаковка</th>
+                                <th style="width: 15%;">Коэффициент (кг/ед)</th>
+                                <th style="width: 15%;">Примечание</th>
+                                <th style="width: 10%;" class="text-end">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if packaging_rules %}
+                                {% for rule in packaging_rules %}
+                                <tr>
+                                    <td class="text-muted">{{ rule.id }}</td>
+                                    <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id, 'ID: ' ~ rule.poster_ingredient_id) }}</td>
+                                    <td><span class="badge-premium secondary-badge">{{ rule.original_unit }}</span></td>
+                                    <td><span class="fw-bold text-success">{{ rule.coefficient }}</span> {{ rule.target_unit }}</td>
+                                    <td><span class="text-muted small">{{ rule.notes if rule.notes else '-' }}</span></td>
+                                    <td class="text-end">
+                                        <form method="post" action="{{ url_for('delete_packaging_rule_route', rule_id=rule.id) }}" style="margin:0;">
+                                            <button type="submit" class="btn-action delete" onclick="return confirm('Удалить это правило фасовки?')" title="Удалить">🗑️</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
+                                </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Tab 3: Price Habits -->
+        <div class="tab-pane fade" id="habits" role="tabpanel" aria-labelledby="habits-tab">
+            <div class="info-alert-box">
+                <span>💡</span>
+                <span>Здесь сохранены ваши привычные цены за килограмм. Если при импорте общая сумма кратна этой цене, система автоматически рассчитает вес (например, 46 000 за фарш -> 10 кг по 4 600).</span>
+            </div>
+            <div class="table-card">
+                <div class="table-responsive">
+                    <table class="table align-middle">
+                        <thead>
+                            <tr>
+                                <th style="width: 5%;">ID</th>
+                                <th style="width: 45%;">Ингредиент</th>
+                                <th style="width: 20%;">Типичная цена</th>
+                                <th style="width: 20%;">Примечание</th>
+                                <th style="width: 10%;" class="text-end">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if habits %}
+                                {% for habit in habits %}
+                                <tr>
+                                    <td class="text-muted">{{ habit.id }}</td>
+                                    <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id, 'ID: ' ~ habit.poster_ingredient_id) }}</td>
+                                    <td><span class="fw-bold text-primary">{{ "{:,.0f}".format(habit.default_price) }} ₸</span> /кг</td>
+                                    <td><span class="text-muted small">{{ habit.notes if habit.notes else '-' }}</span></td>
+                                    <td class="text-end">
+                                        <form method="post" action="{{ url_for('delete_habit_route', habit_id=habit.id) }}" style="margin:0;">
+                                            <button type="submit" class="btn-action delete" onclick="return confirm('Удалить эту привычную цену?')" title="Удалить">🗑️</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted py-4">Нет сохраненных привычных цен.</td>
+                                </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
     </div>
-    
-    <!-- Tab 2: Smart Packaging Rules -->
-    <div class="tab-pane fade" id="rules" role="tabpanel" aria-labelledby="rules-tab">
-        <div class="alert alert-info d-flex align-items-center mb-3">
-            <span class="me-2">💡</span>
-            <span>Здесь показаны правила перевода штук/упаковок в базовые единицы (например, 1 шт соуса терияки -> 0.23 кг). Правила создаются автоматически, когда вы редактируете количество в черновиках.</span>
-        </div>
-        <div class="table-responsive">
-            <table class="table table-striped table-hover align-middle">
-                <thead>
-                    <tr>
-                        <th style="width: 5%;">ID</th>
-                        <th style="width: 35%;">Ингредиент</th>
-                        <th style="width: 20%;">Исходная упаковка</th>
-                        <th style="width: 15%;">Коэффициент (кг/ед)</th>
-                        <th style="width: 15%;">Примечание</th>
-                        <th style="width: 10%;" class="text-end">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% if packaging_rules %}
-                        {% for rule in packaging_rules %}
-                        <tr>
-                            <td>{{ rule.id }}</td>
-                            <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id, 'ID: ' ~ rule.poster_ingredient_id) }}</td>
-                            <td><span class="badge bg-secondary">{{ rule.original_unit }}</span></td>
-                            <td><span class="fw-bold text-success">{{ rule.coefficient }}</span> {{ rule.target_unit }}</td>
-                            <td><span class="text-muted small">{{ rule.notes if rule.notes else '-' }}</span></td>
-                            <td class="text-end">
-                                <form method="post" action="{{ url_for('delete_packaging_rule_route', rule_id=rule.id) }}" style="display:inline;">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить это правило фасовки?')" title="Удалить">🗑️</button>
-                                </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr>
-                            <td colspan="6" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
-                        </tr>
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    
-    <!-- Tab 3: Price Habits -->
-    <div class="tab-pane fade" id="habits" role="tabpanel" aria-labelledby="habits-tab">
-        <div class="alert alert-info d-flex align-items-center mb-3">
-            <span class="me-2">💡</span>
-            <span>Здесь сохранены ваши привычные цены за килограмм. Если при импорте общая сумма кратна этой цене, система автоматически рассчитает вес (например, 46 000 за фарш -> 10 кг по 4 600).</span>
-        </div>
-        <div class="table-responsive">
-            <table class="table table-striped table-hover align-middle">
-                <thead>
-                    <tr>
-                        <th style="width: 5%;">ID</th>
-                        <th style="width: 45%;">Ингредиент</th>
-                        <th style="width: 20%;">Типичная цена</th>
-                        <th style="width: 20%;">Примечание</th>
-                        <th style="width: 10%;" class="text-end">Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% if habits %}
-                        {% for habit in habits %}
-                        <tr>
-                            <td>{{ habit.id }}</td>
-                            <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id, 'ID: ' ~ habit.poster_ingredient_id) }}</td>
-                            <td><span class="fw-bold text-primary">{{ "{:,.0f}".format(habit.default_price) }} ₸</span> /кг</td>
-                            <td><span class="text-muted small">{{ habit.notes if habit.notes else '-' }}</span></td>
-                            <td class="text-end">
-                                <form method="post" action="{{ url_for('delete_habit_route', habit_id=habit.id) }}" style="display:inline;">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить эту привычную цену?')" title="Удалить">🗑️</button>
-                                </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr>
-                            <td colspan="5" class="text-center text-muted py-4">Нет сохраненных привычных цен.</td>
-                        </tr>
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    
 </div>
 {% endblock %}
