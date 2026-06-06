@@ -370,6 +370,24 @@ def list_aliases():
 
 
 
+@app.route('/aliases/sync', methods=['POST'])
+def sync_aliases_catalog():
+    """Force sync ingredients and products catalogs from Poster API for the current user"""
+    from sync_ingredients import sync_ingredients
+    from sync_products import sync_products
+    
+    try:
+        total_ing, _ = run_async(sync_ingredients(g.user_id))
+        total_prod, _ = run_async(sync_products(g.user_id))
+        
+        flash(f'✅ Справочники успешно обновлены! Загружено {total_ing} ингредиентов и {total_prod} продуктов из всех аккаунтов.', 'success')
+    except Exception as e:
+        logger.error(f"Error syncing catalog from web interface: {e}", exc_info=True)
+        flash(f'❌ Ошибка при синхронизации справочников: {e}', 'danger')
+        
+    return redirect(url_for('list_aliases'))
+
+
 @app.route('/aliases/new', methods=['GET', 'POST'])
 def new_alias():
     """Add new alias"""

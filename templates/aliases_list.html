@@ -5,7 +5,12 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>📋 Управление правилами сопоставлений</h2>
-    <a href="{{ url_for('new_alias') }}" class="btn btn-success">➕ Добавить алиас</a>
+    <div class="d-flex gap-2">
+        <form method="post" action="{{ url_for('sync_aliases_catalog') }}">
+            <button type="submit" class="btn btn-outline-primary">🔄 Обновить справочники из Poster</button>
+        </form>
+        <a href="{{ url_for('new_alias') }}" class="btn btn-success">➕ Добавить алиас</a>
+    </div>
 </div>
 
 <!-- Search / Filter form -->
