@@ -266,7 +266,9 @@ def load_items_from_csv():
                     items.append({
                         'id': int(row['ingredient_id']),
                         'name': row['ingredient_name'],
-                        'type': 'ingredient'
+                        'type': 'ingredient',
+                        'account_name': row.get('account_name', ''),
+                        'poster_account_name': row.get('account_name', '')
                     })
         except Exception as e:
             logger.error(f"Error loading ingredients: {e}")
@@ -286,7 +288,9 @@ def load_items_from_csv():
                     items.append({
                         'id': int(row['product_id']),
                         'name': row['product_name'],
-                        'type': 'product'
+                        'type': 'product',
+                        'account_name': row.get('account_name', ''),
+                        'poster_account_name': row.get('account_name', '')
                     })
         except Exception as e:
             logger.error(f"Error loading products: {e}")
@@ -353,7 +357,22 @@ def list_aliases():
 
     # Load items to map ingredient names
     items = load_items_from_csv()
-    item_names = {i['id']: i['name'] for i in items if i['type'] == 'ingredient'}
+    
+    # Prioritize primary account ingredient names to prevent duplicate ID collisions
+    primary_acc = db.get_primary_account(g.user_id)
+    primary_name = primary_acc['account_name'] if primary_acc else None
+    
+    item_names = {}
+    # First pass: map all ingredients (non-primary or default first)
+    for i in items:
+        if i['type'] == 'ingredient':
+            item_names[i['id']] = i['name']
+            
+    # Second pass: overwrite with primary account ingredients so they take precedence
+    if primary_name:
+        for i in items:
+            if i['type'] == 'ingredient' and i.get('account_name') == primary_name:
+                item_names[i['id']] = i['name']
 
     # If search filter is active, filter packaging rules and habits too
     if search:
