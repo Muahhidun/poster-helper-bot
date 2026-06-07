@@ -504,6 +504,10 @@ def delete_packaging_rule_route(rule_id):
     """Delete packaging rule"""
     db = get_database()
     success = db.delete_packaging_rule_by_id(rule_id, g.user_id)
+    
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
+        return jsonify({'success': success})
+        
     if success:
         flash('🗑️ Правило фасовки удалено!', 'info')
     else:
@@ -511,16 +515,66 @@ def delete_packaging_rule_route(rule_id):
     return redirect(url_for('list_aliases'))
 
 
+@app.route('/aliases/packaging-rules/delete-batch', methods=['POST'])
+def delete_packaging_rules_batch_route():
+    """Delete multiple packaging rules at once"""
+    db = get_database()
+    data = request.get_json() or {}
+    rule_ids = data.get('ids', [])
+    if not rule_ids:
+        return jsonify({'success': False, 'error': 'Нет выбранных правил'})
+        
+    success = True
+    deleted_count = 0
+    for r_id in rule_ids:
+        if db.delete_packaging_rule_by_id(int(r_id), g.user_id):
+            deleted_count += 1
+        else:
+            success = False
+            
+    return jsonify({
+        'success': success,
+        'deleted_count': deleted_count
+    })
+
+
 @app.route('/aliases/habits/delete/<int:habit_id>', methods=['POST'])
 def delete_habit_route(habit_id):
     """Delete typical price habit"""
     db = get_database()
     success = db.delete_ingredient_habit_by_id(habit_id, g.user_id)
+    
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
+        return jsonify({'success': success})
+        
     if success:
         flash('🗑️ Привычная цена удалена!', 'info')
     else:
         flash('❌ Ошибка при удалении привычной цены', 'danger')
     return redirect(url_for('list_aliases'))
+
+
+@app.route('/aliases/habits/delete-batch', methods=['POST'])
+def delete_habits_batch_route():
+    """Delete multiple typical price habits at once"""
+    db = get_database()
+    data = request.get_json() or {}
+    habit_ids = data.get('ids', [])
+    if not habit_ids:
+        return jsonify({'success': False, 'error': 'Нет выбранных привычных цен'})
+        
+    success = True
+    deleted_count = 0
+    for h_id in habit_ids:
+        if db.delete_ingredient_habit_by_id(int(h_id), g.user_id):
+            deleted_count += 1
+        else:
+            success = False
+            
+    return jsonify({
+        'success': success,
+        'deleted_count': deleted_count
+    })
 
 
 

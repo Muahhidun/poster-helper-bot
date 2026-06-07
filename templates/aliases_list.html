@@ -392,17 +392,23 @@
         
         <!-- Tab 2: Smart Packaging Rules -->
         <div class="tab-pane fade" id="rules" role="tabpanel" aria-labelledby="rules-tab">
-            <div class="info-alert-box">
-                <span>💡</span>
-                <span>Здесь показаны правила перевода штук/упаковок в базовые единицы (например, 1 шт соуса терияки -> 0.23 кг). Правила создаются автоматически, когда вы редактируете количество в черновиках.</span>
+            <div class="info-alert-box d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center gap-2">
+                    <span>💡</span>
+                    <span>Здесь показаны правила перевода штук/упаковок в базовые единицы (например, 1 шт соуса терияки -> 0.23 кг). Правила создаются автоматически, когда вы редактируете количество в черновиках.</span>
+                </div>
+                <button id="delete-selected-rules-btn" class="btn btn-danger btn-sm d-none flex-shrink-0" onclick="deleteSelectedRules()">
+                    🗑️ Удалить выбранные (<span id="selected-rules-count">0</span>)
+                </button>
             </div>
             <div class="table-card">
                 <div class="table-responsive">
                     <table class="table align-middle">
                         <thead>
                             <tr>
+                                <th style="width: 3%;"><input type="checkbox" id="select-all-rules" class="form-check-input select-all-checkbox"></th>
                                 <th style="width: 5%;">ID</th>
-                                <th style="width: 30%;">Ингредиент</th>
+                                <th style="width: 27%;">Ингредиент</th>
                                 <th style="width: 15%;">Отдел</th>
                                 <th style="width: 15%;">Исходная упаковка</th>
                                 <th style="width: 15%;">Коэффициент (кг/ед)</th>
@@ -413,7 +419,8 @@
                         <tbody>
                             {% if packaging_rules %}
                                 {% for rule in packaging_rules %}
-                                <tr>
+                                <tr id="rule-row-{{ rule.id }}">
+                                    <td><input type="checkbox" class="form-check-input rule-checkbox" data-id="{{ rule.id }}"></td>
                                     <td class="text-muted">{{ rule.id }}</td>
                                     <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id ~ '_' ~ (rule.account_name or '').strip(), item_names.get(rule.poster_ingredient_id|string, 'ID: ' ~ rule.poster_ingredient_id)) }}</td>
                                     <td>
@@ -427,15 +434,13 @@
                                     <td><span class="fw-bold text-success">{{ rule.coefficient }}</span> {{ rule.target_unit }}</td>
                                     <td><span class="text-muted small">{{ rule.notes if rule.notes else '-' }}</span></td>
                                     <td class="text-end">
-                                        <form method="post" action="{{ url_for('delete_packaging_rule_route', rule_id=rule.id) }}" style="margin:0;">
-                                            <button type="submit" class="btn-action delete" onclick="return confirm('Удалить это правило фасовки?')" title="Удалить">🗑️</button>
-                                        </form>
+                                        <button type="button" class="btn-action delete" onclick="deleteSingleRule({{ rule.id }}, event)" title="Удалить">🗑️</button>
                                     </td>
                                 </tr>
                                 {% endfor %}
                             {% else %}
                                 <tr>
-                                    <td colspan="6" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
+                                    <td colspan="8" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
                                 </tr>
                             {% endif %}
                         </tbody>
@@ -446,17 +451,23 @@
         
         <!-- Tab 3: Price Habits -->
         <div class="tab-pane fade" id="habits" role="tabpanel" aria-labelledby="habits-tab">
-            <div class="info-alert-box">
-                <span>💡</span>
-                <span>Здесь сохранены ваши привычные цены за килограмм. Если при импорте общая сумма кратна этой цене, система автоматически рассчитает вес (например, 46 000 за фарш -> 10 кг по 4 600).</span>
+            <div class="info-alert-box d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center gap-2">
+                    <span>💡</span>
+                    <span>Здесь сохранены ваши привычные цены за килограмм. Если при импорте общая сумма кратна этой цене, система автоматически рассчитает вес (например, 46 000 за фарш -> 10 кг по 4 600).</span>
+                </div>
+                <button id="delete-selected-habits-btn" class="btn btn-danger btn-sm d-none flex-shrink-0" onclick="deleteSelectedHabits()">
+                    🗑️ Удалить выбранные (<span id="selected-habits-count">0</span>)
+                </button>
             </div>
             <div class="table-card">
                 <div class="table-responsive">
                     <table class="table align-middle">
                         <thead>
                             <tr>
+                                <th style="width: 3%;"><input type="checkbox" id="select-all-habits" class="form-check-input select-all-checkbox"></th>
                                 <th style="width: 5%;">ID</th>
-                                <th style="width: 35%;">Ингредиент</th>
+                                <th style="width: 32%;">Ингредиент</th>
                                 <th style="width: 15%;">Отдел</th>
                                 <th style="width: 20%;">Типичная цена</th>
                                 <th style="width: 15%;">Примечание</th>
@@ -466,7 +477,8 @@
                         <tbody>
                             {% if habits %}
                                 {% for habit in habits %}
-                                <tr>
+                                <tr id="habit-row-{{ habit.id }}">
+                                    <td><input type="checkbox" class="form-check-input habit-checkbox" data-id="{{ habit.id }}"></td>
                                     <td class="text-muted">{{ habit.id }}</td>
                                     <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id ~ '_' ~ (habit.account_name or '').strip(), item_names.get(habit.poster_ingredient_id|string, 'ID: ' ~ habit.poster_ingredient_id)) }}</td>
                                     <td>
@@ -479,15 +491,13 @@
                                     <td><span class="fw-bold text-primary">{{ "{:,.0f}".format(habit.default_price) }} ₸</span> /кг</td>
                                     <td><span class="text-muted small">{{ habit.notes if habit.notes else '-' }}</span></td>
                                     <td class="text-end">
-                                        <form method="post" action="{{ url_for('delete_habit_route', habit_id=habit.id) }}" style="margin:0;">
-                                            <button type="submit" class="btn-action delete" onclick="return confirm('Удалить эту привычную цену?')" title="Удалить">🗑️</button>
-                                        </form>
+                                        <button type="button" class="btn-action delete" onclick="deleteSingleHabit({{ habit.id }}, event)" title="Удалить">🗑️</button>
                                     </td>
                                 </tr>
                                 {% endfor %}
                             {% else %}
                                 <tr>
-                                    <td colspan="5" class="text-center text-muted py-4">Нет сохраненных привычных цен.</td>
+                                    <td colspan="7" class="text-center text-muted py-4">Нет сохраненных привычных цен.</td>
                                 </tr>
                             {% endif %}
                         </tbody>
@@ -498,4 +508,222 @@
         
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 1. Tab Persistence
+    const activeTabId = localStorage.getItem('activeAliasTab');
+    if (activeTabId) {
+        const tabEl = document.getElementById(activeTabId);
+        if (tabEl) {
+            const tab = new bootstrap.Tab(tabEl);
+            tab.show();
+        }
+    }
+
+    const tabButtons = document.querySelectorAll('#aliasTabs button[data-bs-toggle="tab"]');
+    tabButtons.forEach(button => {
+        button.addEventListener('shown.bs.tab', function(event) {
+            localStorage.setItem('activeAliasTab', event.target.id);
+        });
+    });
+
+    // 2. Checkbox selection for Rules
+    const selectAllRules = document.getElementById('select-all-rules');
+    const ruleCheckboxes = document.querySelectorAll('.rule-checkbox');
+    const deleteRulesBtn = document.getElementById('delete-selected-rules-btn');
+    const selectedRulesCountSpan = document.getElementById('selected-rules-count');
+
+    function updateRulesBulkBtn() {
+        const checkedCount = document.querySelectorAll('.rule-checkbox:checked').length;
+        selectedRulesCountSpan.textContent = checkedCount;
+        if (checkedCount > 0) {
+            deleteRulesBtn.classList.remove('d-none');
+        } else {
+            deleteRulesBtn.classList.add('d-none');
+        }
+    }
+
+    if (selectAllRules) {
+        selectAllRules.addEventListener('change', function() {
+            ruleCheckboxes.forEach(cb => {
+                cb.checked = selectAllRules.checked;
+            });
+            updateRulesBulkBtn();
+        });
+    }
+
+    ruleCheckboxes.forEach(cb => {
+        cb.addEventListener('change', function() {
+            const allChecked = Array.from(ruleCheckboxes).every(c => c.checked);
+            selectAllRules.checked = allChecked;
+            updateRulesBulkBtn();
+        });
+    });
+
+    // 3. Checkbox selection for Habits
+    const selectAllHabits = document.getElementById('select-all-habits');
+    const habitCheckboxes = document.querySelectorAll('.habit-checkbox');
+    const deleteHabitsBtn = document.getElementById('delete-selected-habits-btn');
+    const selectedHabitsCountSpan = document.getElementById('selected-habits-count');
+
+    function updateHabitsBulkBtn() {
+        const checkedCount = document.querySelectorAll('.habit-checkbox:checked').length;
+        selectedHabitsCountSpan.textContent = checkedCount;
+        if (checkedCount > 0) {
+            deleteHabitsBtn.classList.remove('d-none');
+        } else {
+            deleteHabitsBtn.classList.add('d-none');
+        }
+    }
+
+    if (selectAllHabits) {
+        selectAllHabits.addEventListener('change', function() {
+            habitCheckboxes.forEach(cb => {
+                cb.checked = selectAllHabits.checked;
+            });
+            updateHabitsBulkBtn();
+        });
+    }
+
+    habitCheckboxes.forEach(cb => {
+        cb.addEventListener('change', function() {
+            const allChecked = Array.from(habitCheckboxes).every(c => c.checked);
+            selectAllHabits.checked = allChecked;
+            updateHabitsBulkBtn();
+        });
+    });
+});
+
+// 4. AJAX delete calls
+function deleteSingleRule(ruleId, event) {
+    if (!confirm('Удалить это правило фасовки?')) return;
+    
+    fetch(`/aliases/packaging-rules/delete/${ruleId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const row = document.getElementById(`rule-row-${ruleId}`);
+            if (row) {
+                row.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+                row.style.opacity = '0';
+                row.style.transform = 'translateX(-10px)';
+                setTimeout(() => {
+                    row.remove();
+                    const tbody = document.querySelector('#rules tbody');
+                    if (tbody && tbody.querySelectorAll('tr').length === 0) {
+                        window.location.reload();
+                    }
+                }, 400);
+            }
+        } else {
+            alert('Ошибка при удалении правила фасовки');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Ошибка при отправке запроса');
+    });
+}
+
+function deleteSingleHabit(habitId, event) {
+    if (!confirm('Удалить эту привычную цену?')) return;
+    
+    fetch(`/aliases/habits/delete/${habitId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const row = document.getElementById(`habit-row-${habitId}`);
+            if (row) {
+                row.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+                row.style.opacity = '0';
+                row.style.transform = 'translateX(-10px)';
+                setTimeout(() => {
+                    row.remove();
+                    const tbody = document.querySelector('#habits tbody');
+                    if (tbody && tbody.querySelectorAll('tr').length === 0) {
+                        window.location.reload();
+                    }
+                }, 400);
+            }
+        } else {
+            alert('Ошибка при удалении привычной цены');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Ошибка при отправке запроса');
+    });
+}
+
+function deleteSelectedRules() {
+    const checkedBoxes = document.querySelectorAll('.rule-checkbox:checked');
+    const ids = Array.from(checkedBoxes).map(cb => parseInt(cb.getAttribute('data-id')));
+    if (ids.length === 0) return;
+    
+    if (!confirm(`Удалить ${ids.length} выбранных правил фасовки?`)) return;
+    
+    fetch('/aliases/packaging-rules/delete-batch', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({ ids: ids })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert('Ошибка при массовом удалении: ' + (data.error || 'неизвестная ошибка'));
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Ошибка при отправке запроса');
+    });
+}
+
+function deleteSelectedHabits() {
+    const checkedBoxes = document.querySelectorAll('.habit-checkbox:checked');
+    const ids = Array.from(checkedBoxes).map(cb => parseInt(cb.getAttribute('data-id')));
+    if (ids.length === 0) return;
+    
+    if (!confirm(`Удалить ${ids.length} выбранных привычных цен?`)) return;
+    
+    fetch('/aliases/habits/delete-batch', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({ ids: ids })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert('Ошибка при массовом удалении: ' + (data.error || 'неизвестная ошибка'));
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Ошибка при отправке запроса');
+    });
+}
+</script>
 {% endblock %}
