@@ -1966,7 +1966,7 @@ def view_assistant():
 
 @app.route('/login/debug-delete/<int:tx_id>')
 def debug_delete(tx_id):
-    """Debug route to fetch details and test delete options for a transaction"""
+    """Debug route to fetch all recent transactions to identify target transaction"""
     db = get_database()
     try:
         user_ids = db.get_all_user_ids_with_accounts()
@@ -1985,7 +1985,7 @@ def debug_delete(tx_id):
             "account_name": acc['account_name']
         }
         
-        async def fetch_details():
+        async def fetch_recent():
             client = PosterClient(
                 telegram_user_id=None,
                 poster_token=acc['poster_token'],
@@ -1993,11 +1993,8 @@ def debug_delete(tx_id):
                 poster_base_url=acc['poster_base_url']
             )
             
-            tx_details = None
-            prod_details = None
+            tx_list = []
             err_details = None
-            err_delete = None
-            res_delete = None
             
             try:
                 # Fetch transactions for June 5 to June 8, 2026
@@ -2005,51 +2002,39 @@ def debug_delete(tx_id):
                     'dateFrom': '20260605',
                     'dateTo': '20260608'
                 })
-                transactions = res.get('response', [])
-                for tx in transactions:
-                    if int(tx.get('transaction_id', 0)) == tx_id:
-                        tx_details = tx
-                        break
-                        
-                if tx_details:
-                    # Fetch products
-                    prod_res = await client._request('GET', 'dash.getTransactionProducts', params={
-                        'transaction_id': tx_id
-                    })
-                    prod_details = prod_res.get('response', [])
-                    
-                    # Attempt delete with use_json=False (form) to get raw error
-                    try:
-                        res_delete = await client._request('POST', 'transactions.removeTransaction', data={
-                            'transaction_id': tx_id
-                        }, use_json=False)
-                    except Exception as de:
-                        err_delete = str(de)
-                        
+                tx_list = res.get('response', [])
             except Exception as e:
                 err_details = str(e)
             finally:
                 await client.close()
                 
-            return tx_details, prod_details, err_details, res_delete, err_delete
+            return tx_list, err_details
             
         try:
-            tx_det, prod_det, err_det, res_del, err_del = run_async(fetch_details())
+            tx_list, err_det = run_async(fetch_recent())
         except Exception as e:
-            tx_det, prod_det, err_det, res_del, err_del = None, None, f"run_async failed: {e}", None, None
+            tx_list, err_det = [], f"run_async failed: {e}"
+            
+        # Format list to return key fields (ID, date, sum, spot_order_num)
+        formatted_txs = []
+        for tx in tx_list:
+            formatted_txs.append({
+                "transaction_id": tx.get("transaction_id"),
+                "date_close": tx.get("date_close"),
+                "payed_sum": tx.get("payed_sum"),
+                "spot_order_num": tx.get("spot_order_num"),
+                "status": tx.get("status")
+            })
             
         results.append({
             "account": acc_info,
-            "transaction": tx_det,
-            "products": prod_det,
-            "error_fetching": err_det,
-            "delete_response": res_del,
-            "delete_error": err_del
+            "count": len(tx_list),
+            "transactions": formatted_txs[:10], # Return first 10
+            "error": err_det
         })
         
     return jsonify({
         "success": True,
-        "transaction_id": tx_id,
         "results": results
     })
 
