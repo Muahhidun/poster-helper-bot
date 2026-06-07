@@ -1966,7 +1966,7 @@ def view_assistant():
 
 @app.route('/login/debug-delete/<int:tx_id>')
 def debug_delete(tx_id):
-    """Debug route to test deleting transaction on Poster API with various options"""
+    """Debug route to fetch details and test delete options for a transaction"""
     db = get_database()
     try:
         user_ids = db.get_all_user_ids_with_accounts()
@@ -1985,50 +1985,66 @@ def debug_delete(tx_id):
             "account_name": acc['account_name']
         }
         
-        async def test_both():
-            client_json = PosterClient(
-                telegram_user_id=None,
-                poster_token=acc['poster_token'],
-                poster_user_id=acc['poster_user_id'],
-                poster_base_url=acc['poster_base_url']
-            )
-            client_form = PosterClient(
+        async def fetch_details():
+            client = PosterClient(
                 telegram_user_id=None,
                 poster_token=acc['poster_token'],
                 poster_user_id=acc['poster_user_id'],
                 poster_base_url=acc['poster_base_url']
             )
             
-            res_j, err_j, res_f, err_f = None, None, None, None
+            tx_details = None
+            prod_details = None
+            err_details = None
+            err_delete = None
+            res_delete = None
+            
             try:
-                res_j = await client_json._request('POST', 'transactions.removeTransaction', data={
-                    'transaction_id': tx_id
-                }, use_json=True)
+                # Fetch transactions for June 5 to June 8, 2026
+                res = await client._request('GET', 'dash.getTransactions', params={
+                    'dateFrom': '20260605',
+                    'dateTo': '20260608'
+                })
+                transactions = res.get('response', [])
+                for tx in transactions:
+                    if int(tx.get('transaction_id', 0)) == tx_id:
+                        tx_details = tx
+                        break
+                        
+                if tx_details:
+                    # Fetch products
+                    prod_res = await client._request('GET', 'dash.getTransactionProducts', params={
+                        'transaction_id': tx_id
+                    })
+                    prod_details = prod_res.get('response', [])
+                    
+                    # Attempt delete with use_json=False (form) to get raw error
+                    try:
+                        res_delete = await client._request('POST', 'transactions.removeTransaction', data={
+                            'transaction_id': tx_id
+                        }, use_json=False)
+                    except Exception as de:
+                        err_delete = str(de)
+                        
             except Exception as e:
-                err_j = str(e)
+                err_details = str(e)
             finally:
-                await client_json.close()
+                await client.close()
                 
-            try:
-                res_f = await client_form._request('POST', 'transactions.removeTransaction', data={
-                    'transaction_id': tx_id
-                }, use_json=False)
-            except Exception as e:
-                err_f = str(e)
-            finally:
-                await client_form.close()
-                
-            return res_j, err_j, res_f, err_f
+            return tx_details, prod_details, err_details, res_delete, err_delete
             
         try:
-            res_json, err_json, res_form, err_form = run_async(test_both())
+            tx_det, prod_det, err_det, res_del, err_del = run_async(fetch_details())
         except Exception as e:
-            res_json, err_json, res_form, err_form = None, f"run_async failed: {e}", None, f"run_async failed: {e}"
-        
+            tx_det, prod_det, err_det, res_del, err_del = None, None, f"run_async failed: {e}", None, None
+            
         results.append({
             "account": acc_info,
-            "json_attempt": {"response": res_json, "error": err_json},
-            "form_attempt": {"response": res_form, "error": err_form}
+            "transaction": tx_det,
+            "products": prod_det,
+            "error_fetching": err_det,
+            "delete_response": res_del,
+            "delete_error": err_del
         })
         
     return jsonify({
