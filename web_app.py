@@ -2320,6 +2320,20 @@ def api_assistant_message():
                             if clean_order_number is not None:
                                 if tx_id_int == clean_order_number or str(clean_order_number) in str(tx_id_int):
                                     is_match = True
+                                else:
+                                    # Check other fields that might represent the short order number
+                                    for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number']:
+                                        val = tx.get(key)
+                                        if val is not None:
+                                            try:
+                                                val_int = int(float(val))
+                                                if val_int == clean_order_number or str(clean_order_number) in str(val_int):
+                                                    is_match = True
+                                                    break
+                                            except (ValueError, TypeError):
+                                                if str(clean_order_number) in str(val):
+                                                    is_match = True
+                                                    break
                             
                             if target_amount is not None:
                                 # Допускаем разницу из-за скидки (например, сумма чека от 60% до 105% от указанной)
