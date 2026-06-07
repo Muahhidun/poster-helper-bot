@@ -1986,13 +1986,6 @@ def debug_delete(tx_id):
             "account_name": acc['account_name']
         }
         
-        client = PosterClient(
-            telegram_user_id=None,
-            poster_token=acc['poster_token'],
-            poster_user_id=acc['poster_user_id'],
-            poster_base_url=acc['poster_base_url']
-        )
-        
         res_json = None
         err_json = None
         res_form = None
@@ -2008,23 +2001,39 @@ def debug_delete(tx_id):
                 
         try:
             async def test_json():
-                return await client._request('POST', 'transactions.removeTransaction', data={
-                    'transaction_id': tx_id
-                }, use_json=True)
+                client = PosterClient(
+                    telegram_user_id=None,
+                    poster_token=acc['poster_token'],
+                    poster_user_id=acc['poster_user_id'],
+                    poster_base_url=acc['poster_base_url']
+                )
+                try:
+                    return await client._request('POST', 'transactions.removeTransaction', data={
+                        'transaction_id': tx_id
+                    }, use_json=True)
+                finally:
+                    await client.close()
             res_json = run_sync_helper(test_json())
         except Exception as e:
             err_json = str(e)
             
         try:
             async def test_form():
-                return await client._request('POST', 'transactions.removeTransaction', data={
-                    'transaction_id': tx_id
-                }, use_json=False)
+                client = PosterClient(
+                    telegram_user_id=None,
+                    poster_token=acc['poster_token'],
+                    poster_user_id=acc['poster_user_id'],
+                    poster_base_url=acc['poster_base_url']
+                )
+                try:
+                    return await client._request('POST', 'transactions.removeTransaction', data={
+                        'transaction_id': tx_id
+                    }, use_json=False)
+                finally:
+                    await client.close()
             res_form = run_sync_helper(test_form())
         except Exception as e:
             err_form = str(e)
-            
-        run_sync_helper(client.close())
         
         results.append({
             "account": acc_info,
