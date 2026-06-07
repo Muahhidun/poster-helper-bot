@@ -1964,85 +1964,6 @@ def view_assistant():
                            assistant_memory=assistant_memory)
 
 
-@app.route('/login/debug-delete/<int:tx_id>')
-def debug_delete(tx_id):
-    """Debug route to search for transaction by ID or timestamp and return full details"""
-    db = get_database()
-    try:
-        user_ids = db.get_all_user_ids_with_accounts()
-        accounts = []
-        for uid in user_ids:
-            accounts.extend(db.get_accounts(uid))
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Failed to fetch accounts: {e}"})
-
-    results = []
-    from poster_client import PosterClient
-    
-    for acc in accounts:
-        acc_info = {
-            "account_id": acc['id'],
-            "account_name": acc['account_name']
-        }
-        
-        async def search_transaction():
-            client = PosterClient(
-                telegram_user_id=None,
-                poster_token=acc['poster_token'],
-                poster_user_id=acc['poster_user_id'],
-                poster_base_url=acc['poster_base_url']
-            )
-            
-            matches = []
-            err_details = None
-            
-            try:
-                # Fetch transactions for June 5 to June 8, 2026
-                res = await client._request('GET', 'dash.getTransactions', params={
-                    'dateFrom': '20260605',
-                    'dateTo': '20260608'
-                })
-                transactions = res.get('response', [])
-                for tx in transactions:
-                    # Check if this transaction matches by transaction_id, spot_order_num, date_close, etc.
-                    tx_id_str = str(tx.get('transaction_id', ''))
-                    date_close_str = str(tx.get('date_close', ''))
-                    spot_order_num_str = str(tx.get('spot_order_num', ''))
-                    
-                    # We are looking for 72458, 72456, 1780839278852, 1780838894269
-                    is_match = False
-                    if tx_id_str in ['72458', '72456', '1780839278852', '1780838894269']:
-                        is_match = True
-                    elif date_close_str in ['72458', '72456', '1780839278852', '1780838894269']:
-                        is_match = True
-                    elif spot_order_num_str in ['72458', '72456', '1780839278852', '1780838894269']:
-                        is_match = True
-                        
-                    if is_match:
-                        matches.append(tx)
-            except Exception as e:
-                err_details = str(e)
-            finally:
-                await client.close()
-                
-            return matches, err_details
-            
-        try:
-            matches, err_det = run_async(search_transaction())
-        except Exception as e:
-            matches, err_det = [], f"run_async failed: {e}"
-            
-        results.append({
-            "account": acc_info,
-            "matches": matches,
-            "error": err_det
-        })
-        
-    return jsonify({
-        "success": True,
-        "results": results
-    })
-
 
 @app.route('/api/assistant/message', methods=['POST'])
 def api_assistant_message():
@@ -2401,8 +2322,8 @@ def api_assistant_message():
                                 if tx_id_int == clean_order_number or str(clean_order_number) in str(tx_id_int):
                                     is_match = True
                                 else:
-                                    # Check other fields that might represent the short order number
-                                    for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number']:
+                                    # Check other fields that might represent the short order number or the close timestamp
+                                    for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number', 'date_close']:
                                         val = tx.get(key)
                                         if val is not None:
                                             try:
@@ -2440,8 +2361,21 @@ def api_assistant_message():
                                     logger.warning(f"Error fetching products for tx {tx_id_int}: {prod_err}")
                                 
                                 close_time = tx.get('date_close', '')
-                                if close_time and isinstance(close_time, str) and len(close_time) >= 16:
-                                    close_time = close_time[11:16]
+                                if close_time:
+                                    if isinstance(close_time, str) and len(close_time) >= 16:
+                                        close_time = close_time[11:16]
+                                    else:
+                                        try:
+                                            # Try parsing as millisecond Unix timestamp
+                                            ts = float(close_time)
+                                            # If it's a 13-digit timestamp, convert to seconds
+                                            if ts > 1e11:
+                                                ts = ts / 1000.0
+                                            from datetime import datetime
+                                            dt = datetime.fromtimestamp(ts, tz=KZ_TZ)
+                                            close_time = dt.strftime("%H:%M")
+                                        except Exception:
+                                            pass
                                 
                                 status_str = "Открыт" if tx.get('status') == '1' else "Закрыт" if tx.get('status') == '2' else f"Статус {tx.get('status')}"
                                 

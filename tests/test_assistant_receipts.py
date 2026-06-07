@@ -197,10 +197,10 @@ def test_find_pos_receipt_action_by_spot_order_num(app_client, db):
     mock_transactions_resp = {
         "response": [
             {
-                "transaction_id": "1780838894269",
+                "transaction_id": "72458",
                 "status": "2",
                 "payed_sum": "500000",
-                "date_close": "2026-06-05 18:30:15",
+                "date_close": "1780838894269",
                 "spot_order_num": "72458"  # matches here!
             }
         ]
@@ -243,6 +243,89 @@ def test_find_pos_receipt_action_by_spot_order_num(app_client, db):
         assert response.status_code == 200
         resp_data = json.loads(response.data.decode('utf-8'))
         assert resp_data['success'] is True
-        assert "Найден чек №1780838894269" in resp_data['response_text']
+        assert "Найден чек №72458" in resp_data['response_text']
         assert "Пицца Пепперони (1 шт)" in resp_data['response_text']
-        assert "[Метаданные: ID чека: 1780838894269" in resp_data['response_text']
+        assert "[Метаданные: ID чека: 72458" in resp_data['response_text']
+
+
+def test_find_pos_receipt_action_by_date_close_timestamp(app_client, db):
+    """Test find_pos_receipt matching by date_close timestamp field"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    # Check if mock poster account exists, otherwise create it
+    accounts = db.get_accounts(TEST_USER_ID)
+    if not any(a['id'] == 1 for a in accounts):
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO poster_accounts (id, telegram_user_id, account_name, poster_token, poster_user_id, poster_base_url, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, TEST_USER_ID, 'Pizzburg', 'mock_token', '1', 'https://mock.joinposter.com/api', 1)
+        )
+        conn.commit()
+        conn.close()
+
+    mock_agent_response = {
+        "response_text": "Ищу чек в системе...",
+        "actions": [
+            {
+                "action": "find_pos_receipt",
+                "amount": None,
+                "order_number": "1780838894269"
+            }
+        ],
+        "_model_used": "mock-gemini"
+    }
+
+    mock_transactions_resp = {
+        "response": [
+            {
+                "transaction_id": "72458",
+                "status": "2",
+                "payed_sum": "500000",
+                "date_close": "1780838894269",  # matches here!
+                "spot_order_num": "72458"
+            }
+        ]
+    }
+
+    mock_products_resp = {
+        "response": [
+            {
+                "product_id": "101",
+                "product_name": "Пицца Пепперони",
+                "count": "1"
+            }
+        ]
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock) as mock_agent, \
+         patch("poster_client.PosterClient._request", new_callable=AsyncMock) as mock_poster_request:
+        
+        mock_agent.return_value = mock_agent_response
+        
+        async def side_effect(method, endpoint, params=None, data=None, use_json=True):
+            if endpoint == "dash.getTransactions":
+                return mock_transactions_resp
+            elif endpoint == "dash.getTransactionProducts":
+                return mock_products_resp
+            return {"response": []}
+        
+        mock_poster_request.side_effect = side_effect
+
+        with app_client.session_transaction() as sess:
+            sess['telegram_user_id'] = TEST_USER_ID
+            sess['web_user_id'] = 1
+            sess['role'] = 'owner'
+
+        response = app_client.post('/api/assistant/message', data={
+            'message': 'удали вчерашний чек 1780838894269',
+            'date': '2026-06-05'
+        })
+
+        assert response.status_code == 200
+        resp_data = json.loads(response.data.decode('utf-8'))
+        assert resp_data['success'] is True
+        assert "Найден чек №72458" in resp_data['response_text']
+        assert "Пицца Пепперони (1 шт)" in resp_data['response_text']
+        assert "[Метаданные: ID чека: 72458" in resp_data['response_text']
+
