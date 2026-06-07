@@ -156,3 +156,17 @@ def test_batch_delete_routes(app_client, db):
     # Check they are deleted in DB
     habits = db.get_ingredient_habits(TEST_USER_ID)
     assert len([h for h in habits if h['poster_ingredient_id'] == 8889]) == 0
+
+
+def test_load_items_including_products():
+    """Test that load_items_from_csv returns non-drink products when only_drinks is False"""
+    from web_app import load_items_from_csv
+    items_default = load_items_from_csv()
+    items_all = load_items_from_csv(only_drinks=False)
+    
+    assert len(items_all) > len(items_default)
+    
+    products_default = [i for i in items_default if i['type'] == 'product']
+    products_all = [i for i in items_all if i['type'] == 'product']
+    
+    assert len(products_all) > len(products_default)

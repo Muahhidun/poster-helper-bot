@@ -252,7 +252,7 @@ def get_date_in_kz_tz(dt_value, kz_tz) -> str:
     return created_kz.strftime("%Y-%m-%d")
 
 
-def load_items_from_csv():
+def load_items_from_csv(only_drinks=True):
     """Load ingredients and products from CSV files"""
     items = []
 
@@ -273,18 +273,17 @@ def load_items_from_csv():
         except Exception as e:
             logger.error(f"Error loading ingredients: {e}")
 
-    # Load products (only "Напитки" category - drinks that can be supplied)
+    # Load products
     products_csv = config.DATA_DIR / "poster_products.csv"
     if products_csv.exists():
         try:
             with open(products_csv, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    # Only include products from "Напитки" category
-                    # Skip tech cards (pizzas, burgers, doner, etc.)
-                    # Use startswith to match both "Напитки" (Pizzburg) and "Напитки Кока кола" (Pizzburg-cafe)
-                    if not row.get('category_name', '').startswith('Напитки'):
-                        continue
+                    # Filter products if only_drinks is True
+                    if only_drinks:
+                        if not row.get('category_name', '').startswith('Напитки'):
+                            continue
                     items.append({
                         'id': int(row['product_id']),
                         'name': row['product_name'],
@@ -355,17 +354,16 @@ def list_aliases():
     packaging_rules = db.get_packaging_rules(g.user_id)
     habits = db.get_ingredient_habits(g.user_id)
 
-    # Load items to map ingredient names
-    items = load_items_from_csv()
+    # Load all items (including non-drink products) to resolve rules/habits names correctly
+    items = load_items_from_csv(only_drinks=False)
     
     item_names = {}
-    # Map all ingredients: first default fallback, then account-specific
+    # Map all items (ingredients and products): first default fallback, then account-specific
     for i in items:
-        if i['type'] == 'ingredient':
-            # Fallback by raw ID
-            item_names[str(i['id'])] = i['name']
-            # Precise mapping by ID and account
-            item_names[f"{i['id']}_{i.get('account_name', '').strip()}"] = i['name']
+        # Fallback by raw ID
+        item_names[str(i['id'])] = i['name']
+        # Precise mapping by ID and account
+        item_names[f"{i['id']}_{i.get('account_name', '').strip()}"] = i['name']
 
     # If search filter is active, filter packaging rules and habits too
     if search:
