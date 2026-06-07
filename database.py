@@ -85,6 +85,7 @@ class _ManagedConnection:
 
 class UserDatabase:
     """Database for managing user accounts"""
+    DB_TYPE = DB_TYPE
 
     def __init__(self):
         if DB_TYPE == "sqlite":
