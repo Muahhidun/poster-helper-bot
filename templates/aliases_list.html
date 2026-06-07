@@ -422,7 +422,7 @@
                                 <tr id="rule-row-{{ rule.id }}">
                                     <td><input type="checkbox" class="form-check-input rule-checkbox" data-id="{{ rule.id }}"></td>
                                     <td class="text-muted">{{ rule.id }}</td>
-                                    <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id ~ '_' ~ (rule.account_name or '').strip(), item_names.get(rule.poster_ingredient_id|string, 'ID: ' ~ rule.poster_ingredient_id)) }}</td>
+                                    <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id ~ '_' ~ (rule.account_name or '').strip(), 'ID: ' ~ rule.poster_ingredient_id) }}</td>
                                     <td>
                                         {% if rule.account_name %}
                                             <span class="badge-premium secondary-badge">{{ rule.account_name }}</span>
@@ -480,7 +480,7 @@
                                 <tr id="habit-row-{{ habit.id }}">
                                     <td><input type="checkbox" class="form-check-input habit-checkbox" data-id="{{ habit.id }}"></td>
                                     <td class="text-muted">{{ habit.id }}</td>
-                                    <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id ~ '_' ~ (habit.account_name or '').strip(), item_names.get(habit.poster_ingredient_id|string, 'ID: ' ~ habit.poster_ingredient_id)) }}</td>
+                                    <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id ~ '_' ~ (habit.account_name or '').strip(), 'ID: ' ~ habit.poster_ingredient_id) }}</td>
                                     <td>
                                         {% if habit.account_name %}
                                             <span class="badge-premium secondary-badge">{{ habit.account_name }}</span>

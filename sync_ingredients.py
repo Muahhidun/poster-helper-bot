@@ -113,8 +113,14 @@ async def sync_ingredients(telegram_user_id: int = None):
         logger.warning("No ingredients found in any account!")
         return (0, account_ingredient_map)
 
+    # Determine CSV path
+    if telegram_user_id is not None:
+        user_dir = config.get_user_data_dir(telegram_user_id)
+        csv_path = user_dir / "poster_ingredients.csv"
+    else:
+        csv_path = Path(config.DATA_DIR) / "poster_ingredients.csv"
+
     # Backup old file
-    csv_path = Path(config.DATA_DIR) / "poster_ingredients.csv"
     if csv_path.exists():
         backup_path = csv_path.with_suffix('.csv.backup')
         shutil.copy(csv_path, backup_path)

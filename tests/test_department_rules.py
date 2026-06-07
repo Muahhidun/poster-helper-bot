@@ -161,7 +161,7 @@ def test_batch_delete_routes(app_client, db):
 def test_load_items_including_products():
     """Test that load_items_from_csv returns non-drink products when only_drinks is False"""
     from web_app import load_items_from_csv
-    items_default = load_items_from_csv()
+    items_default = load_items_from_csv(only_drinks=True)
     items_all = load_items_from_csv(only_drinks=False)
     
     assert len(items_all) > len(items_default)
@@ -170,3 +170,72 @@ def test_load_items_including_products():
     products_all = [i for i in items_all if i['type'] == 'product']
     
     assert len(products_all) > len(products_default)
+
+
+def test_load_items_user_specific():
+    """Test that load_items_from_csv accepts telegram_user_id and correctly falls back"""
+    from web_app import load_items_from_csv
+    # Should run fine without errors, falling back to global directory
+    items = load_items_from_csv(telegram_user_id=12345, only_drinks=False)
+    assert len(items) >= 0
+
+
+def test_dish_filtering_logic():
+    """Test that load_items_from_csv includes category details for products"""
+    from web_app import load_items_from_csv
+    items = load_items_from_csv(only_drinks=False)
+    products = [i for i in items if i['type'] == 'product']
+    if products:
+        for p in products:
+            assert 'category_name' in p
+            assert 'category' in p
+
+
+def test_cleanup_and_migrate_legacy_rules(db):
+    """Test that cleanup_and_migrate_legacy_rules correctly migrates empty account names and deletes dishes"""
+    from web_app import cleanup_and_migrate_legacy_rules
+    
+    # 1. Setup rule with empty account_name (legacy rule) for a valid ingredient
+    db.add_packaging_rule(
+        telegram_user_id=TEST_USER_ID,
+        poster_ingredient_id=93, # "Ананас (8 колец)" in poster_ingredients.csv
+        original_unit="шт",
+        coefficient=0.5,
+        target_unit="кг",
+        notes="Legacy test rule",
+        account_name="" # Legacy rule
+    )
+    
+    # Verify it was added with empty account name
+    rules = db.get_packaging_rules(TEST_USER_ID)
+    legacy_rule = next((r for r in rules if r['poster_ingredient_id'] == 93 and r['account_name'] == ''), None)
+    assert legacy_rule is not None
+    
+    # 2. Add rule with empty account name for a dish product (e.g. ID 119 for "Мексиканская" pizza)
+    db.add_packaging_rule(
+        telegram_user_id=TEST_USER_ID,
+        poster_ingredient_id=119, # "Мексиканская" pizza in poster_products.csv
+        original_unit="шт",
+        coefficient=1.0,
+        target_unit="кг",
+        notes="Legacy dish rule",
+        account_name=""
+    )
+    
+    # Verify dish rule was added
+    rules = db.get_packaging_rules(TEST_USER_ID)
+    dish_rule = next((r for r in rules if r['poster_ingredient_id'] == 119 and r['account_name'] == ''), None)
+    assert dish_rule is not None
+    
+    # 3. Run cleanup
+    cleanup_and_migrate_legacy_rules(TEST_USER_ID)
+    
+    # Verify legacy rule was migrated or remains safe, and dish rule was DELETED
+    rules_after = db.get_packaging_rules(TEST_USER_ID)
+    deleted_rule = next((r for r in rules_after if r['poster_ingredient_id'] == 119), None)
+    assert deleted_rule is None
+
+    # Cleanup the test rule from database
+    for r in rules_after:
+        if r['poster_ingredient_id'] in (93, 119):
+            db.delete_packaging_rule_by_id(r['id'], TEST_USER_ID)

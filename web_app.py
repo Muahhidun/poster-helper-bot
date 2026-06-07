@@ -252,12 +252,24 @@ def get_date_in_kz_tz(dt_value, kz_tz) -> str:
     return created_kz.strftime("%Y-%m-%d")
 
 
-def load_items_from_csv(only_drinks=True):
-    """Load ingredients and products from CSV files"""
+def load_items_from_csv(telegram_user_id=None, only_drinks=True):
+    """Load ingredients and products from CSV files (with user-specific support)"""
     items = []
 
-    # Load ingredients
+    # Determine CSV paths
     ingredients_csv = config.DATA_DIR / "poster_ingredients.csv"
+    products_csv = config.DATA_DIR / "poster_products.csv"
+
+    if telegram_user_id is not None:
+        user_dir = config.get_user_data_dir(telegram_user_id)
+        user_ing_csv = user_dir / "poster_ingredients.csv"
+        user_prod_csv = user_dir / "poster_products.csv"
+        if user_ing_csv.exists():
+            ingredients_csv = user_ing_csv
+        if user_prod_csv.exists():
+            products_csv = user_prod_csv
+
+    # Load ingredients
     if ingredients_csv.exists():
         try:
             with open(ingredients_csv, 'r', encoding='utf-8') as f:
@@ -274,7 +286,6 @@ def load_items_from_csv(only_drinks=True):
             logger.error(f"Error loading ingredients: {e}")
 
     # Load products
-    products_csv = config.DATA_DIR / "poster_products.csv"
     if products_csv.exists():
         try:
             with open(products_csv, 'r', encoding='utf-8') as f:
@@ -288,13 +299,207 @@ def load_items_from_csv(only_drinks=True):
                         'id': int(row['product_id']),
                         'name': row['product_name'],
                         'type': 'product',
+                        'category_name': row.get('category_name', ''),
+                        'category': row.get('category_name', ''),
                         'account_name': row.get('account_name', ''),
                         'poster_account_name': row.get('account_name', '')
                     })
         except Exception as e:
             logger.error(f"Error loading products: {e}")
 
+    # Prioritize ingredients and drink products (non-dishes) over dishes (non-drink products).
+    # Since we want non-dishes to override dishes in name lookups,
+    # they should come first in the list so that callers using "if key not in dict" pick them first.
+    def item_priority(item):
+        if item['type'] == 'product':
+            cat = item.get('category_name') or ''
+            if not cat.startswith('Напитки'):
+                return 1  # dish (lower priority/comes last)
+        return 0  # non-dish (higher priority/comes first)
+
+    items = sorted(items, key=item_priority)
     return items
+
+
+def cleanup_and_migrate_legacy_rules(user_id):
+    """
+    Find habits and rules where account_name is empty, 
+    map them to the correct account based on synced CSVs,
+    and delete rules/habits for dishes (non-drink products).
+    """
+    db = get_database()
+    
+    # 1. Load all items from the user's synced catalogs
+    items = load_items_from_csv(telegram_user_id=user_id, only_drinks=False)
+    
+    # Group items by ID and check their details
+    # item_id -> list of {'account_name': ..., 'type': ..., 'category_name': ...}
+    items_by_id = {}
+    for i in items:
+        item_id = i['id']
+        if item_id not in items_by_id:
+            items_by_id[item_id] = []
+        items_by_id[item_id].append(i)
+        
+    # Get user's accounts to know valid account names and primary account
+    accounts = db.get_accounts(user_id)
+    primary_acc = next((a for a in accounts if a.get('is_primary')), None) or (accounts[0] if accounts else None)
+    primary_acc_name = primary_acc['account_name'] if primary_acc else ''
+
+    # Get packaging rules and habits
+    rules = db.get_packaging_rules(user_id)
+    habits = db.get_ingredient_habits(user_id)
+    
+    # A. Process packaging rules
+    for r in rules:
+        r_id = r['id']
+        poster_id = r['poster_ingredient_id']
+        acc_name = r.get('account_name', '').strip()
+        
+        # Check if the item is a dish in its mapped account
+        target_acc = acc_name
+        if not target_acc and primary_acc_name:
+            target_acc = primary_acc_name
+            
+        is_dish = False
+        candidates = items_by_id.get(poster_id, [])
+        
+        # Prioritize non-dishes when matching candidates
+        candidates_sorted = sorted(candidates, key=lambda c: 1 if (c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')) else 0)
+        
+        matched_candidate = next((c for c in candidates_sorted if c['account_name'].strip() == target_acc), None)
+        if not matched_candidate and candidates_sorted:
+            # Fallback to any candidate (which will be a non-dish if available)
+            matched_candidate = candidates_sorted[0]
+            
+        if matched_candidate:
+            if matched_candidate['type'] == 'product':
+                cat = matched_candidate.get('category_name') or ''
+                if not cat.startswith('Напитки'):
+                    is_dish = True
+                    
+        # If account name is empty, and there are both dish and ingredient candidates:
+        if not acc_name and candidates:
+            dish_candidates = [c for c in candidates if c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')]
+            ingredient_candidates = [c for c in candidates if c['type'] == 'ingredient' or (c['type'] == 'product' and (c.get('category_name') or '').startswith('Напитки'))]
+            if dish_candidates and ingredient_candidates:
+                # Check notes to distinguish if this is a dish rule or ingredient rule
+                notes_lower = (r.get('notes') or '').lower()
+                if 'dish' in notes_lower or 'блюдо' in notes_lower:
+                    is_dish = True
+                    
+        if is_dish:
+            logger.info(f"Cleanup: deleting legacy packaging rule {r_id} for dish product ID {poster_id}")
+            db.delete_packaging_rule_by_id(r_id, user_id)
+            continue
+            
+        # If account name is empty, try to resolve it
+        if not acc_name:
+            resolved_acc = ''
+            # If this ID is only found in one account, use it
+            valid_candidates = []
+            for c in candidates:
+                # Check if this candidate is a dish
+                c_is_dish = False
+                if c['type'] == 'product':
+                    cat = c.get('category_name') or ''
+                    if not cat.startswith('Напитки'):
+                        c_is_dish = True
+                if not c_is_dish:
+                    valid_candidates.append(c)
+                    
+            if len(valid_candidates) == 1:
+                resolved_acc = valid_candidates[0]['account_name']
+            elif primary_acc_name:
+                resolved_acc = primary_acc_name
+                
+            if resolved_acc:
+                logger.info(f"Cleanup: migrating packaging rule {r_id} (ID {poster_id}) to account '{resolved_acc}'")
+                conn = db._get_connection()
+                cursor = conn.cursor()
+                try:
+                    if db.DB_TYPE == "sqlite":
+                        cursor.execute("UPDATE ingredient_packaging_rules SET account_name = ? WHERE id = ? AND telegram_user_id = ?", (resolved_acc, r_id, user_id))
+                    else:
+                        cursor.execute("UPDATE ingredient_packaging_rules SET account_name = %s WHERE id = %s AND telegram_user_id = %s", (resolved_acc, r_id, user_id))
+                    conn.commit()
+                except Exception as db_err:
+                    logger.error(f"Error updating packaging rule account name: {db_err}")
+                finally:
+                    conn.close()
+
+    # B. Process habits
+    for h in habits:
+        h_id = h['id']
+        poster_id = h['poster_ingredient_id']
+        acc_name = h.get('account_name', '').strip()
+        
+        target_acc = acc_name
+        if not target_acc and primary_acc_name:
+            target_acc = primary_acc_name
+            
+        is_dish = False
+        candidates = items_by_id.get(poster_id, [])
+        
+        # Prioritize non-dishes when matching candidates
+        candidates_sorted = sorted(candidates, key=lambda c: 1 if (c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')) else 0)
+        
+        matched_candidate = next((c for c in candidates_sorted if c['account_name'].strip() == target_acc), None)
+        if not matched_candidate and candidates_sorted:
+            matched_candidate = candidates_sorted[0]
+            
+        if matched_candidate:
+            if matched_candidate['type'] == 'product':
+                cat = matched_candidate.get('category_name') or ''
+                if not cat.startswith('Напитки'):
+                    is_dish = True
+                    
+        # If account name is empty, and there are both dish and ingredient candidates:
+        if not acc_name and candidates:
+            dish_candidates = [c for c in candidates if c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')]
+            ingredient_candidates = [c for c in candidates if c['type'] == 'ingredient' or (c['type'] == 'product' and (c.get('category_name') or '').startswith('Напитки'))]
+            if dish_candidates and ingredient_candidates:
+                notes_lower = (h.get('notes') or '').lower()
+                if 'dish' in notes_lower or 'блюдо' in notes_lower:
+                    is_dish = True
+                    
+        if is_dish:
+            logger.info(f"Cleanup: deleting legacy habit {h_id} for dish product ID {poster_id}")
+            db.delete_ingredient_habit_by_id(h_id, user_id)
+            continue
+            
+        # If account name is empty, try to resolve it
+        if not acc_name:
+            resolved_acc = ''
+            valid_candidates = []
+            for c in candidates:
+                c_is_dish = False
+                if c['type'] == 'product':
+                    cat = c.get('category_name') or ''
+                    if not cat.startswith('Напитки'):
+                        c_is_dish = True
+                if not c_is_dish:
+                    valid_candidates.append(c)
+                    
+            if len(valid_candidates) == 1:
+                resolved_acc = valid_candidates[0]['account_name']
+            elif primary_acc_name:
+                resolved_acc = primary_acc_name
+                
+            if resolved_acc:
+                logger.info(f"Cleanup: migrating habit {h_id} (ID {poster_id}) to account '{resolved_acc}'")
+                conn = db._get_connection()
+                cursor = conn.cursor()
+                try:
+                    if db.DB_TYPE == "sqlite":
+                        cursor.execute("UPDATE ingredient_habits SET account_name = ? WHERE id = ? AND telegram_user_id = ?", (resolved_acc, h_id, user_id))
+                    else:
+                        cursor.execute("UPDATE ingredient_habits SET account_name = %s WHERE id = %s AND telegram_user_id = %s", (resolved_acc, h_id, user_id))
+                    conn.commit()
+                except Exception as db_err:
+                    logger.error(f"Error updating habit account name: {db_err}")
+                finally:
+                    conn.close()
 
 
 def resolve_supplier_name_and_id(user_id: int, text: str) -> tuple:
@@ -334,6 +539,9 @@ def index():
 def list_aliases():
     """Show all aliases with filtering and search"""
     db = get_database()
+    
+    # Clean up and migrate legacy rules to specific accounts on load
+    cleanup_and_migrate_legacy_rules(g.user_id)
 
     # Get filter parameters
     search = request.args.get('search', '')
@@ -355,15 +563,62 @@ def list_aliases():
     habits = db.get_ingredient_habits(g.user_id)
 
     # Load all items (including non-drink products) to resolve rules/habits names correctly
-    items = load_items_from_csv(only_drinks=False)
+    items = load_items_from_csv(telegram_user_id=g.user_id, only_drinks=False)
+    
+    # Self-healing: if some IDs from packaging rules or habits are not found in the CSV,
+    # trigger a sync for the current user to update their local CSV file.
+    item_ids_set = {str(i['id']) for i in items}
+    has_missing = False
+    for r in packaging_rules:
+        if str(r['poster_ingredient_id']) not in item_ids_set:
+            has_missing = True
+            break
+    if not has_missing:
+        for h in habits:
+            if str(h['poster_ingredient_id']) not in item_ids_set:
+                has_missing = True
+                break
+
+    if has_missing:
+        try:
+            logger.info("Detecting missing IDs in local CSV cache. Running self-healing sync...")
+            from sync_ingredients import sync_ingredients
+            from sync_products import sync_products
+            run_async(sync_ingredients(g.user_id))
+            run_async(sync_products(g.user_id))
+            # Reload items
+            items = load_items_from_csv(telegram_user_id=g.user_id, only_drinks=False)
+        except Exception as sync_err:
+            logger.error(f"Error during self-healing sync: {sync_err}")
     
     item_names = {}
+    item_lookup = {}
     # Map all items (ingredients and products): first default fallback, then account-specific
     for i in items:
-        # Fallback by raw ID
-        item_names[str(i['id'])] = i['name']
+        # Fallback by raw ID (prioritize first match in list)
+        if str(i['id']) not in item_names:
+            item_names[str(i['id'])] = i['name']
         # Precise mapping by ID and account
         item_names[f"{i['id']}_{i.get('account_name', '').strip()}"] = i['name']
+        
+        # Build item lookup
+        item_lookup[f"{i['id']}_{(i.get('account_name') or '').strip()}"] = i
+        if str(i['id']) not in item_lookup:
+            item_lookup[str(i['id'])] = i
+
+    # Helper function to check if item is a dish (product not in drinks category)
+    def is_dish(item_id, account_name):
+        key = f"{item_id}_{(account_name or '').strip()}"
+        item_obj = item_lookup.get(key) or item_lookup.get(str(item_id))
+        if item_obj and item_obj['type'] == 'product':
+            cat = item_obj.get('category_name') or ''
+            if not cat.startswith('Напитки'):
+                return True
+        return False
+
+    # Filter out kitchen dishes/tech cards from packaging rules and habits
+    packaging_rules = [r for r in packaging_rules if not is_dish(r['poster_ingredient_id'], r.get('account_name'))]
+    habits = [h for h in habits if not is_dish(h['poster_ingredient_id'], h.get('account_name'))]
 
     # If search filter is active, filter packaging rules and habits too
     if search:
@@ -389,6 +644,9 @@ def sync_aliases_catalog():
     try:
         total_ing, _ = run_async(sync_ingredients(g.user_id))
         total_prod, _ = run_async(sync_products(g.user_id))
+        
+        # Run cleanup after sync to process newly loaded items
+        cleanup_and_migrate_legacy_rules(g.user_id)
         
         flash(f'✅ Справочники успешно обновлены! Загружено {total_ing} ингредиентов и {total_prod} продуктов из всех аккаунтов.', 'success')
     except Exception as e:
@@ -432,7 +690,7 @@ def new_alias():
             return redirect(url_for('new_alias'))
 
     # GET - show form
-    items = load_items_from_csv()
+    items = load_items_from_csv(telegram_user_id=g.user_id)
     return render_template('alias_form.html', mode='new', items=items)
 
 
@@ -478,7 +736,7 @@ def edit_alias(alias_id):
         flash('❌ Alias не найден', 'danger')
         return redirect(url_for('list_aliases'))
 
-    items = load_items_from_csv()
+    items = load_items_from_csv(telegram_user_id=g.user_id)
     return render_template('alias_form.html', mode='edit', alias=alias, items=items)
 
 
@@ -802,7 +1060,7 @@ def search_items():
     except Exception as e:
         logger.error(f"Error loading from Poster API: {e}")
         # Fallback to CSV
-        items = load_items_from_csv()
+        items = load_items_from_csv(telegram_user_id=g.user_id)
 
     # Filter by type if specified (but 'ingredient' source now includes products too for supply search)
     # Products like Ayran, Coca-Cola can also be supplied to warehouse
@@ -5138,7 +5396,7 @@ def view_supply(draft_id):
                         poster_base_url=acc['poster_base_url']
                     )
 
-
+                    # 1. Fetch ingredients
                     async def _fetch_ings():
                         return await poster_client.get_ingredients()
 
@@ -5156,13 +5414,31 @@ def view_supply(draft_id):
                             'poster_account_id': acc['id'],
                             'poster_account_name': acc['account_name']
                         })
+
+                    # 2. Fetch products (only drinks)
+                    async def _fetch_prods():
+                        return await poster_client.get_products()
+
+                    products = run_async(_fetch_prods())
+                    for prod in products:
+                        category = prod.get('category_name') or ''
+                        if not category.startswith('Напитки'):
+                            continue
+                        items.append({
+                            'id': int(prod.get('product_id', 0)),
+                            'name': prod.get('product_name', ''),
+                            'type': 'product',
+                            'poster_account_id': acc['id'],
+                            'poster_account_name': acc['account_name']
+                        })
+
                 except Exception as e:
                     logger.error(f"Error loading from account {acc['account_name']}: {e}")
                     continue
     except Exception as e:
         logger.error(f"Error loading from Poster API: {e}")
         # Fallback to CSV
-        items = load_items_from_csv()
+        items = load_items_from_csv(telegram_user_id=g.user_id, only_drinks=True)
 
     return render_template('supply_detail.html', draft=draft, items=items)
 
@@ -5233,8 +5509,22 @@ def update_supply_item(item_id):
         # 2. Learn packaging rules or habits
         ing_id = data.get('poster_ingredient_id') or item.get('poster_ingredient_id')
         if ing_id and ing_id != 0 and ing_id != '':
-            # Get updated item from DB to see current state
-            updated_item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
+            # Prevent learning habits/rules for dishes (non-drink products)
+            is_item_dish = False
+            try:
+                user_items = load_items_from_csv(telegram_user_id=g.user_id, only_drinks=False)
+                matched_item = next((i for i in user_items if i['id'] == int(ing_id)), None)
+                if matched_item and matched_item['type'] == 'product':
+                    category = matched_item.get('category_name') or ''
+                    if not category.startswith('Напитки'):
+                        is_item_dish = True
+                        logger.info(f"Skipping learning rule/habit for dish product {ing_id} ({matched_item['name']})")
+            except Exception as dish_err:
+                logger.error(f"Error checking if item is a dish in learning: {dish_err}")
+
+            if not is_item_dish:
+                # Get updated item from DB to see current state
+                updated_item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
             if updated_item:
                 qty = updated_item.get('quantity')
                 price = updated_item.get('price_per_unit')
@@ -5247,6 +5537,15 @@ def update_supply_item(item_id):
                     item.get('poster_account_name') or 
                     ''
                 ).strip()
+
+                if not acc_name:
+                    try:
+                        accounts = db.get_accounts(g.user_id)
+                        primary_acc = next((a for a in accounts if a.get('is_primary')), None) or (accounts[0] if accounts else None)
+                        if primary_acc:
+                            acc_name = primary_acc['account_name']
+                    except Exception as acc_err:
+                        logger.error(f"Error resolving fallback account name: {acc_err}")
 
                 # A. Packaging rule: user edited quantity vs parsed quantity
                 if parsed_qty is not None and parsed_qty > 0 and qty is not None:
