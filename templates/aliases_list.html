@@ -402,10 +402,11 @@
                         <thead>
                             <tr>
                                 <th style="width: 5%;">ID</th>
-                                <th style="width: 35%;">Ингредиент</th>
-                                <th style="width: 20%;">Исходная упаковка</th>
+                                <th style="width: 30%;">Ингредиент</th>
+                                <th style="width: 15%;">Отдел</th>
+                                <th style="width: 15%;">Исходная упаковка</th>
                                 <th style="width: 15%;">Коэффициент (кг/ед)</th>
-                                <th style="width: 15%;">Примечание</th>
+                                <th style="width: 10%;">Примечание</th>
                                 <th style="width: 10%;" class="text-end">Действия</th>
                             </tr>
                         </thead>
@@ -414,7 +415,14 @@
                                 {% for rule in packaging_rules %}
                                 <tr>
                                     <td class="text-muted">{{ rule.id }}</td>
-                                    <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id, 'ID: ' ~ rule.poster_ingredient_id) }}</td>
+                                    <td class="fw-bold">{{ item_names.get(rule.poster_ingredient_id ~ '_' ~ (rule.account_name or '').strip(), item_names.get(rule.poster_ingredient_id|string, 'ID: ' ~ rule.poster_ingredient_id)) }}</td>
+                                    <td>
+                                        {% if rule.account_name %}
+                                            <span class="badge-premium secondary-badge">{{ rule.account_name }}</span>
+                                        {% else %}
+                                            <span class="text-muted small">—</span>
+                                        {% endif %}
+                                    </td>
                                     <td><span class="badge-premium secondary-badge">{{ rule.original_unit }}</span></td>
                                     <td><span class="fw-bold text-success">{{ rule.coefficient }}</span> {{ rule.target_unit }}</td>
                                     <td><span class="text-muted small">{{ rule.notes if rule.notes else '-' }}</span></td>
@@ -448,9 +456,10 @@
                         <thead>
                             <tr>
                                 <th style="width: 5%;">ID</th>
-                                <th style="width: 45%;">Ингредиент</th>
+                                <th style="width: 35%;">Ингредиент</th>
+                                <th style="width: 15%;">Отдел</th>
                                 <th style="width: 20%;">Типичная цена</th>
-                                <th style="width: 20%;">Примечание</th>
+                                <th style="width: 15%;">Примечание</th>
                                 <th style="width: 10%;" class="text-end">Действия</th>
                             </tr>
                         </thead>
@@ -459,7 +468,14 @@
                                 {% for habit in habits %}
                                 <tr>
                                     <td class="text-muted">{{ habit.id }}</td>
-                                    <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id, 'ID: ' ~ habit.poster_ingredient_id) }}</td>
+                                    <td class="fw-bold">{{ item_names.get(habit.poster_ingredient_id ~ '_' ~ (habit.account_name or '').strip(), item_names.get(habit.poster_ingredient_id|string, 'ID: ' ~ habit.poster_ingredient_id)) }}</td>
+                                    <td>
+                                        {% if habit.account_name %}
+                                            <span class="badge-premium secondary-badge">{{ habit.account_name }}</span>
+                                        {% else %}
+                                            <span class="text-muted small">—</span>
+                                        {% endif %}
+                                    </td>
                                     <td><span class="fw-bold text-primary">{{ "{:,.0f}".format(habit.default_price) }} ₸</span> /кг</td>
                                     <td><span class="text-muted small">{{ habit.notes if habit.notes else '-' }}</span></td>
                                     <td class="text-end">

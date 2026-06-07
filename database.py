@@ -842,6 +842,9 @@ class UserDatabase:
         # Run migration to add packaging rules and habits
         self._migrate_packaging_and_habits()
 
+        # Run migration to add account_name to packaging rules and habits
+        self._migrate_packaging_and_habits_account()
+
         # Run migration for assistant chat history
         self._migrate_assistant_chat()
 
@@ -2139,13 +2142,14 @@ class UserDatabase:
                     CREATE TABLE IF NOT EXISTS ingredient_packaging_rules (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         telegram_user_id INTEGER NOT NULL,
+                        account_name TEXT NOT NULL DEFAULT '',
                         poster_ingredient_id INTEGER NOT NULL,
                         original_unit TEXT NOT NULL,
                         coefficient REAL NOT NULL,
                         target_unit TEXT NOT NULL DEFAULT 'кг',
                         notes TEXT,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(telegram_user_id, poster_ingredient_id, original_unit),
+                        UNIQUE(telegram_user_id, account_name, poster_ingredient_id, original_unit),
                         FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
                     )
                 """)
@@ -2154,13 +2158,14 @@ class UserDatabase:
                     CREATE TABLE IF NOT EXISTS ingredient_packaging_rules (
                         id SERIAL PRIMARY KEY,
                         telegram_user_id BIGINT NOT NULL,
+                        account_name VARCHAR(255) NOT NULL DEFAULT '',
                         poster_ingredient_id INTEGER NOT NULL,
                         original_unit TEXT NOT NULL,
                         coefficient REAL NOT NULL,
                         target_unit TEXT NOT NULL DEFAULT 'кг',
                         notes TEXT,
                         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(telegram_user_id, poster_ingredient_id, original_unit),
+                        UNIQUE(telegram_user_id, account_name, poster_ingredient_id, original_unit),
                         FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
                     )
                 """)
@@ -2179,12 +2184,13 @@ class UserDatabase:
                     CREATE TABLE IF NOT EXISTS ingredient_habits (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         telegram_user_id INTEGER NOT NULL,
+                        account_name TEXT NOT NULL DEFAULT '',
                         poster_ingredient_id INTEGER NOT NULL,
                         default_price REAL,
                         default_quantity REAL,
                         notes TEXT,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(telegram_user_id, poster_ingredient_id),
+                        UNIQUE(telegram_user_id, account_name, poster_ingredient_id),
                         FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
                     )
                 """)
@@ -2193,12 +2199,13 @@ class UserDatabase:
                     CREATE TABLE IF NOT EXISTS ingredient_habits (
                         id SERIAL PRIMARY KEY,
                         telegram_user_id BIGINT NOT NULL,
+                        account_name VARCHAR(255) NOT NULL DEFAULT '',
                         poster_ingredient_id INTEGER NOT NULL,
                         default_price DECIMAL(12,2),
                         default_quantity DECIMAL(10,3),
                         notes TEXT,
                         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(telegram_user_id, poster_ingredient_id),
+                        UNIQUE(telegram_user_id, account_name, poster_ingredient_id),
                         FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
                     )
                 """)
@@ -2208,6 +2215,151 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"❌ Failed to create ingredient_habits table: {e}")
 
+    def _migrate_packaging_and_habits_account(self):
+        """Add account_name column and update UNIQUE constraints on ingredient_packaging_rules and ingredient_habits tables"""
+        # 1. Update ingredient_packaging_rules
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Check if column exists
+            has_col = False
+            if DB_TYPE == "sqlite":
+                cursor.execute("PRAGMA table_info(ingredient_packaging_rules)")
+                cols = [r[1] for r in cursor.fetchall()]
+                has_col = "account_name" in cols
+            else:
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'ingredient_packaging_rules' AND column_name = 'account_name'
+                """)
+                has_col = bool(cursor.fetchone())
+                
+            if not has_col:
+                logger.info("⏳ Migrating ingredient_packaging_rules: adding account_name and updating UNIQUE constraint...")
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE ingredient_packaging_rules RENAME TO old_ingredient_packaging_rules")
+                    cursor.execute("""
+                        CREATE TABLE ingredient_packaging_rules (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            telegram_user_id INTEGER NOT NULL,
+                            account_name TEXT NOT NULL DEFAULT '',
+                            poster_ingredient_id INTEGER NOT NULL,
+                            original_unit TEXT NOT NULL,
+                            coefficient REAL NOT NULL,
+                            target_unit TEXT NOT NULL DEFAULT 'кг',
+                            notes TEXT,
+                            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(telegram_user_id, account_name, poster_ingredient_id, original_unit),
+                            FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    cursor.execute("""
+                        INSERT INTO ingredient_packaging_rules (
+                            id, telegram_user_id, poster_ingredient_id, original_unit,
+                            coefficient, target_unit, notes, created_at
+                        )
+                        SELECT id, telegram_user_id, poster_ingredient_id, original_unit,
+                               coefficient, target_unit, notes, created_at
+                        FROM old_ingredient_packaging_rules
+                    """)
+                    cursor.execute("DROP TABLE old_ingredient_packaging_rules")
+                else:
+                    # Find constraint names
+                    cursor.execute("""
+                        SELECT conname 
+                        FROM pg_constraint 
+                        WHERE conrelid = 'ingredient_packaging_rules'::regclass AND contype = 'u'
+                    """)
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        conname = row[0]
+                        cursor.execute(f"ALTER TABLE ingredient_packaging_rules DROP CONSTRAINT {conname}")
+                        
+                    cursor.execute("ALTER TABLE ingredient_packaging_rules ADD COLUMN account_name VARCHAR(255) NOT NULL DEFAULT ''")
+                    cursor.execute("""
+                        ALTER TABLE ingredient_packaging_rules 
+                        ADD CONSTRAINT ingredient_packaging_rules_user_acc_ing_unit_key 
+                        UNIQUE(telegram_user_id, account_name, poster_ingredient_id, original_unit)
+                    """)
+                conn.commit()
+                logger.info("✅ Migrated ingredient_packaging_rules successfully")
+            conn.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to migrate ingredient_packaging_rules: {e}")
+
+        # 2. Update ingredient_habits
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Check if column exists
+            has_col = False
+            if DB_TYPE == "sqlite":
+                cursor.execute("PRAGMA table_info(ingredient_habits)")
+                cols = [r[1] for r in cursor.fetchall()]
+                has_col = "account_name" in cols
+            else:
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'ingredient_habits' AND column_name = 'account_name'
+                """)
+                has_col = bool(cursor.fetchone())
+                
+            if not has_col:
+                logger.info("⏳ Migrating ingredient_habits: adding account_name and updating UNIQUE constraint...")
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE ingredient_habits RENAME TO old_ingredient_habits")
+                    cursor.execute("""
+                        CREATE TABLE ingredient_habits (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            telegram_user_id INTEGER NOT NULL,
+                            account_name TEXT NOT NULL DEFAULT '',
+                            poster_ingredient_id INTEGER NOT NULL,
+                            default_price REAL,
+                            default_quantity REAL,
+                            notes TEXT,
+                            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(telegram_user_id, account_name, poster_ingredient_id),
+                            FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                        )
+                    """)
+                    cursor.execute("""
+                        INSERT INTO ingredient_habits (
+                            id, telegram_user_id, poster_ingredient_id, default_price,
+                            default_quantity, notes, created_at
+                        )
+                        SELECT id, telegram_user_id, poster_ingredient_id, default_price,
+                               default_quantity, notes, created_at
+                        FROM old_ingredient_habits
+                    """)
+                    cursor.execute("DROP TABLE old_ingredient_habits")
+                else:
+                    # Find constraint names
+                    cursor.execute("""
+                        SELECT conname 
+                        FROM pg_constraint 
+                        WHERE conrelid = 'ingredient_habits'::regclass AND contype = 'u'
+                    """)
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        conname = row[0]
+                        cursor.execute(f"ALTER TABLE ingredient_habits DROP CONSTRAINT {conname}")
+                        
+                    cursor.execute("ALTER TABLE ingredient_habits ADD COLUMN account_name VARCHAR(255) NOT NULL DEFAULT ''")
+                    cursor.execute("""
+                        ALTER TABLE ingredient_habits 
+                        ADD CONSTRAINT ingredient_habits_user_acc_ing_key 
+                        UNIQUE(telegram_user_id, account_name, poster_ingredient_id)
+                    """)
+                conn.commit()
+                logger.info("✅ Migrated ingredient_habits successfully")
+            conn.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to migrate ingredient_habits: {e}")
+
     def get_packaging_rules(self, telegram_user_id: int) -> list:
         """Get all ingredient packaging rules for a user"""
         try:
@@ -2215,7 +2367,7 @@ class UserDatabase:
             if DB_TYPE == "sqlite":
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, poster_ingredient_id, original_unit, coefficient, target_unit, notes, created_at
+                    SELECT id, account_name, poster_ingredient_id, original_unit, coefficient, target_unit, notes, created_at
                     FROM ingredient_packaging_rules
                     WHERE telegram_user_id = ?
                 """, (telegram_user_id,))
@@ -2225,7 +2377,7 @@ class UserDatabase:
             else:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 cursor.execute("""
-                    SELECT id, poster_ingredient_id, original_unit, coefficient, target_unit, notes, created_at
+                    SELECT id, account_name, poster_ingredient_id, original_unit, coefficient, target_unit, notes, created_at
                     FROM ingredient_packaging_rules
                     WHERE telegram_user_id = %s
                 """, (telegram_user_id,))
@@ -2243,36 +2395,38 @@ class UserDatabase:
         original_unit: str,
         coefficient: float,
         target_unit: str = 'кг',
-        notes: str = ''
+        notes: str = '',
+        account_name: str = ''
     ) -> bool:
         """Add or update an ingredient packaging rule"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
             original_unit = original_unit.strip().lower()
+            account_name = account_name.strip()
 
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT OR REPLACE INTO ingredient_packaging_rules (
-                        telegram_user_id, poster_ingredient_id, original_unit,
+                        telegram_user_id, account_name, poster_ingredient_id, original_unit,
                         coefficient, target_unit, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                """, (telegram_user_id, poster_ingredient_id, original_unit, coefficient, target_unit, notes))
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, account_name, poster_ingredient_id, original_unit, coefficient, target_unit, notes))
             else:
                 cursor.execute("""
                     INSERT INTO ingredient_packaging_rules (
-                        telegram_user_id, poster_ingredient_id, original_unit,
+                        telegram_user_id, account_name, poster_ingredient_id, original_unit,
                         coefficient, target_unit, notes
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (telegram_user_id, poster_ingredient_id, original_unit)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, account_name, poster_ingredient_id, original_unit)
                     DO UPDATE SET
                         coefficient = EXCLUDED.coefficient,
                         target_unit = EXCLUDED.target_unit,
                         notes = EXCLUDED.notes
-                """, (telegram_user_id, poster_ingredient_id, original_unit, coefficient, target_unit, notes))
+                """, (telegram_user_id, account_name, poster_ingredient_id, original_unit, coefficient, target_unit, notes))
             conn.commit()
             conn.close()
-            logger.info(f"✅ Packaging rule saved: User {telegram_user_id}, Ingredient {poster_ingredient_id}, '{original_unit}' -> coefficient {coefficient}")
+            logger.info(f"✅ Packaging rule saved: User {telegram_user_id}, Account '{account_name}', Ingredient {poster_ingredient_id}, '{original_unit}' -> coefficient {coefficient}")
             return True
         except Exception as e:
             logger.error(f"Failed to add packaging rule: {e}")
@@ -2325,7 +2479,7 @@ class UserDatabase:
             if DB_TYPE == "sqlite":
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, poster_ingredient_id, default_price, default_quantity, notes, created_at
+                    SELECT id, account_name, poster_ingredient_id, default_price, default_quantity, notes, created_at
                     FROM ingredient_habits
                     WHERE telegram_user_id = ?
                 """, (telegram_user_id,))
@@ -2335,7 +2489,7 @@ class UserDatabase:
             else:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 cursor.execute("""
-                    SELECT id, poster_ingredient_id, default_price, default_quantity, notes, created_at
+                    SELECT id, account_name, poster_ingredient_id, default_price, default_quantity, notes, created_at
                     FROM ingredient_habits
                     WHERE telegram_user_id = %s
                 """, (telegram_user_id,))
@@ -2352,35 +2506,37 @@ class UserDatabase:
         poster_ingredient_id: int,
         default_price: float = None,
         default_quantity: float = None,
-        notes: str = ''
+        notes: str = '',
+        account_name: str = ''
     ) -> bool:
         """Add or update an ingredient habit"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
+            account_name = account_name.strip()
 
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT OR REPLACE INTO ingredient_habits (
-                        telegram_user_id, poster_ingredient_id, default_price,
+                        telegram_user_id, account_name, poster_ingredient_id, default_price,
                         default_quantity, notes
-                    ) VALUES (?, ?, ?, ?, ?)
-                """, (telegram_user_id, poster_ingredient_id, default_price, default_quantity, notes))
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (telegram_user_id, account_name, poster_ingredient_id, default_price, default_quantity, notes))
             else:
                 cursor.execute("""
                     INSERT INTO ingredient_habits (
-                        telegram_user_id, poster_ingredient_id, default_price,
+                        telegram_user_id, account_name, poster_ingredient_id, default_price,
                         default_quantity, notes
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (telegram_user_id, poster_ingredient_id)
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, account_name, poster_ingredient_id)
                     DO UPDATE SET
                         default_price = EXCLUDED.default_price,
                         default_quantity = EXCLUDED.default_quantity,
                         notes = EXCLUDED.notes
-                """, (telegram_user_id, poster_ingredient_id, default_price, default_quantity, notes))
+                """, (telegram_user_id, account_name, poster_ingredient_id, default_price, default_quantity, notes))
             conn.commit()
             conn.close()
-            logger.info(f"✅ Ingredient habit saved: User {telegram_user_id}, Ingredient {poster_ingredient_id}, price {default_price}")
+            logger.info(f"✅ Ingredient habit saved: User {telegram_user_id}, Account '{account_name}', Ingredient {poster_ingredient_id}, price {default_price}")
             return True
         except Exception as e:
             logger.error(f"Failed to add ingredient habit: {e}")

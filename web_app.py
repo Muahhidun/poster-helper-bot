@@ -358,26 +358,19 @@ def list_aliases():
     # Load items to map ingredient names
     items = load_items_from_csv()
     
-    # Prioritize primary account ingredient names to prevent duplicate ID collisions
-    primary_acc = db.get_primary_account(g.user_id)
-    primary_name = primary_acc['account_name'] if primary_acc else None
-    
     item_names = {}
-    # First pass: map all ingredients (non-primary or default first)
+    # Map all ingredients: first default fallback, then account-specific
     for i in items:
         if i['type'] == 'ingredient':
-            item_names[i['id']] = i['name']
-            
-    # Second pass: overwrite with primary account ingredients so they take precedence
-    if primary_name:
-        for i in items:
-            if i['type'] == 'ingredient' and i.get('account_name') == primary_name:
-                item_names[i['id']] = i['name']
+            # Fallback by raw ID
+            item_names[str(i['id'])] = i['name']
+            # Precise mapping by ID and account
+            item_names[f"{i['id']}_{i.get('account_name', '').strip()}"] = i['name']
 
     # If search filter is active, filter packaging rules and habits too
     if search:
-        packaging_rules = [r for r in packaging_rules if search.lower() in item_names.get(r['poster_ingredient_id'], '').lower()]
-        habits = [h for h in habits if search.lower() in item_names.get(h['poster_ingredient_id'], '').lower()]
+        packaging_rules = [r for r in packaging_rules if search.lower() in item_names.get(f"{r['poster_ingredient_id']}_{r['account_name']}", item_names.get(str(r['poster_ingredient_id']), '')).lower()]
+        habits = [h for h in habits if search.lower() in item_names.get(f"{h['poster_ingredient_id']}_{h['account_name']}", item_names.get(str(h['poster_ingredient_id']), '')).lower()]
 
     return render_template('aliases_list.html',
                           aliases=aliases,
@@ -3055,7 +3048,7 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
     rules_dict = {(r['poster_ingredient_id'], r['original_unit'].strip().lower()): r['coefficient'] for r in rules}
     
     habits = db.get_ingredient_habits(user_id)
-    habits_dict = {h['poster_ingredient_id']: h['default_price'] for h in habits if h['default_price']}
+    habits_dict = {(h['poster_ingredient_id'], h.get('account_name', '').strip()): h['default_price'] for h in habits if h['default_price']}
     
     for item in invoice.get('items', []):
         name = item.get('name', 'Товар')
@@ -3092,16 +3085,35 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
         
         # Apply packaging rules and habits
         if item_id and item_type == 'ingredient':
-            matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id and r['original_unit'].strip().lower() == unit), None)
+            matching_rule = None
+            item_acc_name = (account_name or '').strip()
+            
+            # 1. Match packaging rule by exact account_name
+            if item_acc_name:
+                matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id 
+                                     and r['original_unit'].strip().lower() == unit 
+                                     and r.get('account_name', '').strip() == item_acc_name), None)
+            
+            # 2. Fallback to packaging rules with empty account_name (shared/legacy)
+            if not matching_rule:
+                matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id 
+                                     and r['original_unit'].strip().lower() == unit 
+                                     and not r.get('account_name', '').strip()), None)
+            
             if matching_rule:
                 coef = float(matching_rule['coefficient'])
                 target_unit = matching_rule.get('target_unit', 'кг')
                 qty = parsed_quantity * coef
                 price = parsed_price_per_unit / coef
-                logger.info(f"⚖️ Applied packaging rule for ingredient {item_id}: {parsed_quantity} {parsed_unit} -> {qty} {target_unit} (coef={coef})")
+                logger.info(f"⚖️ Applied packaging rule for ingredient {item_id} (account: '{matching_rule.get('account_name', '')}'): {parsed_quantity} {parsed_unit} -> {qty} {target_unit} (coef={coef})")
             else:
-                default_price = habits_dict.get(item_id)
-                if default_price:
+                default_price = None
+                if item_acc_name:
+                    default_price = habits_dict.get((item_id, item_acc_name))
+                if default_price is None:
+                    default_price = habits_dict.get((item_id, ''))
+                    
+                if default_price is not None:
                     default_price = float(default_price)
                     total_sum_item = parsed_quantity * parsed_price_per_unit
                     if parsed_price_per_unit > default_price * 1.5 and abs(total_sum_item / default_price - round(total_sum_item / default_price)) < 0.05:
@@ -3110,7 +3122,7 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
                             qty = float(calculated_qty)
                             price = default_price
                             target_unit = 'кг'
-                            logger.info(f"⚖️ Habit match for ingredient {item_id}: qty {qty} based on total {total_sum_item} and typical price {default_price}")
+                            logger.info(f"⚖️ Habit match for ingredient {item_id} (account: '{item_acc_name}'): qty {qty} based on total {total_sum_item} and typical price {default_price}")
             
         db.add_supply_draft_item(
             supply_draft_id=supply_draft_id,
@@ -5176,6 +5188,13 @@ def update_supply_item(item_id):
                 price = updated_item.get('price_per_unit')
                 parsed_qty = updated_item.get('parsed_quantity')
                 parsed_unit = updated_item.get('parsed_unit')
+                # Try to get the account name from all potential sources
+                acc_name = (
+                    updated_item.get('poster_account_name') or 
+                    data.get('poster_account_name') or 
+                    item.get('poster_account_name') or 
+                    ''
+                ).strip()
 
                 # A. Packaging rule: user edited quantity vs parsed quantity
                 if parsed_qty is not None and parsed_qty > 0 and qty is not None:
@@ -5190,7 +5209,8 @@ def update_supply_item(item_id):
                             original_unit=orig_unit,
                             coefficient=coef,
                             target_unit='кг',
-                            notes=f"Авто-изучено: {parsed_qty} {orig_unit} -> {qty} кг"
+                            notes=f"Авто-изучено: {parsed_qty} {orig_unit} -> {qty} кг",
+                            account_name=acc_name
                         )
 
                 # B. Habit: user edited price
@@ -5199,7 +5219,8 @@ def update_supply_item(item_id):
                         telegram_user_id=g.user_id,
                         poster_ingredient_id=int(ing_id),
                         default_price=price,
-                        notes="Изучено из ручного ввода цены"
+                        notes="Изучено из ручного ввода цены",
+                        account_name=acc_name
                     )
 
     return jsonify({'success': success})
