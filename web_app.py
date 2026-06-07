@@ -1983,12 +1983,11 @@ def debug_delete(tx_id):
     for acc in accounts:
         acc_info = {
             "account_id": acc['id'],
-            "account_name": acc['account_name'],
-            "telegram_user_id": acc['telegram_user_id']
+            "account_name": acc['account_name']
         }
         
         client = PosterClient(
-            telegram_user_id=acc['telegram_user_id'],
+            telegram_user_id=None,
             poster_token=acc['poster_token'],
             poster_user_id=acc['poster_user_id'],
             poster_base_url=acc['poster_base_url']
