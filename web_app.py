@@ -1964,7 +1964,7 @@ def view_assistant():
                            assistant_memory=assistant_memory)
 
 
-@app.route('/api/debug-delete/<int:tx_id>')
+@app.route('/mini-app/debug-delete/<int:tx_id>')
 def debug_delete(tx_id):
     """Debug route to test deleting transaction on Poster API with various options"""
     db = get_database()
