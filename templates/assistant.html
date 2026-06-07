@@ -1058,6 +1058,7 @@
             <button class="sidebar-tab-btn active" onclick="switchTab('cash')" id="tab-btn-cash">Наличка</button>
             <button class="sidebar-tab-btn" onclick="switchTab('kaspi')" id="tab-btn-kaspi">Kaspi Pay</button>
             <button class="sidebar-tab-btn" onclick="switchTab('halyk')" id="tab-btn-halyk">Halyk</button>
+            <button class="sidebar-tab-btn" onclick="switchTab('memory')" id="tab-btn-memory">🧠 Память ИИ</button>
         </div>
 
         <!-- Drafts Content (Form wrapping all tabs to support action buttons) -->
@@ -1159,6 +1160,23 @@
                     </div>
                     <div class="section-summary-row" id="summary-halyk">
                         Итого: &nbsp;<span class="sum" style="font-weight:700">0₸</span>
+                    </div>
+                </div>
+
+                <!-- AI Memory Tab -->
+                <div class="drafts-account-section" id="tab-section-memory" style="padding: 10px 0;">
+                    <div style="padding: 10px; font-size: 11px; color: var(--text-secondary); background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; line-height: 1.4;">
+                        💡 <strong>Блокнот памяти ассистента</strong>.
+                        Сюда записываются правила, которые ИИ должен помнить всегда (например, перевод упаковок в кг, особенности цен и т.д.).
+                        Вы можете редактировать их вручную или попросить ассистента в чате запомнить правило.
+                    </div>
+                    <div style="display: flex; flex-direction: column;">
+                        <textarea id="ai-memory-textarea" class="form-control" style="width: 100%; min-height: 250px; font-family: monospace; font-size: 12px; line-height: 1.5; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; resize: vertical; background: #ffffff;" placeholder="# Правила и нюансы поставок&#10;- Наггетсы: всегда указывать фактический вес в кг...">{{ assistant_memory or '' }}</textarea>
+                    </div>
+                    <div style="margin-top: 12px; display: flex; gap: 8px;">
+                        <button type="button" onclick="saveAIMemory()" class="btn-sidebar-action primary" style="width: 100%; text-align: center; justify-content: center; height: 36px; font-weight: 600;">
+                            💾 Сохранить память
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1838,6 +1856,14 @@
                 // Re-bind autocomplete and change listeners to the newly rendered rows
                 setupTableListeners();
                 updateSummary();
+
+                // Update assistant memory if updated by AI
+                if (data.assistant_memory !== undefined) {
+                    const textarea = document.getElementById('ai-memory-textarea');
+                    if (textarea) {
+                        textarea.value = data.assistant_memory;
+                    }
+                }
             } else {
                 addAssistantMessageToUI("К сожалению, произошла ошибка на бэкенде. Попробуйте еще раз.");
             }
@@ -2098,6 +2124,28 @@
         const toggleBtnText = document.getElementById('toggle-sidebar-text');
         if (toggleBtnText) {
             toggleBtnText.textContent = isHidden ? 'Показать черновики' : 'Скрыть черновики';
+        }
+    }
+
+    // Save manually edited AI memory
+    async function saveAIMemory() {
+        const textarea = document.getElementById('ai-memory-textarea');
+        if (!textarea) return;
+        const memoryText = textarea.value;
+        try {
+            const response = await fetch('/api/assistant/memory', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ memory_text: memoryText })
+            });
+            const data = await response.json();
+            if (response.ok && data.success) {
+                showToast('Память ассистента успешно сохранена', 'success');
+            } else {
+                showToast('Не удалось сохранить память ассистента', 'danger');
+            }
+        } catch (e) {
+            showToast('Ошибка сети при сохранении памяти', 'danger');
         }
     }
 

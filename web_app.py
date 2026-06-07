@@ -1942,6 +1942,7 @@ def view_assistant():
 
     # Load chat history
     chat_history = db.get_assistant_chat_history(g.user_id, limit=30)
+    assistant_memory = db.get_assistant_memory(g.user_id)
 
     return render_template('assistant.html',
                            drafts=drafts,
@@ -1953,7 +1954,8 @@ def view_assistant():
                            today=today,
                            account_totals=account_totals,
                            reconciliation=reconciliation,
-                           chat_history=chat_history)
+                           chat_history=chat_history,
+                           assistant_memory=assistant_memory)
 
 
 @app.route('/api/assistant/message', methods=['POST'])
@@ -2010,12 +2012,13 @@ def api_assistant_message():
     # Save user message to database
     db.add_assistant_chat_message(user_id, 'user', message, saved_media_paths)
     
-    # Fetch context: history, drafts, profiles
+    # Fetch context: history, drafts, profiles, memory
     chat_history = db.get_assistant_chat_history(user_id, limit=30)
     all_drafts = db.get_expense_drafts(user_id, status="all")
     active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
     
     supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+    assistant_memory = db.get_assistant_memory(user_id)
     
     # Call Gemini Agent
     from parser_service import get_parser_service
@@ -2027,7 +2030,8 @@ def api_assistant_message():
             chat_history=chat_history,
             active_drafts=active_drafts,
             supplier_profiles=supplier_profiles,
-            media_files=media_files
+            media_files=media_files,
+            assistant_memory=assistant_memory
         ))
     except Exception as e:
         logger.error(f"Error in Gemini assistant execution: {e}")
@@ -2420,6 +2424,12 @@ def api_assistant_message():
                 finally:
                     run_async(client.close())
                             
+            # 7. Update Assistant Memory
+            elif act_type == 'update_memory':
+                mem_text = action.get('memory_text')
+                if mem_text is not None:
+                    db.save_assistant_memory(user_id, mem_text)
+                            
         except Exception as action_err:
             logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
                     
@@ -2459,7 +2469,8 @@ def api_assistant_message():
         'model_name': model_used,
         'cash_html': cash_html,
         'kaspi_html': kaspi_html,
-        'halyk_html': halyk_html
+        'halyk_html': halyk_html,
+        'assistant_memory': db.get_assistant_memory(user_id)
     })
 
 
@@ -2469,6 +2480,17 @@ def api_assistant_clear():
     db = get_database()
     db.clear_assistant_chat_history(g.user_id)
     return jsonify({'success': True})
+
+
+@app.route('/api/assistant/memory', methods=['POST'])
+def api_assistant_save_memory():
+    """Save manually edited assistant memory"""
+    db = get_database()
+    user_id = g.user_id
+    data = request.get_json() or {}
+    memory_text = data.get('memory_text', '').strip()
+    db.save_assistant_memory(user_id, memory_text)
+    return jsonify({"success": True, "message": "Память ассистента успешно обновлена"})
 
 
 @app.route('/api/assistant/transcribe', methods=['POST'])

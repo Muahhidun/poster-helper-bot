@@ -849,6 +849,9 @@ class UserDatabase:
         # Run migration for assistant chat history
         self._migrate_assistant_chat()
 
+        # Run migration for assistant memory
+        self._migrate_assistant_memory()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -5409,6 +5412,82 @@ class UserDatabase:
                 pass
         except Exception as e:
             logger.error(f"❌ Failed to create assistant_chat_messages table: {e}")
+
+    def _migrate_assistant_memory(self):
+        """Create assistant_memory table for storing user-specific notes and rules"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS assistant_memory (
+                        telegram_user_id INTEGER PRIMARY KEY,
+                        memory_text TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS assistant_memory (
+                        telegram_user_id BIGINT PRIMARY KEY,
+                        memory_text TEXT NOT NULL DEFAULT '',
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ Created assistant_memory table")
+        except Exception as e:
+            logger.error(f"❌ Failed to create assistant_memory table: {e}")
+
+    def get_assistant_memory(self, telegram_user_id: int) -> str:
+        """Get assistant memory text for the user"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("SELECT memory_text FROM assistant_memory WHERE telegram_user_id = ?", (telegram_user_id,))
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("SELECT memory_text FROM assistant_memory WHERE telegram_user_id = %s", (telegram_user_id,))
+            row = cursor.fetchone()
+            val = row['memory_text'] if row else ""
+            conn.close()
+            return val
+        except Exception as e:
+            logger.error(f"Error fetching assistant memory: {e}")
+            return ""
+
+    def save_assistant_memory(self, telegram_user_id: int, memory_text: str):
+        """Save assistant memory text for the user"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO assistant_memory (telegram_user_id, memory_text, updated_at)
+                    VALUES (?, ?, datetime('now'))
+                    ON CONFLICT(telegram_user_id) DO UPDATE SET
+                        memory_text = EXCLUDED.memory_text,
+                        updated_at = datetime('now')
+                """, (telegram_user_id, memory_text))
+            else:
+                cursor.execute("""
+                    INSERT INTO assistant_memory (telegram_user_id, memory_text, updated_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id) DO UPDATE SET
+                        memory_text = EXCLUDED.memory_text,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (telegram_user_id, memory_text))
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ Saved assistant memory for user {telegram_user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save assistant memory: {e}")
+            return False
 
     def get_assistant_chat_history(self, telegram_user_id: int, limit: int = 50) -> list:
         """Retrieve recent messages in assistant chat history"""
