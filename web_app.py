@@ -1966,7 +1966,7 @@ def view_assistant():
 
 @app.route('/login/debug-delete/<int:tx_id>')
 def debug_delete(tx_id):
-    """Debug route to fetch all recent transactions to identify target transaction"""
+    """Debug route to search for transaction by ID or timestamp and return full details"""
     db = get_database()
     try:
         user_ids = db.get_all_user_ids_with_accounts()
@@ -1985,7 +1985,7 @@ def debug_delete(tx_id):
             "account_name": acc['account_name']
         }
         
-        async def fetch_recent():
+        async def search_transaction():
             client = PosterClient(
                 telegram_user_id=None,
                 poster_token=acc['poster_token'],
@@ -1993,7 +1993,7 @@ def debug_delete(tx_id):
                 poster_base_url=acc['poster_base_url']
             )
             
-            tx_list = []
+            matches = []
             err_details = None
             
             try:
@@ -2002,34 +2002,39 @@ def debug_delete(tx_id):
                     'dateFrom': '20260605',
                     'dateTo': '20260608'
                 })
-                tx_list = res.get('response', [])
+                transactions = res.get('response', [])
+                for tx in transactions:
+                    # Check if this transaction matches by transaction_id, spot_order_num, date_close, etc.
+                    tx_id_str = str(tx.get('transaction_id', ''))
+                    date_close_str = str(tx.get('date_close', ''))
+                    spot_order_num_str = str(tx.get('spot_order_num', ''))
+                    
+                    # We are looking for 72458, 72456, 1780839278852, 1780838894269
+                    is_match = False
+                    if tx_id_str in ['72458', '72456', '1780839278852', '1780838894269']:
+                        is_match = True
+                    elif date_close_str in ['72458', '72456', '1780839278852', '1780838894269']:
+                        is_match = True
+                    elif spot_order_num_str in ['72458', '72456', '1780839278852', '1780838894269']:
+                        is_match = True
+                        
+                    if is_match:
+                        matches.append(tx)
             except Exception as e:
                 err_details = str(e)
             finally:
                 await client.close()
                 
-            return tx_list, err_details
+            return matches, err_details
             
         try:
-            tx_list, err_det = run_async(fetch_recent())
+            matches, err_det = run_async(search_transaction())
         except Exception as e:
-            tx_list, err_det = [], f"run_async failed: {e}"
-            
-        # Format list to return key fields (ID, date, sum, spot_order_num)
-        formatted_txs = []
-        for tx in tx_list:
-            formatted_txs.append({
-                "transaction_id": tx.get("transaction_id"),
-                "date_close": tx.get("date_close"),
-                "payed_sum": tx.get("payed_sum"),
-                "spot_order_num": tx.get("spot_order_num"),
-                "status": tx.get("status")
-            })
+            matches, err_det = [], f"run_async failed: {e}"
             
         results.append({
             "account": acc_info,
-            "count": len(tx_list),
-            "transactions": formatted_txs[:10], # Return first 10
+            "matches": matches,
             "error": err_det
         })
         
