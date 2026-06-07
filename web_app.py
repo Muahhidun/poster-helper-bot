@@ -1968,15 +1968,13 @@ def view_assistant():
 def debug_delete(tx_id):
     """Debug route to test deleting transaction on Poster API with various options"""
     db = get_database()
-    conn = db._get_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, telegram_user_id, account_name, poster_token, poster_user_id, poster_base_url FROM poster_accounts")
-        accounts = [dict(row) for row in cursor.fetchall()]
+        user_ids = db.get_all_user_ids_with_accounts()
+        accounts = []
+        for uid in user_ids:
+            accounts.extend(db.get_accounts(uid))
     except Exception as e:
         return jsonify({"success": False, "error": f"Failed to fetch accounts: {e}"})
-    finally:
-        conn.close()
 
     results = []
     from poster_client import PosterClient
