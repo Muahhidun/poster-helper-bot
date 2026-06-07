@@ -1978,7 +1978,6 @@ def debug_delete(tx_id):
 
     results = []
     from poster_client import PosterClient
-    import asyncio
     
     for acc in accounts:
         acc_info = {
@@ -1986,54 +1985,45 @@ def debug_delete(tx_id):
             "account_name": acc['account_name']
         }
         
-        res_json = None
-        err_json = None
-        res_form = None
-        err_form = None
-        
-        def run_sync_helper(coro):
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        async def test_both():
+            client_json = PosterClient(
+                telegram_user_id=None,
+                poster_token=acc['poster_token'],
+                poster_user_id=acc['poster_user_id'],
+                poster_base_url=acc['poster_base_url']
+            )
+            client_form = PosterClient(
+                telegram_user_id=None,
+                poster_token=acc['poster_token'],
+                poster_user_id=acc['poster_user_id'],
+                poster_base_url=acc['poster_base_url']
+            )
+            
+            res_j, err_j, res_f, err_f = None, None, None, None
             try:
-                return loop.run_until_complete(coro)
+                res_j = await client_json._request('POST', 'transactions.removeTransaction', data={
+                    'transaction_id': tx_id
+                }, use_json=True)
+            except Exception as e:
+                err_j = str(e)
             finally:
-                loop.close()
+                await client_json.close()
                 
-        try:
-            async def test_json():
-                client = PosterClient(
-                    telegram_user_id=None,
-                    poster_token=acc['poster_token'],
-                    poster_user_id=acc['poster_user_id'],
-                    poster_base_url=acc['poster_base_url']
-                )
-                try:
-                    return await client._request('POST', 'transactions.removeTransaction', data={
-                        'transaction_id': tx_id
-                    }, use_json=True)
-                finally:
-                    await client.close()
-            res_json = run_sync_helper(test_json())
-        except Exception as e:
-            err_json = str(e)
+            try:
+                res_f = await client_form._request('POST', 'transactions.removeTransaction', data={
+                    'transaction_id': tx_id
+                }, use_json=False)
+            except Exception as e:
+                err_f = str(e)
+            finally:
+                await client_form.close()
+                
+            return res_j, err_j, res_f, err_f
             
         try:
-            async def test_form():
-                client = PosterClient(
-                    telegram_user_id=None,
-                    poster_token=acc['poster_token'],
-                    poster_user_id=acc['poster_user_id'],
-                    poster_base_url=acc['poster_base_url']
-                )
-                try:
-                    return await client._request('POST', 'transactions.removeTransaction', data={
-                        'transaction_id': tx_id
-                    }, use_json=False)
-                finally:
-                    await client.close()
-            res_form = run_sync_helper(test_form())
+            res_json, err_json, res_form, err_form = run_async(test_both())
         except Exception as e:
-            err_form = str(e)
+            res_json, err_json, res_form, err_form = None, f"run_async failed: {e}", None, f"run_async failed: {e}"
         
         results.append({
             "account": acc_info,
