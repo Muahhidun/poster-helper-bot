@@ -118,7 +118,12 @@ def run_bot_loop():
         loop.close()
 
 def run_server():
-    """Run the Flask server with webhook"""
+    """Run the server — local dev fallback when gunicorn is not available.
+
+    In production on Railway, gunicorn is used instead (see Procfile).
+    The bot thread is started by gunicorn's post_worker_init hook in
+    gunicorn_config.py.
+    """
     port = int(os.environ.get('PORT', 5000))
 
     logger.info("=" * 60)
@@ -134,8 +139,8 @@ def run_server():
     import time
     time.sleep(2)
 
-    # Start Flask server
-    logger.info("🎯 Starting Flask server...")
+    # Start Flask dev server (local only)
+    logger.info("🎯 Starting Flask dev server...")
     app.run(
         host='0.0.0.0',
         port=port,

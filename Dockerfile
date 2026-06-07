@@ -42,5 +42,5 @@ RUN cd mini_app && npm run build
 # Expose port (Railway will inject PORT environment variable)
 EXPOSE 8080
 
-# Start the bot
-CMD ["python", "start_server.py"]
+# Start with gunicorn (production WSGI server)
+CMD ["gunicorn", "--config", "gunicorn_config.py", "start_server:app"]

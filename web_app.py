@@ -177,6 +177,12 @@ def logout():
     return redirect('/login')
 
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Railway / load balancer"""
+    return 'ok', 200
+
+
 @app.before_request
 def check_auth():
     """Authentication middleware — check session and role for every request"""
