@@ -1967,7 +1967,33 @@ def view_assistant():
 
 @app.route('/api/assistant/message', methods=['POST'])
 def api_assistant_message():
-    """Receive message from assistant chat, query Gemini, perform actions, and return response"""
+    """Receive message from assistant chat, query Gemini, perform actions, and return response.
+
+    Never returns a 500: any unexpected failure is reported as a chat bubble
+    so the owner sees what went wrong instead of a dead interface.
+    """
+    try:
+        return _api_assistant_message_impl()
+    except Exception as fatal_err:
+        logger.error(f"Fatal error in assistant message route: {fatal_err}", exc_info=True)
+        err_text = (
+            f"⚠️ Произошла внутренняя ошибка при обработке сообщения: {fatal_err}. "
+            f"Ваше сообщение сохранено, попробуйте ещё раз чуть позже."
+        )
+        try:
+            get_database().add_assistant_chat_message(g.user_id, 'assistant', err_text, model_name='system')
+        except Exception:
+            pass
+        return jsonify({
+            'success': False,
+            'response_text': err_text,
+            'model_name': 'system',
+            'cash_html': '', 'kaspi_html': '', 'halyk_html': '',
+            'assistant_memory': ''
+        }), 200
+
+
+def _api_assistant_message_impl():
     db = get_database()
     user_id = g.user_id
     
@@ -1989,33 +2015,62 @@ def api_assistant_message():
     upload_dir = os.path.join(app.root_path, 'static', 'uploads', 'assistant')
     os.makedirs(upload_dir, exist_ok=True)
     
+    pdf_text_blocks = []
+
     for file in uploaded_files:
         if not file or not file.filename:
             continue
-            
+
         filename = file.filename.lower()
         file_ext = os.path.splitext(filename)[1]
         unique_filename = f"{uuid.uuid4().hex}{file_ext}"
         save_path = os.path.join(upload_dir, unique_filename)
-        
+
         try:
             file_data = file.read()
             # Save to disk
             with open(save_path, 'wb') as f:
                 f.write(file_data)
-            
+
             relative_path = f"/static/uploads/assistant/{unique_filename}"
             saved_media_paths.append(relative_path)
-            
-            # Add to media_files for Gemini
+
             media_type = file.mimetype or 'image/jpeg'
+
+            # PDF invoices: extract the text layer (exact numbers, no OCR errors).
+            # Scanned PDFs are converted to images; if conversion is unavailable
+            # the raw PDF still goes to Gemini, which reads PDFs natively.
+            if media_type == 'application/pdf' or file_ext == '.pdf':
+                try:
+                    from pdf_utils import prepare_pdf_for_assistant
+                    pdf_info = prepare_pdf_for_assistant(file_data, filename)
+                    if pdf_info['text']:
+                        pdf_text_blocks.append(
+                            f"=== Извлечённый текст из PDF «{file.filename}» (точный текстовый слой, доверяй этим цифрам) ===\n{pdf_info['text']}"
+                        )
+                    if pdf_info['images']:
+                        for img_bytes in pdf_info['images']:
+                            media_files.append({
+                                'mime_type': 'image/jpeg',
+                                'data': img_bytes
+                            })
+                        continue  # pages already attached as images
+                except Exception as pdf_err:
+                    logger.error(f"PDF processing failed for {filename}: {pdf_err}")
+
+            # Add to media_files for Gemini
             media_files.append({
                 'mime_type': media_type,
                 'data': file_data
             })
         except Exception as e:
             logger.error(f"Error saving assistant upload file {filename}: {e}")
-            
+
+    # Inject extracted PDF text into the model context only (keep chat history clean)
+    agent_message = message
+    if pdf_text_blocks:
+        agent_message = (message + "\n\n" if message else "") + "\n\n".join(pdf_text_blocks)
+
     # Save user message to database
     db.add_assistant_chat_message(user_id, 'user', message, saved_media_paths)
     
@@ -2033,7 +2088,7 @@ def api_assistant_message():
     
     try:
         agent_response = run_async(parser.call_gemini_assistant_agent(
-            user_message=message,
+            user_message=agent_message,
             chat_history=chat_history,
             active_drafts=active_drafts,
             supplier_profiles=supplier_profiles,
@@ -2049,7 +2104,19 @@ def api_assistant_message():
         
     response_text = agent_response.get('response_text', 'Не удалось получить ответ.')
     actions = agent_response.get('actions', [])
-    
+
+    # Human-readable labels for action error reporting
+    _ACTION_LABELS = {
+        'create_expense': 'создание расхода',
+        'update_expense': 'обновление расхода',
+        'add_supply_items': 'добавление позиций в поставку',
+        'create_supply': 'создание поставки',
+        'find_pos_receipt': 'поиск чека в Poster',
+        'delete_pos_receipt': 'удаление чека из Poster',
+        'update_memory': 'обновление памяти',
+    }
+    action_errors = []
+
     # Process actions safely
     for action in actions:
         try:
@@ -2062,13 +2129,25 @@ def api_assistant_message():
                     amount = float(amount_val) if amount_val is not None else 0
                 except (ValueError, TypeError):
                     amount = 0
-                    
+
+                # Normalize category to a real Poster category via fuzzy matching,
+                # so handwritten-sheet categories land exactly on the catalog names
+                category = action.get('category', 'Прочее')
+                try:
+                    from matchers import get_category_matcher
+                    cat_matcher = get_category_matcher(user_id)
+                    cat_match = cat_matcher.match(category) or cat_matcher.match(action.get('description', ''))
+                    if cat_match:
+                        category = cat_match[1]
+                except Exception as cat_err:
+                    logger.warning(f"Category matching failed for '{category}': {cat_err}")
+
                 db.create_expense_draft(
                     telegram_user_id=user_id,
                     amount=amount,
                     description=action.get('description'),
                     expense_type=action.get('expense_type', 'transaction'),
-                    category=action.get('category', 'Прочее'),
+                    category=category,
                     source=action.get('source', 'cash'),
                     created_at=date_str
                 )
@@ -2097,7 +2176,13 @@ def api_assistant_message():
             elif act_type == 'add_supply_items':
                 expense_draft_id = action.get('expense_draft_id')
                 items = action.get('items', [])
-                
+
+                # Fix OCR math errors (qty*price != sum) before writing to DB
+                try:
+                    items = parser.reconcile_items(items)
+                except Exception as rec_err:
+                    logger.warning(f"Item reconciliation failed: {rec_err}")
+
                 # Find supply draft linked to this expense
                 supplies = db.get_supply_drafts(user_id, status="all")
                 supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
@@ -2173,7 +2258,22 @@ def api_assistant_message():
                     
                 source = action.get('source', 'kaspi')
                 items = action.get('items', [])
-                
+
+                # Fix OCR math errors (qty*price != sum) before writing to DB
+                try:
+                    items = parser.reconcile_items(items)
+                except Exception as rec_err:
+                    logger.warning(f"Item reconciliation failed: {rec_err}")
+
+                # The invoice total must equal the sum of reconciled rows
+                items_total = sum(
+                    float(i.get('sum') or 0) for i in items
+                    if i.get('sum') is not None
+                )
+                if items_total > 0 and abs(items_total - total_sum) > 1.0:
+                    logger.info(f"create_supply: correcting total_sum {total_sum} → {items_total} from reconciled items")
+                    total_sum = round(items_total, 2)
+
                 # Resolve supplier name and ID using fuzzy logic
                 resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
                 
@@ -2466,7 +2566,24 @@ def api_assistant_message():
                             
         except Exception as action_err:
             logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
-                    
+            label = _ACTION_LABELS.get(action.get('action'), f"действие {action.get('action')}")
+            detail = ''
+            if action.get('supplier_name'):
+                detail = f" ({action.get('supplier_name')}"
+                if action.get('total_sum'):
+                    detail += f", {action.get('total_sum')}₸"
+                detail += ")"
+            elif action.get('description'):
+                detail = f" ({action.get('description')})"
+            action_errors.append(
+                f"⚠️ Не удалось выполнить: {label}{detail}. Ошибка: {action_err}. "
+                f"Данные не потеряны — попробуйте повторить или внесите вручную."
+            )
+
+    # Surface action errors in the chat bubble instead of failing silently
+    if action_errors:
+        response_text = (response_text + "\n\n" if response_text else "") + "\n".join(action_errors)
+
     # Save assistant message to database
     model_used = agent_response.get('_model_used', 'gemini-3.5-flash')
     db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=model_used)
@@ -2552,12 +2669,31 @@ def api_assistant_transcribe():
             temp_path = temp_audio.name
 
         try:
+            # Domain vocabulary primes Whisper for restaurant/supplier terms,
+            # so dictated commands need no manual correction
+            whisper_prompt = (
+                "Расходы и поставки ресторана PizzBurg: фарш, лаваш, айран, донер, "
+                "Кюрдамир, Япоша, Алимжан, Смолл, Каспи, Халык, тенге, зарплата, "
+                "инкассация, поставка, накладная, черновик, чек, удали чек."
+            )
+            try:
+                supplier_names = []
+                db = get_database()
+                profiles = db.get_supplier_ingredient_profiles(g.user_id)
+                if isinstance(profiles, dict):
+                    supplier_names = list(profiles.keys())[:20]
+                if supplier_names:
+                    whisper_prompt += " Поставщики: " + ", ".join(supplier_names) + "."
+            except Exception:
+                pass
+
             client = OpenAI(api_key=OPENAI_API_KEY)
             with open(temp_path, 'rb') as f:
                 transcription = client.audio.transcriptions.create(
                     model="whisper-1",
                     file=f,
-                    language="ru"
+                    language="ru",
+                    prompt=whisper_prompt[:900]
                 )
             text = transcription.text
             return jsonify({'success': True, 'text': text})

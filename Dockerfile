@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     gcc \
     curl \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 18.x (LTS) from NodeSource for mini-app build

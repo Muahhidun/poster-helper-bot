@@ -53,3 +53,5 @@ Flask-Limiter>=3.0
 bcrypt==4.2.0
 openpyxl==3.1.2
 pytest>=8.0
+pypdf==5.1.0
+pdf2image==1.17.0
