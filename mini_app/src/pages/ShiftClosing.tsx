@@ -171,6 +171,7 @@ export const ShiftClosing: React.FC = () => {
         cashBills: String(pd.cashier_cash_bills || prev.cashBills || ''),
         cashCoins: String(pd.cashier_cash_coins || prev.cashCoins || ''),
         expenses: String(pd.cashier_expenses || prev.expenses || ''),
+        kaspiCafe: String(pd.cafe_kaspi_pizzburg || prev.kaspiCafe || ''),
       }))
       setCashierDataSubmitted(true)
       cashierDataAutoSet.current = true

@@ -943,6 +943,7 @@ async function doSave(calc) {
         day_result: calc.day_result, shift_left: calc.shift_left,
         collection: calc.collection, cashless_diff: calc.cashless_diff,
         transactions_count: posterData ? posterData.transactions_count : 0,
+        wedrink_sales: posterData && posterData.wedrink_sales ? posterData.wedrink_sales / 100 : 0,
     };
     try {
         const r = await fetch(API_BASE + '/save', {

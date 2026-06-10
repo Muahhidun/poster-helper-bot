@@ -852,6 +852,9 @@ class UserDatabase:
         # Run migration for assistant memory
         self._migrate_assistant_memory()
 
+        # Run migration to add wedrink_sales column to shift_closings
+        self._migrate_shift_closings_wedrink()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -3804,7 +3807,8 @@ class UserDatabase:
                 'poster_trade', 'poster_bonus', 'poster_card', 'poster_cash',
                 'transactions_count',
                 'fact_cashless', 'fact_total', 'fact_adjusted', 'poster_total',
-                'day_result', 'shift_left', 'collection', 'cashless_diff'
+                'day_result', 'shift_left', 'collection', 'cashless_diff',
+                'wedrink_sales'
             ]
 
             values = [data.get(f, 0) for f in fields]
@@ -5627,6 +5631,29 @@ class UserDatabase:
         # Convert sets to sorted lists for JSON serialization
         return {k: sorted(list(v)) for k, v in profiles.items()}
 
+
+
+    def _migrate_shift_closings_wedrink(self):
+        """Add wedrink_sales column to shift_closings for tracking WeDrink category sales"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            try:
+                if DB_TYPE != "sqlite":
+                    cursor.execute("SAVEPOINT migration_wedrink_sp")
+                cursor.execute("ALTER TABLE shift_closings ADD COLUMN wedrink_sales REAL DEFAULT 0")
+                if DB_TYPE != "sqlite":
+                    cursor.execute("RELEASE SAVEPOINT migration_wedrink_sp")
+                logger.info("✅ WeDrink migration: added wedrink_sales to shift_closings")
+            except Exception:
+                if DB_TYPE != "sqlite":
+                    cursor.execute("ROLLBACK TO SAVEPOINT migration_wedrink_sp")
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"WeDrink migration error: {e}")
 
 
 # Singleton instance
