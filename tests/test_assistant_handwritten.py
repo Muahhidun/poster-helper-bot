@@ -226,3 +226,98 @@ def test_supply_items_reconciled_before_draft(app_client, db):
     db.delete_supply_draft(target[0]['id'], telegram_user_id=TEST_USER_ID)
     db.delete_expense_draft(expense_id, telegram_user_id=TEST_USER_ID)
     _cleanup(db, 'rectest')
+
+
+def test_is_income_flag_persisted(app_client, db):
+    """Expenses with is_income=true (e.g. '+16470 видринк') must be saved as income"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    _login(app_client)
+    _cleanup(db, 'inctest')
+
+    mock_agent_response = {
+        "response_text": "Записал приход.",
+        "actions": [
+            {
+                "action": "create_expense",
+                "amount": 16470,
+                "description": "видринк inctest",
+                "expense_type": "transaction",
+                "category": "Прочее",
+                "source": "cash",
+                "is_income": True,
+            },
+        ],
+        "_model_used": "mock-gemini",
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent",
+               new_callable=AsyncMock, return_value=mock_agent_response):
+        app_client.post('/api/assistant/message', data={
+            'message': '+16470 видринк',
+            'date': '2026-06-10',
+        })
+
+    drafts = db.get_expense_drafts(TEST_USER_ID, status="all")
+    created = [d for d in drafts if 'inctest' in (d.get('description') or '')]
+    assert len(created) == 1
+    assert bool(created[0].get('is_income'))
+
+    _cleanup(db, 'inctest')
+
+
+def test_supply_type_expense_auto_creates_linked_draft(app_client, db):
+    """create_expense with expense_type=supply must auto-create a linked
+    supply draft + attach items with fuzzy-matched ingredients"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    _login(app_client)
+    _cleanup(db, 'autotest')
+
+    mock_agent_response = {
+        "response_text": "Записал фарш.",
+        "actions": [
+            {
+                "action": "create_expense",
+                "amount": 33600,
+                "description": "фарш autotest",
+                "expense_type": "supply",
+                "category": "Прочее",
+                "source": "cash",
+                "items": [
+                    {"name": "Фарш", "qty": 12.0, "price": 2800.0, "sum": 33600.0},
+                ],
+            },
+        ],
+        "_model_used": "mock-gemini",
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent",
+               new_callable=AsyncMock, return_value=mock_agent_response):
+        response = app_client.post('/api/assistant/message', data={
+            'message': 'фарш 12кг по 2800',
+            'date': '2026-06-10',
+        })
+
+    assert response.status_code == 200
+
+    # Expense draft exists with type=supply
+    drafts = db.get_expense_drafts(TEST_USER_ID, status="all")
+    created = [d for d in drafts if 'autotest' in (d.get('description') or '')]
+    assert len(created) == 1
+    assert created[0]['expense_type'] == 'supply'
+    expense_id = created[0]['id']
+
+    # A linked supply draft was auto-created
+    supplies = db.get_supply_drafts(TEST_USER_ID, status="all")
+    linked = [s for s in supplies if s.get('linked_expense_draft_id') == expense_id]
+    assert len(linked) == 1
+
+    # The item was attached with correct qty/price
+    draft_with_items = db.get_supply_draft_with_items(linked[0]['id'])
+    items = draft_with_items.get('items', [])
+    assert len(items) == 1
+    assert float(items[0]['quantity']) == pytest.approx(12.0)
+    assert float(items[0]['price_per_unit']) == pytest.approx(2800.0)
+
+    # cleanup
+    db.delete_supply_draft(linked[0]['id'], telegram_user_id=TEST_USER_ID)
+    _cleanup(db, 'autotest')
