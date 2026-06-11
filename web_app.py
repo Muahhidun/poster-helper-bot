@@ -538,7 +538,7 @@ def index():
         return redirect('/cafe/shift-closing')
     elif role == 'cashier':
         return redirect('/cashier/shift-closing')
-    return redirect(url_for('list_expenses'))
+    return redirect(url_for('view_assistant'))
 
 
 @app.route('/aliases')

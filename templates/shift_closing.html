@@ -3,6 +3,11 @@
 {% block title %}Закрытие смены{% endblock %}
 
 {% block content %}
+<div class="shift-tabs">
+    <a href="{{ url_for('shift_closing') }}" class="active">Моя смена</a>
+    <a href="{{ url_for('cashier_shift_closing') }}">Кассир</a>
+    <a href="{{ url_for('cafe_shift_closing') }}">Кафе</a>
+</div>
 <div class="sc">
     <!-- Staff status badges (shown between header and cards) -->
     <div class="sc-staff-bar hidden" id="staff-status-bar">
