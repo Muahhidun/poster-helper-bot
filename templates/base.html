@@ -96,29 +96,6 @@
             color: var(--accent-primary);
         }
 
-        /* User actions area */
-        .nav-user {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-shrink: 0;
-        }
-        .nav-user .btn-logout {
-            padding: 6px 12px;
-            border-radius: var(--radius-md);
-            border: 1px solid var(--border-color);
-            background: var(--bg-primary);
-            color: var(--text-secondary);
-            font-size: 12.5px;
-            font-weight: 500;
-            text-decoration: none;
-            transition: all var(--transition-fast);
-        }
-        .nav-user .btn-logout:hover {
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-        }
-
         /* ---- Mobile bottom nav ---- */
         @media (max-width: 768px) {
             .nav-desktop-only { display: none !important; }
@@ -138,12 +115,13 @@
                 padding: 0;
                 justify-content: center;
             }
-            .app-nav .brand,
-            .app-nav .nav-user { display: none; }
+            .app-nav .brand { display: none; }
             .nav-pills-custom {
                 width: 100%;
                 justify-content: space-around;
-                padding: 6px 4px 4px;
+                padding: 8px 0 6px;
+                padding-left: env(safe-area-inset-left, 8px);
+                padding-right: env(safe-area-inset-right, 8px);
                 gap: 0;
             }
             .nav-pills-custom li {
@@ -153,20 +131,22 @@
             }
             .nav-pills-custom a {
                 flex-direction: column;
-                padding: 4px 2px 6px;
-                gap: 2px;
-                font-size: 10px;
-                border-radius: var(--radius-md);
+                padding: 6px 4px 8px;
+                gap: 3px;
+                font-size: 11px;
+                border-radius: var(--radius-lg);
                 width: 100%;
+                min-height: 48px;
                 align-items: center;
+                justify-content: center;
                 text-align: center;
                 line-height: 1.2;
             }
             .nav-pills-custom a .nav-icon {
-                width: 22px;
-                height: 22px;
+                width: 24px;
+                height: 24px;
             }
-            body { padding-bottom: 76px !important; }
+            body { padding-bottom: 82px !important; }
         }
 
         /* ---- Page layout ---- */
@@ -189,6 +169,12 @@
             </a>
             <ul class="nav-pills-custom">
                 <li>
+                    <a href="{{ url_for('view_assistant') }}" {% if request.endpoint == 'view_assistant' %}class="active"{% endif %}>
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+                        Ассистент
+                    </a>
+                </li>
+                <li>
                     <a href="{{ url_for('list_expenses') }}" {% if request.endpoint == 'list_expenses' %}class="active"{% endif %}>
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
                         Расходы
@@ -201,45 +187,24 @@
                     </a>
                 </li>
                 <li>
-                    <a href="{{ url_for('shift_closing') }}" {% if request.endpoint == 'shift_closing' %}class="active"{% endif %}>
+                    <a href="{{ url_for('shift_closing') }}" {% if request.endpoint in ['shift_closing', 'cashier_shift_closing', 'cafe_shift_closing'] %}class="active"{% endif %}>
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                         Смена
                     </a>
                 </li>
-                <li>
-                    <a href="{{ url_for('cashier_shift_closing') }}" {% if request.endpoint == 'cashier_shift_closing' %}class="active"{% endif %}>
-                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
-                        Кассир
+                <li class="nav-desktop-only dropdown">
+                    <a href="#" data-bs-toggle="dropdown" aria-expanded="false" {% if request.endpoint in ['daily_transactions_page', 'list_aliases'] %}class="active"{% endif %}>
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+                        Настройки
                     </a>
-                </li>
-                <li>
-                    <a href="{{ url_for('cafe_shift_closing') }}" {% if request.endpoint == 'cafe_shift_closing' %}class="active"{% endif %}>
-                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 010 8h-1M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8zM6 1v3M10 1v3M14 1v3"/></svg>
-                        Кафе
-                    </a>
-                </li>
-                <li>
-                    <a href="{{ url_for('view_assistant') }}" {% if request.endpoint == 'view_assistant' %}class="active"{% endif %}>
-                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                        Ассистент
-                    </a>
-                </li>
-                <li class="nav-desktop-only">
-                    <a href="{{ url_for('daily_transactions_page') }}" {% if request.endpoint == 'daily_transactions_page' %}class="active"{% endif %}>
-                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-                        Авто
-                    </a>
-                </li>
-                <li class="nav-desktop-only">
-                    <a href="{{ url_for('list_aliases') }}" {% if request.endpoint == 'list_aliases' %}class="active"{% endif %}>
-                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg>
-                        Алиасы
-                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="{{ url_for('daily_transactions_page') }}">Авто-транзакции</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('list_aliases') }}">Алиасы</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" href="/logout">Выйти</a></li>
+                    </ul>
                 </li>
             </ul>
-            <div class="nav-user nav-desktop-only">
-                <a href="/logout" class="btn-logout">Выйти</a>
-            </div>
         </div>
     </nav>
 
@@ -316,19 +281,42 @@
           }, false);
       }
 
-      // Pull-to-refresh
+      // Pull-to-refresh (works on iOS PWA and mobile browsers)
       (function() {
-          var startY = 0, refreshing = false;
-          document.addEventListener('touchstart', function(e) {
-              startY = window.scrollY === 0 ? e.touches[0].clientY : 0;
-          }, {passive: true});
-          document.addEventListener('touchmove', function(e) {
-              if (!startY || refreshing) return;
-              if (e.touches[0].clientY - startY > 150 && window.scrollY === 0) {
-                  refreshing = true;
-                  showToast('Обновление...', 'info', 1000);
-                  setTimeout(function() { window.location.reload(); }, 400);
+          var startY = 0, refreshing = false, indicator = null;
+          var THRESHOLD = 80;
+
+          function getOrCreateIndicator() {
+              if (!indicator) {
+                  indicator = document.createElement('div');
+                  indicator.style.cssText = 'position:fixed;top:0;left:0;right:0;height:3px;background:#2563eb;transform:scaleX(0);transform-origin:left;transition:transform 0.1s;z-index:9999;pointer-events:none';
+                  document.body.appendChild(indicator);
               }
+              return indicator;
+          }
+
+          document.addEventListener('touchstart', function(e) {
+              startY = (window.scrollY === 0 && !refreshing) ? e.touches[0].clientY : 0;
+          }, {passive: true});
+
+          document.addEventListener('touchmove', function(e) {
+              if (!startY || refreshing || window.scrollY > 0) { startY = 0; return; }
+              var dist = e.touches[0].clientY - startY;
+              if (dist > 10) {
+                  var progress = Math.min(dist / THRESHOLD, 1);
+                  getOrCreateIndicator().style.transform = 'scaleX(' + progress + ')';
+              }
+              if (dist >= THRESHOLD) {
+                  refreshing = true;
+                  getOrCreateIndicator().style.transform = 'scaleX(1)';
+                  showToast('Обновление...', 'info', 1500);
+                  setTimeout(function() { window.location.reload(); }, 300);
+              }
+          }, {passive: true});
+
+          document.addEventListener('touchend', function() {
+              startY = 0;
+              if (!refreshing && indicator) indicator.style.transform = 'scaleX(0)';
           }, {passive: true});
       })();
     </script>

@@ -140,7 +140,10 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
 .nav-pills-custom a.active{background:#eff4ff;color:#2563eb}
 .nav-pills-custom a .nav-icon{width:18px;height:18px;flex-shrink:0;opacity:.55}
 .nav-pills-custom a.active .nav-icon{opacity:1;color:#2563eb}
-@media(max-width:768px){.app-nav{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;padding-bottom:env(safe-area-inset-bottom,0);border-bottom:none;border-top:1px solid #edf0f2;box-shadow:0 -2px 12px rgba(0,0,0,0.06)}.app-nav .nav-inner{padding:0;justify-content:center}.app-nav .brand{display:none}.nav-pills-custom{width:100%;justify-content:space-around;padding:6px 4px 4px;gap:0}.nav-pills-custom li{flex:1;display:flex;justify-content:center}.nav-pills-custom a{flex-direction:column;padding:4px 2px 6px;gap:2px;font-size:10px;border-radius:8px;width:100%;align-items:center;text-align:center;line-height:1.2}.nav-pills-custom a .nav-icon{width:22px;height:22px}body{padding-bottom:76px !important}}
+.shift-tabs{display:flex;gap:4px;max-width:480px;margin:10px auto 0;padding:4px;background:#f1f3f5;border-radius:12px}
+.shift-tabs a{flex:1;text-align:center;padding:8px 4px;border-radius:8px;font-size:13.5px;font-weight:600;color:#5e6670;text-decoration:none;transition:all .15s}
+.shift-tabs a.active{background:#fff;color:#1a1d21;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+@media(max-width:768px){.app-nav{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;padding-bottom:env(safe-area-inset-bottom,0);border-bottom:none;border-top:1px solid #edf0f2;box-shadow:0 -2px 12px rgba(0,0,0,0.06)}.app-nav .nav-inner{padding:0;justify-content:center}.app-nav .brand{display:none}.nav-pills-custom{width:100%;justify-content:space-around;padding:8px 0 6px;padding-left:env(safe-area-inset-left,8px);padding-right:env(safe-area-inset-right,8px);gap:0}.nav-pills-custom li{flex:1;display:flex;justify-content:center}.nav-pills-custom a{flex-direction:column;padding:6px 4px 8px;gap:3px;font-size:11px;border-radius:12px;width:100%;min-height:48px;align-items:center;justify-content:center;text-align:center;line-height:1.2}.nav-pills-custom a .nav-icon{width:24px;height:24px}body{padding-bottom:82px !important}}
 {% endif %}
     </style>
 </head>
@@ -150,14 +153,18 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
     <div class="nav-inner">
         <a href="/" class="brand">PizzBurg</a>
         <ul class="nav-pills-custom">
+            <li><a href="{{ url_for('view_assistant') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>Ассистент</a></li>
             <li><a href="{{ url_for('list_expenses') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>Расходы</a></li>
             <li><a href="{{ url_for('list_supplies') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></svg>Поставки</a></li>
-            <li><a href="{{ url_for('shift_closing') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>Смена</a></li>
-            <li><a href="{{ url_for('cashier_shift_closing') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>Кассир</a></li>
-            <li><a href="{{ url_for('cafe_shift_closing') }}" class="active"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 010 8h-1M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8zM6 1v3M10 1v3M14 1v3"/></svg>Кафе</a></li>
+            <li><a href="{{ url_for('shift_closing') }}" class="active"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>Смена</a></li>
         </ul>
     </div>
 </nav>
+<div class="shift-tabs">
+    <a href="{{ url_for('shift_closing') }}">Моя смена</a>
+    <a href="{{ url_for('cashier_shift_closing') }}">Кассир</a>
+    <a href="{{ url_for('cafe_shift_closing') }}" class="active">Кафе</a>
+</div>
 {% endif %}
 <div class="sc">
     <div class="sc-title">{{ account_name }}</div>
