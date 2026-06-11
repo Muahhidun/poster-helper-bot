@@ -2050,6 +2050,34 @@ def _api_assistant_message_impl():
                 except Exception as pdf_err:
                     logger.error(f"PDF processing failed for {filename}: {pdf_err}")
                     bundle['media'].append({'mime_type': media_type, 'data': file_data})
+            elif file_ext in ('.xlsx', '.xls'):
+                # Excel: банковская выписка Kaspi — парсим напрямую, Gemini xlsx не читает
+                try:
+                    from expense_input import parse_kaspi_xlsx
+                    items = parse_kaspi_xlsx(save_path, telegram_user_id=user_id)
+                    if items:
+                        lines = []
+                        for it in items:
+                            line = f"- {it.amount:.0f}₸ | {it.description}"
+                            if it.supplier_name:
+                                line += f" | поставщик: {it.supplier_name}"
+                            if it.original_beneficiary and it.original_beneficiary != it.description:
+                                line += f" | бенефициар: {it.original_beneficiary}"
+                            line += f" | тип: {it.expense_type.value}"
+                            lines.append(line)
+                        bundle['text'] = (
+                            f"=== Расходы из Excel-выписки Kaspi «{orig_filename}» "
+                            f"(точные данные из банка, доверяй этим цифрам; источник оплаты — kaspi) ===\n"
+                            + "\n".join(lines)
+                        )
+                    else:
+                        bundle['text'] = (
+                            f"Excel-файл «{orig_filename}» загружен, но расходы в нём не распознаны "
+                            f"(возможно, формат отличается от выписки Kaspi)."
+                        )
+                except Exception as xlsx_err:
+                    logger.error(f"XLSX processing failed for {filename}: {xlsx_err}")
+                    bundle['text'] = f"Не удалось разобрать Excel-файл «{orig_filename}»: {xlsx_err}"
             else:
                 bundle['media'].append({'mime_type': media_type, 'data': file_data})
 

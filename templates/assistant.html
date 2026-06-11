@@ -1009,10 +1009,10 @@
         <div class="chat-input-panel">
             <div class="file-preview-bar" id="file-preview-bar"></div>
             <div class="chat-input-form-row">
-                <button type="button" class="btn-input-attachment" id="btn-attachment" title="Прикрепить фото (накладная, весы, чек)">
+                <button type="button" class="btn-input-attachment" id="btn-attachment" title="Прикрепить файл (накладная, чек, PDF, Excel-выписка)">
                     📎
                 </button>
-                <input type="file" id="chat-file-input" multiple accept="image/*,application/pdf" style="display: none;">
+                <input type="file" id="chat-file-input" multiple accept="image/*,application/pdf,.xlsx,.xls" style="display: none;">
 
                 <div class="chat-textarea-wrapper">
                     <textarea class="chat-textarea" id="chat-input" placeholder="Задайте вопрос или напишите расходы..." rows="1"></textarea>
@@ -1698,11 +1698,11 @@
             if (item.kind === 'file') {
                 const file = item.getAsFile();
                 if (file) {
-                    if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+                    if (isSupportedFile(file)) {
                         attachedFiles.push(file);
                         hasFiles = true;
                     } else {
-                        showToast('Поддерживаются только изображения и PDF файлы', 'warning');
+                        showToast('Поддерживаются изображения, PDF и Excel-выписки', 'warning');
                     }
                 }
             }
@@ -1720,11 +1720,21 @@
     // Send button click trigger
     btnSend.addEventListener('click', sendMessage);
 
+    function isExcelFile(file) {
+        return /\.(xlsx|xls)$/i.test(file.name) ||
+               file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+               file.type === 'application/vnd.ms-excel';
+    }
+
+    function isSupportedFile(file) {
+        return file.type.startsWith('image/') || file.type === 'application/pdf' || isExcelFile(file);
+    }
+
     function handleFilesSelection() {
         const files = Array.from(chatFileInput.files);
         files.forEach(file => {
-            if (!file.type.startsWith('image/') && file.type !== 'application/pdf') {
-                showToast('Поддерживаются только изображения и PDF файлы', 'warning');
+            if (!isSupportedFile(file)) {
+                showToast('Поддерживаются изображения, PDF и Excel-выписки', 'warning');
                 return;
             }
             attachedFiles.push(file);
@@ -1739,16 +1749,17 @@
             const item = document.createElement('div');
             item.className = 'file-preview-item';
             
-            if (file.type === 'application/pdf') {
+            if (file.type === 'application/pdf' || isExcelFile(file)) {
+                const isExcel = isExcelFile(file);
                 item.style.display = 'flex';
                 item.style.flexDirection = 'column';
                 item.style.alignItems = 'center';
                 item.style.justifyContent = 'center';
-                item.style.background = '#fef2f2';
-                item.style.border = '1px solid #fca5a5';
+                item.style.background = isExcel ? '#ecfdf5' : '#fef2f2';
+                item.style.border = isExcel ? '1px solid #6ee7b7' : '1px solid #fca5a5';
                 item.innerHTML = `
-                    <span style="font-size: 20px;">📄</span>
-                    <span style="font-size: 8px; color: #b91c1c; font-weight: 600; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; padding: 0 4px;" title="${file.name}">${file.name}</span>
+                    <span style="font-size: 20px;">${isExcel ? '📊' : '📄'}</span>
+                    <span style="font-size: 8px; color: ${isExcel ? '#047857' : '#b91c1c'}; font-weight: 600; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; padding: 0 4px;" title="${file.name}">${file.name}</span>
                     <button type="button" class="file-preview-remove" onclick="removeAttachedFile(${index})">&times;</button>
                 `;
                 filePreviewBar.appendChild(item);
@@ -1794,10 +1805,10 @@
         if (e.dataTransfer.files.length > 0) {
             const files = Array.from(e.dataTransfer.files);
             files.forEach(file => {
-                if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+                if (isSupportedFile(file)) {
                     attachedFiles.push(file);
                 } else {
-                    showToast('Поддерживаются только изображения и PDF файлы', 'warning');
+                    showToast('Поддерживаются изображения, PDF и Excel-выписки', 'warning');
                 }
             });
             renderFilePreviews();
@@ -1889,7 +1900,8 @@
             bubble.appendChild(mediaDiv);
 
             files.forEach(file => {
-                if (file.type === 'application/pdf') {
+                if (file.type === 'application/pdf' || isExcelFile(file)) {
+                    const isExcel = isExcelFile(file);
                     const pdfLink = document.createElement('a');
                     pdfLink.className = 'msg-bubble-pdf-link';
                     pdfLink.style.display = 'flex';
@@ -1900,11 +1912,11 @@
                     pdfLink.style.padding = '6px 12px';
                     pdfLink.style.borderRadius = '8px';
                     pdfLink.style.textDecoration = 'none';
-                    pdfLink.style.color = '#b91c1c';
+                    pdfLink.style.color = isExcel ? '#047857' : '#b91c1c';
                     pdfLink.style.fontSize = '12px';
                     pdfLink.style.fontWeight = '500';
                     pdfLink.style.margin = '4px 0';
-                    pdfLink.innerHTML = `<span>📄 PDF: ${file.name}</span>`;
+                    pdfLink.innerHTML = `<span>${isExcel ? '📊 Excel' : '📄 PDF'}: ${file.name}</span>`;
                     mediaDiv.appendChild(pdfLink);
                 } else {
                     const reader = new FileReader();
