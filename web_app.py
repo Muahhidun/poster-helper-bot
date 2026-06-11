@@ -2142,15 +2142,90 @@ def _api_assistant_message_impl():
                 except Exception as cat_err:
                     logger.warning(f"Category matching failed for '{category}': {cat_err}")
 
-                db.create_expense_draft(
+                expense_type = action.get('expense_type', 'transaction')
+                is_income = bool(action.get('is_income', False))
+
+                expense_draft_id = db.create_expense_draft(
                     telegram_user_id=user_id,
                     amount=amount,
                     description=action.get('description'),
-                    expense_type=action.get('expense_type', 'transaction'),
+                    expense_type=expense_type,
                     category=category,
                     source=action.get('source', 'cash'),
+                    is_income=is_income,
                     created_at=date_str
                 )
+
+                # Auto-create linked supply draft for supply-type expenses
+                # (matches the manual toggle behavior on the frontend)
+                if expense_type == 'supply' and expense_draft_id:
+                    try:
+                        description = action.get('description', '').strip()
+                        resolved_name, resolved_id = resolve_supplier_name_and_id(user_id, description)
+                        supply_draft_id = db.create_empty_supply_draft(
+                            telegram_user_id=user_id,
+                            supplier_name=resolved_name or description,
+                            invoice_date=date_str,
+                            total_sum=amount,
+                            linked_expense_draft_id=expense_draft_id,
+                            source=action.get('source', 'cash'),
+                            supplier_id=resolved_id
+                        )
+
+                        # If the model provided items (handwritten sheet with details),
+                        # add them to the supply draft
+                        items = action.get('items', [])
+                        if items and supply_draft_id:
+                            try:
+                                items = parser.reconcile_items(items)
+                            except Exception:
+                                pass
+
+                            from matchers import get_ingredient_matcher, get_product_matcher
+                            ing_matcher = get_ingredient_matcher(user_id)
+                            prod_matcher = get_product_matcher(user_id)
+                            accounts_list = db.get_accounts(user_id)
+                            account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
+
+                            for item in items:
+                                try:
+                                    name = item.get('name', 'Товар')
+                                    qty = float(item.get('qty', 1))
+                                    price = float(item.get('price', 0))
+
+                                    item_id = None
+                                    item_type = 'ingredient'
+                                    matched_name = None
+                                    account_name = None
+                                    account_id = None
+
+                                    match_result = ing_matcher.match(name)
+                                    if match_result:
+                                        item_id, matched_name, _, _, account_name = match_result
+                                    else:
+                                        prod_match = prod_matcher.match(name)
+                                        if prod_match:
+                                            item_id, matched_name, _, _, account_name = prod_match
+                                            item_type = 'product'
+
+                                    if account_name:
+                                        account_id = account_name_to_id.get(account_name)
+
+                                    db.add_supply_draft_item(
+                                        supply_draft_id=supply_draft_id,
+                                        item_name=name,
+                                        quantity=qty,
+                                        price_per_unit=price,
+                                        poster_ingredient_id=item_id,
+                                        poster_ingredient_name=matched_name,
+                                        poster_account_id=account_id,
+                                        poster_account_name=account_name,
+                                        item_type=item_type
+                                    )
+                                except Exception as item_err:
+                                    logger.error(f"Error adding supply item from create_expense: {item_err}")
+                    except Exception as supply_err:
+                        logger.warning(f"Failed to auto-create supply draft for expense {expense_draft_id}: {supply_err}")
                 
             # 2. Update Expense
             elif act_type == 'update_expense':
