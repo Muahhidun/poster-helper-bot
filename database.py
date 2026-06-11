@@ -851,6 +851,7 @@ class UserDatabase:
 
         # Run migration for assistant memory
         self._migrate_assistant_memory()
+        self._migrate_assistant_memory_versions()
 
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
@@ -5442,6 +5443,36 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"❌ Failed to create assistant_memory table: {e}")
 
+    def _migrate_assistant_memory_versions(self):
+        """Create assistant_memory_versions table for storing last N versions with rollback."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS assistant_memory_versions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        memory_text TEXT NOT NULL,
+                        saved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS assistant_memory_versions (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        memory_text TEXT NOT NULL,
+                        saved_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"❌ Failed to create assistant_memory_versions table: {e}")
+
     def get_assistant_memory(self, telegram_user_id: int) -> str:
         """Get assistant memory text for the user"""
         try:
@@ -5461,10 +5492,52 @@ class UserDatabase:
             return ""
 
     def save_assistant_memory(self, telegram_user_id: int, memory_text: str):
-        """Save assistant memory text for the user"""
+        """Save assistant memory text, archiving the previous version first (keeps last 10)."""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+
+            # Archive current version before overwriting
+            old_text = None
+            cursor.execute(f"SELECT memory_text FROM assistant_memory WHERE telegram_user_id = {ph}", (telegram_user_id,))
+            row = cursor.fetchone()
+            if row:
+                old_text = row['memory_text'] if isinstance(row, dict) else row[0]
+
+            if old_text and old_text.strip():
+                if DB_TYPE == "sqlite":
+                    cursor.execute("""
+                        INSERT INTO assistant_memory_versions (telegram_user_id, memory_text, saved_at)
+                        VALUES (?, ?, datetime('now'))
+                    """, (telegram_user_id, old_text))
+                else:
+                    cursor.execute("""
+                        INSERT INTO assistant_memory_versions (telegram_user_id, memory_text, saved_at)
+                        VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    """, (telegram_user_id, old_text))
+
+                # Keep only last 10 versions
+                if DB_TYPE == "sqlite":
+                    cursor.execute("""
+                        DELETE FROM assistant_memory_versions
+                        WHERE telegram_user_id = ? AND id NOT IN (
+                            SELECT id FROM assistant_memory_versions
+                            WHERE telegram_user_id = ?
+                            ORDER BY id DESC LIMIT 10
+                        )
+                    """, (telegram_user_id, telegram_user_id))
+                else:
+                    cursor.execute("""
+                        DELETE FROM assistant_memory_versions
+                        WHERE telegram_user_id = %s AND id NOT IN (
+                            SELECT id FROM assistant_memory_versions
+                            WHERE telegram_user_id = %s
+                            ORDER BY id DESC LIMIT 10
+                        )
+                    """, (telegram_user_id, telegram_user_id))
+
+            # Save new version
             if DB_TYPE == "sqlite":
                 cursor.execute("""
                     INSERT INTO assistant_memory (telegram_user_id, memory_text, updated_at)
@@ -5487,6 +5560,53 @@ class UserDatabase:
             return True
         except Exception as e:
             logger.error(f"Failed to save assistant memory: {e}")
+            return False
+
+    def get_assistant_memory_versions(self, telegram_user_id: int, limit: int = 10) -> list:
+        """Return recent memory versions (newest first)."""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, memory_text, saved_at FROM assistant_memory_versions
+                    WHERE telegram_user_id = ?
+                    ORDER BY id DESC LIMIT ?
+                """, (telegram_user_id, limit))
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, memory_text, saved_at FROM assistant_memory_versions
+                    WHERE telegram_user_id = %s
+                    ORDER BY id DESC LIMIT %s
+                """, (telegram_user_id, limit))
+            rows = cursor.fetchall()
+            conn.close()
+            if DB_TYPE == "sqlite":
+                return [{'id': r[0], 'memory_text': r[1], 'saved_at': r[2]} for r in rows]
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Error fetching memory versions: {e}")
+            return []
+
+    def rollback_assistant_memory(self, telegram_user_id: int, version_id: int) -> bool:
+        """Restore a specific memory version as the current memory."""
+        try:
+            conn = self._get_connection()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT memory_text FROM assistant_memory_versions WHERE id = {ph} AND telegram_user_id = {ph}",
+                (version_id, telegram_user_id)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if not row:
+                return False
+            old_text = row['memory_text'] if isinstance(row, dict) else row[0]
+            return self.save_assistant_memory(telegram_user_id, old_text)
+        except Exception as e:
+            logger.error(f"Error rolling back memory: {e}")
             return False
 
     def get_assistant_chat_history(self, telegram_user_id: int, limit: int = 50) -> list:
