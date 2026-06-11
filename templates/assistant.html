@@ -69,17 +69,11 @@
             border-radius: var(--radius-lg) !important;
         }
 
-        .chat-header {
-            padding: 10px 14px !important;
-        }
-
         .chat-input-panel {
             padding: 10px 12px !important;
+            padding-bottom: calc(10px + 70px + env(safe-area-inset-bottom, 0px)) !important;
         }
 
-        #btn-toggle-sidebar {
-            display: none !important;
-        }
     }
 
     /* Left Column: Chat Messenger */
@@ -95,65 +89,6 @@
         overflow: hidden;
         height: 100%;
         position: relative;
-    }
-
-    .chat-header {
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(229, 231, 235, 0.7);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background: #ffffff;
-    }
-
-    .chat-title-wrapper {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .chat-title-icon {
-        font-size: 24px;
-        background: #f0fdf4;
-        width: 40px;
-        height: 40px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        color: #0f7b6c;
-    }
-
-    .chat-title {
-        font-size: 16px;
-        font-weight: 600;
-        margin: 0;
-        color: var(--text-primary);
-    }
-
-    .chat-subtitle {
-        font-size: 12px;
-        color: var(--text-secondary);
-        margin: 0;
-    }
-
-    .btn-clear-chat {
-        background: transparent;
-        border: 1px solid #e5e7eb;
-        padding: 6px 12px;
-        border-radius: var(--radius-md);
-        font-size: 13px;
-        color: #ef4444;
-        font-weight: 500;
-        transition: var(--transition-fast);
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-
-    .btn-clear-chat:hover {
-        background: #fef2f2;
-        border-color: #fee2e2;
     }
 
     /* Message List Container */
@@ -505,63 +440,7 @@
         overflow: hidden;
     }
 
-    .drafts-sidebar-header {
-        padding: 16px 20px;
-        border-bottom: 1px solid rgba(229, 231, 235, 0.7);
-    }
-
-    .sidebar-title-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 12px;
-    }
-
-    .sidebar-title {
-        font-size: 16px;
-        font-weight: 600;
-        margin: 0;
-        color: var(--text-primary);
-    }
-
-    /* Date Nav Picker inside sidebar header */
-    .date-nav-wrapper {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-
-    .btn-date-nav {
-        background: #f3f4f6;
-        border: 1px solid #e5e7eb;
-        width: 28px;
-        height: 28px;
-        border-radius: var(--radius-sm);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        cursor: pointer;
-        color: var(--text-primary);
-        transition: var(--transition-fast);
-    }
-
-    .btn-date-nav:hover {
-        background: #e5e7eb;
-    }
-
-    .sidebar-date-picker {
-        border: 1px solid #e5e7eb;
-        background: white;
-        padding: 2px 8px;
-        font-size: 13px;
-        border-radius: var(--radius-sm);
-        font-weight: 500;
-        color: var(--text-primary);
-        outline: none;
-    }
-
-    /* Modern Tabs inside sidebar */
+    /* Tabs inside sidebar */
     .sidebar-tabs {
         display: flex;
         border-bottom: 1px solid #e5e7eb;
@@ -928,24 +807,6 @@
 <div class="assistant-container">
     <!-- Left Panel: Chat Messenger -->
     <div class="chat-panel" id="chat-panel">
-        <div class="chat-header">
-            <div class="chat-title-wrapper">
-                <div class="chat-title-icon">🤖</div>
-                <div>
-                    <h3 class="chat-title">Ассистент-Бухгалтер</h3>
-                    <p class="chat-subtitle">Gemini AI в вашей бухгалтерии</p>
-                </div>
-            </div>
-            <div style="display: flex; gap: 8px;">
-                <button type="button" class="btn-clear-chat" onclick="toggleSidebar()" id="btn-toggle-sidebar" style="color: var(--text-secondary); border-color: #e5e7eb; display: flex; align-items: center; gap: 4px;">
-                    📋 <span id="toggle-sidebar-text">Скрыть черновики</span>
-                </button>
-                <button type="button" class="btn-clear-chat" onclick="clearChat()">
-                    🧹 Очистить чат
-                </button>
-            </div>
-        </div>
-
         <div class="chat-messages" id="chat-messages">
             {% if not chat_history %}
                 <div class="chat-welcome-box fade-in-up">
@@ -1039,20 +900,6 @@
 
     <!-- Right Panel: Drafts Sidebar -->
     <div class="drafts-sidebar">
-        <div class="drafts-sidebar-header">
-            <div class="sidebar-title-row">
-                <h3 class="sidebar-title">Черновики дня</h3>
-                
-                <!-- Date Picker Navigation -->
-                <div class="date-nav-wrapper">
-                    <button type="button" class="btn-date-nav" onclick="navigateDay(-1)">&larr;</button>
-                    <input type="date" class="sidebar-date-picker" id="sidebar-date-picker" 
-                           value="{{ selected_date }}" data-today="{{ today }}">
-                    <button type="button" class="btn-date-nav" onclick="navigateDay(1)">&rarr;</button>
-                </div>
-            </div>
-        </div>
-
         <!-- Sidebar Tabs -->
         <div class="sidebar-tabs">
             <button class="sidebar-tab-btn active" onclick="switchTab('cash')" id="tab-btn-cash">Наличка</button>
@@ -1239,17 +1086,6 @@
         document.getElementById(`tab-section-${type}`).classList.add('active');
     }
 
-    // Date navigation
-    function navigateDay(offset) {
-        const picker = document.getElementById('sidebar-date-picker');
-        const date = new Date(picker.value);
-        date.setDate(date.getDate() + offset);
-        const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, '0');
-        const dd = String(date.getDate()).padStart(2, '0');
-        picker.value = `${yyyy}-${mm}-${dd}`;
-        window.location.href = `/assistant?date=${picker.value}`;
-    }
 
     // Image Zoom modal
     function zoomImage(src) {
@@ -1653,10 +1489,6 @@
         }
     });
 
-    // Date picker change redirect
-    document.getElementById('sidebar-date-picker').addEventListener('change', function() {
-        window.location.href = `/assistant?date=${this.value}`;
-    });
 
 
     // ==========================================
@@ -2127,17 +1959,6 @@
     }
 
 
-    // Toggle drafts sidebar visibility
-    function toggleSidebar() {
-        const container = document.querySelector('.assistant-container');
-        const isHidden = container.classList.toggle('hide-sidebar');
-        localStorage.setItem('assistant_hide_sidebar', isHidden ? 'true' : 'false');
-        
-        const toggleBtnText = document.getElementById('toggle-sidebar-text');
-        if (toggleBtnText) {
-            toggleBtnText.textContent = isHidden ? 'Показать черновики' : 'Скрыть черновики';
-        }
-    }
 
     // Save manually edited AI memory
     async function saveAIMemory() {
@@ -2163,16 +1984,6 @@
 
     // Initial setup on page load
     document.addEventListener('DOMContentLoaded', () => {
-        // Restore sidebar state
-        const hideSidebarSaved = localStorage.getItem('assistant_hide_sidebar') === 'true';
-        if (hideSidebarSaved) {
-            const container = document.querySelector('.assistant-container');
-            if (container) container.classList.add('hide-sidebar');
-            const toggleBtnText = document.getElementById('toggle-sidebar-text');
-            if (toggleBtnText) {
-                toggleBtnText.textContent = 'Показать черновики';
-            }
-        }
         updateSummary();
         setupTableListeners();
         scrollChatToBottom(true);

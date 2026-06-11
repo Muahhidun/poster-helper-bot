@@ -17,12 +17,6 @@
         </div>
     </div>
 
-    <!-- Подсказка: импорт перенесён в Ассистента -->
-    <div class="assistant-hint fade-in-up">
-        💬 Текст, фото накладных, PDF и Excel-выписки теперь обрабатывает
-        <a href="{{ url_for('view_assistant') }}">Ассистент</a> — просто отправьте файл или текст в чат.
-    </div>
-
     <form id="drafts-form" method="POST">
         <div class="drafts-actions">
             <button type="submit" formaction="{{ url_for('process_drafts') }}" class="btn btn-success action-btn-main">
