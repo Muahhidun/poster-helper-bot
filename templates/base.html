@@ -282,8 +282,11 @@
       }
 
       // Pull-to-refresh (works on iOS PWA and mobile browsers)
+      // Disabled inside scrollable containers like .chat-messages to avoid
+      // triggering a reload when the user scrolls up through chat history.
       (function() {
           var startY = 0, refreshing = false, indicator = null;
+          var insideScrollable = false;
           var THRESHOLD = 80;
 
           function getOrCreateIndicator() {
@@ -296,11 +299,12 @@
           }
 
           document.addEventListener('touchstart', function(e) {
-              startY = (window.scrollY === 0 && !refreshing) ? e.touches[0].clientY : 0;
+              insideScrollable = !!e.target.closest('.chat-messages');
+              startY = (window.scrollY === 0 && !refreshing && !insideScrollable) ? e.touches[0].clientY : 0;
           }, {passive: true});
 
           document.addEventListener('touchmove', function(e) {
-              if (!startY || refreshing || window.scrollY > 0) { startY = 0; return; }
+              if (!startY || refreshing || window.scrollY > 0 || insideScrollable) { startY = 0; return; }
               var dist = e.touches[0].clientY - startY;
               if (dist > 10) {
                   var progress = Math.min(dist / THRESHOLD, 1);
@@ -316,6 +320,7 @@
 
           document.addEventListener('touchend', function() {
               startY = 0;
+              insideScrollable = false;
               if (!refreshing && indicator) indicator.style.transform = 'scaleX(0)';
           }, {passive: true});
       })();

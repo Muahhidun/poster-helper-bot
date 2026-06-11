@@ -31,8 +31,16 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# OpenAI клиент
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+# OpenAI клиент — ленивая инициализация, чтобы импорт модуля
+# (например, ради parse_kaspi_xlsx) не требовал OPENAI_API_KEY
+_openai_client = None
+
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 
 class ExpenseType(Enum):
@@ -251,7 +259,7 @@ async def parse_handwritten_with_vision(image_path: str, source: str = "нали
 - Суммы должны быть точными числами без пробелов"""
 
     try:
-        response = openai_client.chat.completions.create(
+        response = _get_openai_client().chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
@@ -372,7 +380,7 @@ async def parse_cashier_sheet(ocr_text: str, source: str = "наличка") -> 
 - Если не можешь определить тип - ставь "транзакция"
 """
 
-    response = openai_client.chat.completions.create(
+    response = _get_openai_client().chat.completions.create(
         model="gpt-4o",
         messages=[
             {
