@@ -2217,21 +2217,21 @@ def _api_assistant_message_impl():
             elif act_type == 'update_expense':
                 draft_id = action.get('id')
                 if draft_id and not str(draft_id).startswith('placeholder'):
-                    amount_val = action.get('amount')
-                    amount = None
-                    if amount_val is not None:
+                    update_fields = {}
+                    if 'amount' in action and action['amount'] is not None:
                         try:
-                            amount = float(amount_val)
+                            update_fields['amount'] = float(action['amount'])
                         except (ValueError, TypeError):
-                            amount = None
-                            
-                    db.update_expense_draft(
-                        draft_id,
-                        amount=amount,
-                        description=action.get('description'),
-                        category=action.get('category'),
-                        source=action.get('source')
-                    )
+                            pass
+                    if 'description' in action and action['description'] is not None:
+                        update_fields['description'] = action['description']
+                    if 'category' in action and action['category'] is not None:
+                        update_fields['category'] = action['category']
+                    if 'source' in action and action['source'] is not None:
+                        update_fields['source'] = action['source']
+
+                    if update_fields:
+                        db.update_expense_draft(draft_id, **update_fields)
                 
             # 3. Add Supply Items
             elif act_type == 'add_supply_items':

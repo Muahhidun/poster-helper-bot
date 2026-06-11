@@ -6,7 +6,7 @@ from functools import wraps
 from typing import List, Literal, Optional
 
 from flask import jsonify, request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,14 @@ class SaveReconciliationRequest(BaseModel):
     closing_balance: Optional[float] = Field(default=None, ge=0, le=100_000_000)
     total_difference: Optional[float] = Field(default=None, ge=-100_000_000, le=100_000_000)
     notes: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode='before')
+    @classmethod
+    def map_account_type_to_source(cls, data):
+        # assistant.html sends account_type instead of source
+        if isinstance(data, dict) and 'source' not in data and 'account_type' in data:
+            data['source'] = data['account_type']
+        return data
 
     @field_validator("date")
     @classmethod
