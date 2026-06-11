@@ -131,28 +131,30 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
 @media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}.sc-day-value{font-size:32px}.sc-collection span:last-child{font-size:18px}}
 
 {% if user_role == 'owner' %}
-.modern-nav{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 24px;height:56px;display:flex;align-items:center;position:sticky;top:0;z-index:100}
-.modern-nav .nav-container{max-width:1600px;width:100%;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
-.modern-nav .brand{font-size:18px;font-weight:700;color:#1f2937;text-decoration:none;display:flex;align-items:center;gap:8px}
-.modern-nav .nav-links{display:flex;gap:4px;list-style:none;margin:0;padding:0}
-.modern-nav .nav-links a{padding:8px 16px;border-radius:6px;color:#4b5563;text-decoration:none;font-size:14px;font-weight:500;transition:all .15s}
-.modern-nav .nav-links a:hover{background:#f3f4f6;color:#1f2937}
-.modern-nav .nav-links a.active{background:#f0fdf4;color:#059669}
-@media(max-width:768px){.nav-desktop-only{display:none !important}.modern-nav{top:auto;bottom:0;height:64px;padding:0 4px;box-shadow:0 -4px 12px rgba(0,0,0,0.05);border-bottom:none;border-top:1px solid #e5e7eb}.modern-nav .nav-container{justify-content:center;height:100%}.modern-nav .brand{display:none}.modern-nav .nav-links{width:100%;justify-content:space-around;align-items:center;height:100%}.modern-nav .nav-links li{height:100%;display:flex;align-items:center;flex:1}.modern-nav .nav-links a{padding:4px;font-size:11px;width:100%;height:90%;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;border-radius:10px;white-space:pre-line}body{padding-bottom:75px !important}}
+.app-nav{background:#fff;border-bottom:1px solid #edf0f2;height:56px;position:sticky;top:0;z-index:100;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+.app-nav .nav-inner{max-width:1600px;width:100%;height:100%;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between}
+.app-nav .brand{font-size:17px;font-weight:700;color:#1a1d21;text-decoration:none;display:flex;align-items:center;gap:8px}
+.nav-pills-custom{display:flex;gap:2px;list-style:none;margin:0;padding:0}
+.nav-pills-custom a{padding:7px 14px;border-radius:8px;color:#5e6670;text-decoration:none;font-size:13.5px;font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.nav-pills-custom a:hover{background:#f8f9fa;color:#1a1d21}
+.nav-pills-custom a.active{background:#eff4ff;color:#2563eb}
+.nav-pills-custom a .nav-icon{width:18px;height:18px;flex-shrink:0;opacity:.55}
+.nav-pills-custom a.active .nav-icon{opacity:1;color:#2563eb}
+@media(max-width:768px){.app-nav{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;padding-bottom:env(safe-area-inset-bottom,0);border-bottom:none;border-top:1px solid #edf0f2;box-shadow:0 -2px 12px rgba(0,0,0,0.06)}.app-nav .nav-inner{padding:0;justify-content:center}.app-nav .brand{display:none}.nav-pills-custom{width:100%;justify-content:space-around;padding:6px 4px 4px;gap:0}.nav-pills-custom li{flex:1;display:flex;justify-content:center}.nav-pills-custom a{flex-direction:column;padding:4px 2px 6px;gap:2px;font-size:10px;border-radius:8px;width:100%;align-items:center;text-align:center;line-height:1.2}.nav-pills-custom a .nav-icon{width:22px;height:22px}body{padding-bottom:76px !important}}
 {% endif %}
     </style>
 </head>
 <body style="background:#f9fafb;">
 {% if user_role == 'owner' %}
-<nav class="modern-nav">
-    <div class="nav-container">
+<nav class="app-nav">
+    <div class="nav-inner">
         <a href="/" class="brand">PizzBurg</a>
-        <ul class="nav-links">
-            <li><a href="{{ url_for('list_expenses') }}">Расходы</a></li>
-            <li><a href="{{ url_for('list_supplies') }}">Поставки</a></li>
-            <li><a href="{{ url_for('shift_closing') }}">Смена</a></li>
-            <li><a href="{{ url_for('cashier_shift_closing') }}">Кассир</a></li>
-            <li><a href="{{ url_for('cafe_shift_closing') }}" class="active">Кафе</a></li>
+        <ul class="nav-pills-custom">
+            <li><a href="{{ url_for('list_expenses') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>Расходы</a></li>
+            <li><a href="{{ url_for('list_supplies') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></svg>Поставки</a></li>
+            <li><a href="{{ url_for('shift_closing') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>Смена</a></li>
+            <li><a href="{{ url_for('cashier_shift_closing') }}"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>Кассир</a></li>
+            <li><a href="{{ url_for('cafe_shift_closing') }}" class="active"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 010 8h-1M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8zM6 1v3M10 1v3M14 1v3"/></svg>Кафе</a></li>
         </ul>
     </div>
 </nav>
