@@ -2004,103 +2004,131 @@ def _api_assistant_message_impl():
     # Get files
     uploaded_files = request.files.getlist('files') or request.files.getlist('files[]')
     
-    # Save files to disk and prepare base64 for Gemini
     import os
-    import tempfile
     import uuid
-    
-    media_files = []
+
+    # Build per-file bundles so each document can be processed independently
+    file_bundles = []
     saved_media_paths = []
-    
+
     upload_dir = os.path.join(app.root_path, 'static', 'uploads', 'assistant')
     os.makedirs(upload_dir, exist_ok=True)
-    
-    pdf_text_blocks = []
 
     for file in uploaded_files:
         if not file or not file.filename:
             continue
 
-        filename = file.filename.lower()
+        orig_filename = file.filename
+        filename = orig_filename.lower()
         file_ext = os.path.splitext(filename)[1]
         unique_filename = f"{uuid.uuid4().hex}{file_ext}"
         save_path = os.path.join(upload_dir, unique_filename)
 
         try:
             file_data = file.read()
-            # Save to disk
             with open(save_path, 'wb') as f:
                 f.write(file_data)
 
-            relative_path = f"/static/uploads/assistant/{unique_filename}"
-            saved_media_paths.append(relative_path)
-
+            saved_media_paths.append(f"/static/uploads/assistant/{unique_filename}")
             media_type = file.mimetype or 'image/jpeg'
+            bundle = {'media': [], 'text': None, 'filename': orig_filename}
 
-            # PDF invoices: extract the text layer (exact numbers, no OCR errors).
-            # Scanned PDFs are converted to images; if conversion is unavailable
-            # the raw PDF still goes to Gemini, which reads PDFs natively.
             if media_type == 'application/pdf' or file_ext == '.pdf':
                 try:
                     from pdf_utils import prepare_pdf_for_assistant
                     pdf_info = prepare_pdf_for_assistant(file_data, filename)
                     if pdf_info['text']:
-                        pdf_text_blocks.append(
-                            f"=== Извлечённый текст из PDF «{file.filename}» (точный текстовый слой, доверяй этим цифрам) ===\n{pdf_info['text']}"
+                        bundle['text'] = (
+                            f"=== Извлечённый текст из PDF «{orig_filename}» "
+                            f"(точный текстовый слой, доверяй этим цифрам) ===\n{pdf_info['text']}"
                         )
                     if pdf_info['images']:
                         for img_bytes in pdf_info['images']:
-                            media_files.append({
-                                'mime_type': 'image/jpeg',
-                                'data': img_bytes
-                            })
-                        continue  # pages already attached as images
+                            bundle['media'].append({'mime_type': 'image/jpeg', 'data': img_bytes})
+                    else:
+                        bundle['media'].append({'mime_type': media_type, 'data': file_data})
                 except Exception as pdf_err:
                     logger.error(f"PDF processing failed for {filename}: {pdf_err}")
+                    bundle['media'].append({'mime_type': media_type, 'data': file_data})
+            else:
+                bundle['media'].append({'mime_type': media_type, 'data': file_data})
 
-            # Add to media_files for Gemini
-            media_files.append({
-                'mime_type': media_type,
-                'data': file_data
-            })
+            file_bundles.append(bundle)
         except Exception as e:
             logger.error(f"Error saving assistant upload file {filename}: {e}")
 
-    # Inject extracted PDF text into the model context only (keep chat history clean)
-    agent_message = message
-    if pdf_text_blocks:
-        agent_message = (message + "\n\n" if message else "") + "\n\n".join(pdf_text_blocks)
-
     # Save user message to database
     db.add_assistant_chat_message(user_id, 'user', message, saved_media_paths)
-    
-    # Fetch context: history, drafts, profiles, memory
+
+    # Fetch context
     chat_history = db.get_assistant_chat_history(user_id, limit=30)
     all_drafts = db.get_expense_drafts(user_id, status="all")
     active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
-    
+
     supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
     assistant_memory = db.get_assistant_memory(user_id)
-    
-    # Call Gemini Agent
+
     from parser_service import get_parser_service
     parser = get_parser_service()
-    
-    try:
-        agent_response = run_async(parser.call_gemini_assistant_agent(
-            user_message=agent_message,
-            chat_history=chat_history,
-            active_drafts=active_drafts,
-            supplier_profiles=supplier_profiles,
-            media_files=media_files,
-            assistant_memory=assistant_memory
-        ))
-    except Exception as e:
-        logger.error(f"Error in Gemini assistant execution: {e}")
+
+    if len(file_bundles) > 1:
+        # Multiple files: process each as a separate document to prevent cross-contamination
+        all_actions = []
+        all_responses = []
+        model_used = None
+        total = len(file_bundles)
+
+        for i, bundle in enumerate(file_bundles):
+            file_msg = f"[Документ {i+1}/{total}: {bundle['filename']}] {message}" if message else f"Обработай документ: {bundle['filename']}"
+            if bundle['text']:
+                file_msg = file_msg + "\n\n" + bundle['text']
+
+            try:
+                resp = run_async(parser.call_gemini_assistant_agent(
+                    user_message=file_msg,
+                    chat_history=chat_history,
+                    active_drafts=active_drafts,
+                    supplier_profiles=supplier_profiles,
+                    media_files=bundle['media'],
+                    assistant_memory=assistant_memory
+                ))
+                all_actions.extend(resp.get('actions', []))
+                resp_text = resp.get('response_text', '')
+                if resp_text:
+                    all_responses.append(f"📄 {bundle['filename']}: {resp_text}")
+                if not model_used:
+                    model_used = resp.get('_model_used')
+            except Exception as e:
+                logger.error(f"Error processing file {bundle['filename']}: {e}")
+                all_responses.append(f"⚠️ {bundle['filename']}: ошибка — {e}")
+
         agent_response = {
-            "response_text": f"Произошла ошибка при вызове ИИ-помощника: {str(e)}",
-            "actions": []
+            'response_text': "\n\n".join(all_responses) if all_responses else 'Не удалось обработать документы.',
+            'actions': all_actions,
+            '_model_used': model_used or 'gemini-3.5-flash'
         }
+    else:
+        # Single file or no files — standard single call
+        media_files = file_bundles[0]['media'] if file_bundles else []
+        agent_message = message
+        if file_bundles and file_bundles[0].get('text'):
+            agent_message = (message + "\n\n" if message else "") + file_bundles[0]['text']
+
+        try:
+            agent_response = run_async(parser.call_gemini_assistant_agent(
+                user_message=agent_message,
+                chat_history=chat_history,
+                active_drafts=active_drafts,
+                supplier_profiles=supplier_profiles,
+                media_files=media_files,
+                assistant_memory=assistant_memory
+            ))
+        except Exception as e:
+            logger.error(f"Error in Gemini assistant execution: {e}")
+            agent_response = {
+                "response_text": f"Произошла ошибка при вызове ИИ-помощника: {str(e)}",
+                "actions": []
+            }
         
     response_text = agent_response.get('response_text', 'Не удалось получить ответ.')
     actions = agent_response.get('actions', [])
@@ -2156,74 +2184,32 @@ def _api_assistant_message_impl():
                     created_at=date_str
                 )
 
-                # Auto-create linked supply draft for supply-type expenses
-                # (matches the manual toggle behavior on the frontend)
                 if expense_type == 'supply' and expense_draft_id:
                     try:
                         description = action.get('description', '').strip()
-                        resolved_name, resolved_id = resolve_supplier_name_and_id(user_id, description)
-                        supply_draft_id = db.create_empty_supply_draft(
-                            telegram_user_id=user_id,
-                            supplier_name=resolved_name or description,
-                            invoice_date=date_str,
-                            total_sum=amount,
-                            linked_expense_draft_id=expense_draft_id,
-                            source=action.get('source', 'cash'),
-                            supplier_id=resolved_id
-                        )
-
-                        # If the model provided items (handwritten sheet with details),
-                        # add them to the supply draft
+                        source_val = action.get('source', 'cash')
                         items = action.get('items', [])
-                        if items and supply_draft_id:
+
+                        if _check_duplicate_supply(db, user_id, description, amount, date_str):
+                            logger.warning(f"Skipping duplicate supply from create_expense for '{description}' {amount}")
+                        elif items:
                             try:
                                 items = parser.reconcile_items(items)
                             except Exception:
                                 pass
-
-                            from matchers import get_ingredient_matcher, get_product_matcher
-                            ing_matcher = get_ingredient_matcher(user_id)
-                            prod_matcher = get_product_matcher(user_id)
-                            accounts_list = db.get_accounts(user_id)
-                            account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
-
-                            for item in items:
-                                try:
-                                    name = item.get('name', 'Товар')
-                                    qty = float(item.get('qty', 1))
-                                    price = float(item.get('price', 0))
-
-                                    item_id = None
-                                    item_type = 'ingredient'
-                                    matched_name = None
-                                    account_name = None
-                                    account_id = None
-
-                                    match_result = ing_matcher.match(name)
-                                    if match_result:
-                                        item_id, matched_name, _, _, account_name = match_result
-                                    else:
-                                        prod_match = prod_matcher.match(name)
-                                        if prod_match:
-                                            item_id, matched_name, _, _, account_name = prod_match
-                                            item_type = 'product'
-
-                                    if account_name:
-                                        account_id = account_name_to_id.get(account_name)
-
-                                    db.add_supply_draft_item(
-                                        supply_draft_id=supply_draft_id,
-                                        item_name=name,
-                                        quantity=qty,
-                                        price_per_unit=price,
-                                        poster_ingredient_id=item_id,
-                                        poster_ingredient_name=matched_name,
-                                        poster_account_id=account_id,
-                                        poster_account_name=account_name,
-                                        item_type=item_type
-                                    )
-                                except Exception as item_err:
-                                    logger.error(f"Error adding supply item from create_expense: {item_err}")
+                            invoice = {'supplier': description, 'total_sum': amount, 'items': items}
+                            create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source_val)
+                        else:
+                            resolved_name, resolved_id = resolve_supplier_name_and_id(user_id, description)
+                            db.create_empty_supply_draft(
+                                telegram_user_id=user_id,
+                                supplier_name=resolved_name or description,
+                                invoice_date=date_str,
+                                total_sum=amount,
+                                linked_expense_draft_id=expense_draft_id,
+                                source=source_val,
+                                supplier_id=resolved_id
+                            )
                     except Exception as supply_err:
                         logger.warning(f"Failed to auto-create supply draft for expense {expense_draft_id}: {supply_err}")
                 
@@ -2252,73 +2238,16 @@ def _api_assistant_message_impl():
                 expense_draft_id = action.get('expense_draft_id')
                 items = action.get('items', [])
 
-                # Fix OCR math errors (qty*price != sum) before writing to DB
                 try:
                     items = parser.reconcile_items(items)
                 except Exception as rec_err:
                     logger.warning(f"Item reconciliation failed: {rec_err}")
 
-                # Find supply draft linked to this expense
                 supplies = db.get_supply_drafts(user_id, status="all")
                 supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
-                
+
                 if supply:
-                    supply_draft_id = supply['id']
-                    
-                    from matchers import get_ingredient_matcher, get_product_matcher
-                    ing_matcher = get_ingredient_matcher(user_id)
-                    prod_matcher = get_product_matcher(user_id)
-                    accounts_list = db.get_accounts(user_id)
-                    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
-                    
-                    for item in items:
-                        try:
-                            name = item.get('name', 'Товар')
-                            qty_val = item.get('qty')
-                            price_val = item.get('price')
-                            
-                            try:
-                                qty = float(qty_val) if qty_val is not None else 1.0
-                            except (ValueError, TypeError):
-                                qty = 1.0
-                                
-                            try:
-                                price = float(price_val) if price_val is not None else 0.0
-                            except (ValueError, TypeError):
-                                price = 0.0
-                                
-                            item_id = None
-                            item_type = 'ingredient'
-                            matched_name = None
-                            account_name = None
-                            account_id = None
-                            
-                            match_result = ing_matcher.match(name)
-                            if match_result:
-                                item_id, matched_name, _, _, account_name = match_result
-                                item_type = 'ingredient'
-                            else:
-                                prod_match_result = prod_matcher.match(name)
-                                if prod_match_result:
-                                    item_id, matched_name, _, _, account_name = prod_match_result
-                                    item_type = 'product'
-                                    
-                            if account_name:
-                                account_id = account_name_to_id.get(account_name)
-                                
-                            db.add_supply_draft_item(
-                                supply_draft_id=supply_draft_id,
-                                item_name=name,
-                                quantity=qty,
-                                price_per_unit=price,
-                                poster_ingredient_id=item_id,
-                                poster_ingredient_name=matched_name,
-                                poster_account_id=account_id,
-                                poster_account_name=account_name,
-                                item_type=item_type
-                            )
-                        except Exception as item_err:
-                            logger.error(f"Error processing supply item {item}: {item_err}")
+                    _add_items_to_supply_draft(db, user_id, supply['id'], items)
                 else:
                     logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
                     
@@ -2330,29 +2259,30 @@ def _api_assistant_message_impl():
                     total_sum = float(total_sum_val) if total_sum_val is not None else 0.0
                 except (ValueError, TypeError):
                     total_sum = 0.0
-                    
+
                 source = action.get('source', 'kaspi')
                 items = action.get('items', [])
 
-                # Fix OCR math errors (qty*price != sum) before writing to DB
                 try:
                     items = parser.reconcile_items(items)
                 except Exception as rec_err:
                     logger.warning(f"Item reconciliation failed: {rec_err}")
 
-                # The invoice total must equal the sum of reconciled rows
                 items_total = sum(
                     float(i.get('sum') or 0) for i in items
                     if i.get('sum') is not None
                 )
                 if items_total > 0 and abs(items_total - total_sum) > 1.0:
-                    logger.info(f"create_supply: correcting total_sum {total_sum} → {items_total} from reconciled items")
+                    logger.info(f"create_supply: correcting total_sum {total_sum} → {items_total}")
                     total_sum = round(items_total, 2)
 
-                # Resolve supplier name and ID using fuzzy logic
                 resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
-                
-                # Create expense draft of type 'supply'
+
+                if _check_duplicate_supply(db, user_id, resolved_supplier_name or supplier_name, total_sum, date_str):
+                    logger.warning(f"Skipping duplicate supply for '{supplier_name}' with sum {total_sum}")
+                    response_text += f"\n⚠️ Поставка «{resolved_supplier_name or supplier_name}» на {total_sum:,.0f}₸ уже существует — пропускаю дубликат."
+                    continue
+
                 expense_draft_id = db.create_expense_draft(
                     telegram_user_id=user_id,
                     amount=total_sum,
@@ -2362,73 +2292,9 @@ def _api_assistant_message_impl():
                     source=source,
                     created_at=date_str
                 )
-                
-                # Create empty supply draft
-                supply_draft_id = db.create_empty_supply_draft(
-                    telegram_user_id=user_id,
-                    supplier_name=resolved_supplier_name or supplier_name,
-                    invoice_date=date_str,
-                    total_sum=total_sum,
-                    linked_expense_draft_id=expense_draft_id,
-                    source=source,
-                    supplier_id=resolved_supplier_id
-                )
-                
-                if supply_draft_id:
-                    from matchers import get_ingredient_matcher, get_product_matcher
-                    ing_matcher = get_ingredient_matcher(user_id)
-                    prod_matcher = get_product_matcher(user_id)
-                    accounts_list = db.get_accounts(user_id)
-                    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts_list} if accounts_list else {}
-                    
-                    for item in items:
-                        try:
-                            name = item.get('name', 'Товар')
-                            qty_val = item.get('qty')
-                            price_val = item.get('price')
-                            
-                            try:
-                                qty = float(qty_val) if qty_val is not None else 1.0
-                            except (ValueError, TypeError):
-                                qty = 1.0
-                                
-                            try:
-                                price = float(price_val) if price_val is not None else 0.0
-                            except (ValueError, TypeError):
-                                price = 0.0
-                                
-                            item_id = None
-                            item_type = 'ingredient'
-                            matched_name = None
-                            account_name = None
-                            account_id = None
-                            
-                            match_result = ing_matcher.match(name)
-                            if match_result:
-                                item_id, matched_name, _, _, account_name = match_result
-                                item_type = 'ingredient'
-                            else:
-                                prod_match_result = prod_matcher.match(name)
-                                if prod_match_result:
-                                    item_id, matched_name, _, _, account_name = prod_match_result
-                                    item_type = 'product'
-                                    
-                            if account_name:
-                                account_id = account_name_to_id.get(account_name)
-                                
-                            db.add_supply_draft_item(
-                                supply_draft_id=supply_draft_id,
-                                item_name=name,
-                                quantity=qty,
-                                price_per_unit=price,
-                                poster_ingredient_id=item_id,
-                                poster_ingredient_name=matched_name,
-                                poster_account_id=account_id,
-                                poster_account_name=account_name,
-                                item_type=item_type
-                            )
-                        except Exception as item_err:
-                            logger.error(f"Error processing supply item {item}: {item_err}")
+
+                invoice = {'supplier': resolved_supplier_name or supplier_name, 'total_sum': total_sum, 'items': items}
+                create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source)
                             
             # 5. Find POS Receipt
             elif act_type == 'find_pos_receipt':
@@ -2717,6 +2583,29 @@ def api_assistant_save_memory():
     memory_text = data.get('memory_text', '').strip()
     db.save_assistant_memory(user_id, memory_text)
     return jsonify({"success": True, "message": "Память ассистента успешно обновлена"})
+
+
+@app.route('/api/assistant/memory/versions', methods=['GET'])
+def api_assistant_memory_versions():
+    """Return last 10 memory versions for rollback UI."""
+    db = get_database()
+    versions = db.get_assistant_memory_versions(g.user_id)
+    return jsonify({"success": True, "versions": versions})
+
+
+@app.route('/api/assistant/memory/rollback', methods=['POST'])
+def api_assistant_memory_rollback():
+    """Restore a specific memory version."""
+    db = get_database()
+    data = request.get_json() or {}
+    version_id = data.get('version_id')
+    if not version_id:
+        return jsonify({"success": False, "message": "version_id обязателен"}), 400
+    ok = db.rollback_assistant_memory(g.user_id, int(version_id))
+    if ok:
+        new_memory = db.get_assistant_memory(g.user_id)
+        return jsonify({"success": True, "memory_text": new_memory, "message": "Память восстановлена"})
+    return jsonify({"success": False, "message": "Версия не найдена"}), 404
 
 
 @app.route('/api/assistant/transcribe', methods=['POST'])
@@ -3593,15 +3482,133 @@ def api_create_expense(validated=None):
     return jsonify({'success': True, 'id': draft_id})
 
 
+def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
+    """Process items through the full pipeline (matching + packaging rules + price habits)
+    and add them to an existing supply draft. Shared by all supply-creation paths."""
+    from matchers import get_ingredient_matcher, get_product_matcher
+
+    ing_matcher = get_ingredient_matcher(user_id)
+    prod_matcher = get_product_matcher(user_id)
+    accounts = db.get_accounts(user_id)
+    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
+
+    rules = db.get_packaging_rules(user_id)
+    habits = db.get_ingredient_habits(user_id)
+    habits_dict = {(h['poster_ingredient_id'], h.get('account_name', '').strip()): h['default_price'] for h in habits if h['default_price']}
+
+    for item in items:
+        try:
+            name = item.get('name', 'Товар')
+            qty = float(item.get('qty') or 1)
+            price = float(item.get('price') or 0)
+            unit = item.get('unit', 'шт').strip().lower()
+
+            item_id = None
+            item_type = 'ingredient'
+            matched_name = None
+            account_name = None
+            account_id = None
+
+            match_result = ing_matcher.match(name)
+            if match_result:
+                item_id, matched_name, _, _, account_name = match_result
+                item_type = 'ingredient'
+            else:
+                prod_match_result = prod_matcher.match(name)
+                if prod_match_result:
+                    item_id, matched_name, _, _, account_name = prod_match_result
+                    item_type = 'product'
+
+            if account_name:
+                account_id = account_name_to_id.get(account_name)
+
+            parsed_quantity = qty
+            parsed_unit = item.get('unit', 'шт')
+            parsed_price_per_unit = price
+            target_unit = parsed_unit
+
+            if item_id and item_type == 'ingredient':
+                matching_rule = None
+                item_acc_name = (account_name or '').strip()
+
+                if item_acc_name:
+                    matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
+                                         and r['original_unit'].strip().lower() == unit
+                                         and r.get('account_name', '').strip() == item_acc_name), None)
+
+                if not matching_rule:
+                    matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
+                                         and r['original_unit'].strip().lower() == unit
+                                         and not r.get('account_name', '').strip()), None)
+
+                if matching_rule:
+                    coef = float(matching_rule['coefficient'])
+                    target_unit = matching_rule.get('target_unit', 'кг')
+                    qty = parsed_quantity * coef
+                    price = parsed_price_per_unit / coef
+                    logger.info(f"⚖️ Applied packaging rule for ingredient {item_id} (account: '{matching_rule.get('account_name', '')}'): {parsed_quantity} {parsed_unit} -> {qty} {target_unit} (coef={coef})")
+                else:
+                    default_price = None
+                    if item_acc_name:
+                        default_price = habits_dict.get((item_id, item_acc_name))
+                    if default_price is None:
+                        default_price = habits_dict.get((item_id, ''))
+
+                    if default_price is not None:
+                        default_price = float(default_price)
+                        total_sum_item = parsed_quantity * parsed_price_per_unit
+                        if parsed_price_per_unit > default_price * 1.5 and abs(total_sum_item / default_price - round(total_sum_item / default_price)) < 0.05:
+                            calculated_qty = round(total_sum_item / default_price)
+                            if calculated_qty > 0:
+                                qty = float(calculated_qty)
+                                price = default_price
+                                target_unit = 'кг'
+                                logger.info(f"⚖️ Habit match for ingredient {item_id} (account: '{item_acc_name}'): qty {qty} based on total {total_sum_item} and typical price {default_price}")
+
+            db.add_supply_draft_item(
+                supply_draft_id=supply_draft_id,
+                item_name=name,
+                quantity=qty,
+                unit=target_unit,
+                price_per_unit=price,
+                poster_ingredient_id=item_id,
+                poster_ingredient_name=matched_name,
+                poster_account_id=account_id,
+                poster_account_name=account_name,
+                item_type=item_type,
+                parsed_quantity=parsed_quantity,
+                parsed_unit=parsed_unit,
+                parsed_price_per_unit=parsed_price_per_unit
+            )
+        except Exception as item_err:
+            logger.error(f"Error processing supply item {item}: {item_err}")
+
+
+def _check_duplicate_supply(db, user_id, supplier_name, total_sum, date_str):
+    """Check if a supply draft with the same supplier/sum/date already exists."""
+    from matchers import normalize_supplier_text
+    existing = db.get_supply_drafts(user_id, status="pending")
+    inv_date = date_str[:10] if date_str else _kz_now().strftime("%Y-%m-%d")
+    inv_supp = normalize_supplier_text(supplier_name or '')
+    for d in existing:
+        if d.get('invoice_date', '') != inv_date:
+            continue
+        if abs(d.get('total_sum', 0.0) - total_sum) >= 5.0:
+            continue
+        d_supp = normalize_supplier_text(d.get('supplier_name', ''))
+        if d_supp == inv_supp or (d_supp and inv_supp and (d_supp in inv_supp or inv_supp in d_supp)):
+            return True
+    return False
+
+
 def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expense_draft_id, source):
     from datetime import datetime
-    from matchers import get_ingredient_matcher, get_product_matcher
-    
+
     supplier_name = invoice.get('supplier') or 'Неизвестный поставщик'
     supplier_name, supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
     total_sum = invoice.get('total_sum') or 0.0
     invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
-    
+
     supply_draft_id = db.create_empty_supply_draft(
         telegram_user_id=user_id,
         supplier_name=supplier_name,
@@ -3611,112 +3618,11 @@ def create_supply_draft_from_invoice(db, user_id, invoice, date_str, linked_expe
         source=source,
         supplier_id=supplier_id
     )
-    
+
     if not supply_draft_id:
         return None
-        
-    ing_matcher = get_ingredient_matcher(user_id)
-    prod_matcher = get_product_matcher(user_id)
-    accounts = db.get_accounts(user_id)
-    account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
-    
-    # Load user's packaging rules and habits
-    rules = db.get_packaging_rules(user_id)
-    rules_dict = {(r['poster_ingredient_id'], r['original_unit'].strip().lower()): r['coefficient'] for r in rules}
-    
-    habits = db.get_ingredient_habits(user_id)
-    habits_dict = {(h['poster_ingredient_id'], h.get('account_name', '').strip()): h['default_price'] for h in habits if h['default_price']}
-    
-    for item in invoice.get('items', []):
-        name = item.get('name', 'Товар')
-        qty = float(item.get('qty') or 1)
-        price = float(item.get('price') or 0)
-        unit = item.get('unit', 'шт').strip().lower()
-        
-        item_id = None
-        item_type = 'ingredient'
-        matched_name = None
-        account_name = None
-        account_id = None
-        
-        match_result = ing_matcher.match(name)
-        if match_result:
-            item_id, matched_name, _, _, account_name = match_result
-            item_type = 'ingredient'
-        else:
-            prod_match_result = prod_matcher.match(name)
-            if prod_match_result:
-                item_id, matched_name, _, _, account_name = prod_match_result
-                item_type = 'product'
-                
-        if account_name:
-            account_id = account_name_to_id.get(account_name)
-            
-        # Keep original parsed values
-        parsed_quantity = qty
-        parsed_unit = item.get('unit', 'шт')
-        parsed_price_per_unit = price
-        
-        # Default target unit
-        target_unit = parsed_unit
-        
-        # Apply packaging rules and habits
-        if item_id and item_type == 'ingredient':
-            matching_rule = None
-            item_acc_name = (account_name or '').strip()
-            
-            # 1. Match packaging rule by exact account_name
-            if item_acc_name:
-                matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id 
-                                     and r['original_unit'].strip().lower() == unit 
-                                     and r.get('account_name', '').strip() == item_acc_name), None)
-            
-            # 2. Fallback to packaging rules with empty account_name (shared/legacy)
-            if not matching_rule:
-                matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id 
-                                     and r['original_unit'].strip().lower() == unit 
-                                     and not r.get('account_name', '').strip()), None)
-            
-            if matching_rule:
-                coef = float(matching_rule['coefficient'])
-                target_unit = matching_rule.get('target_unit', 'кг')
-                qty = parsed_quantity * coef
-                price = parsed_price_per_unit / coef
-                logger.info(f"⚖️ Applied packaging rule for ingredient {item_id} (account: '{matching_rule.get('account_name', '')}'): {parsed_quantity} {parsed_unit} -> {qty} {target_unit} (coef={coef})")
-            else:
-                default_price = None
-                if item_acc_name:
-                    default_price = habits_dict.get((item_id, item_acc_name))
-                if default_price is None:
-                    default_price = habits_dict.get((item_id, ''))
-                    
-                if default_price is not None:
-                    default_price = float(default_price)
-                    total_sum_item = parsed_quantity * parsed_price_per_unit
-                    if parsed_price_per_unit > default_price * 1.5 and abs(total_sum_item / default_price - round(total_sum_item / default_price)) < 0.05:
-                        calculated_qty = round(total_sum_item / default_price)
-                        if calculated_qty > 0:
-                            qty = float(calculated_qty)
-                            price = default_price
-                            target_unit = 'кг'
-                            logger.info(f"⚖️ Habit match for ingredient {item_id} (account: '{item_acc_name}'): qty {qty} based on total {total_sum_item} and typical price {default_price}")
-            
-        db.add_supply_draft_item(
-            supply_draft_id=supply_draft_id,
-            item_name=name,
-            quantity=qty,
-            unit=target_unit,
-            price_per_unit=price,
-            poster_ingredient_id=item_id,
-            poster_ingredient_name=matched_name,
-            poster_account_id=account_id,
-            poster_account_name=account_name,
-            item_type=item_type,
-            parsed_quantity=parsed_quantity,
-            parsed_unit=parsed_unit,
-            parsed_price_per_unit=parsed_price_per_unit
-        )
-        
+
+    _add_items_to_supply_draft(db, user_id, supply_draft_id, invoice.get('items', []))
     return supply_draft_id
 
 
