@@ -6481,7 +6481,11 @@ def api_shift_closing_poster_data():
             date_str = target_date.strftime('%Y-%m-%d')
 
             # Find Cafe account
-            cafe_account = next((a for a in accounts if not a.get('is_primary')), None)
+            cafe_account = next(
+                (a for a in accounts if not a.get('is_primary') and
+                 any(kw in (a.get('account_name') or '').lower() for kw in ('cafe', 'кафе'))),
+                next((a for a in accounts if not a.get('is_primary')), None)
+            )
             if cafe_account:
                 cafe_closing = db.get_shift_closing(
                     g.user_id, date_str,
@@ -6925,7 +6929,11 @@ def resolve_cafe_info():
     elif role == 'owner':
         telegram_user_id = session.get('telegram_user_id')
         accounts = db.get_accounts(telegram_user_id)
-        cafe_account = next((a for a in accounts if not a.get('is_primary')), None)
+        cafe_account = next(
+            (a for a in accounts if not a.get('is_primary') and
+             any(kw in (a.get('account_name') or '').lower() for kw in ('cafe', 'кафе'))),
+            next((a for a in accounts if not a.get('is_primary')), None)
+        )
         if cafe_account:
             return {
                 'telegram_user_id': telegram_user_id,
@@ -7708,7 +7716,7 @@ def api_cafe_transfers():
             )
             results = []
             try:
-                wedrink_sales = float(data.get('wedrink_sales', 0))
+                wedrink_sales = float(closing.get('wedrink_sales', 0))
                 # If there are WeDrink sales, dynamically find category ID and add expense to tasks
                 if wedrink_sales > 0:
                     try:

@@ -640,6 +640,7 @@ export interface CafePosterData {
   transactions_count: number
   prev_shift_left: number | null
   main_kaspi_cafe: number | null
+  wedrink_sales?: number
 }
 
 export interface CafeShiftInput {
@@ -696,6 +697,7 @@ export interface CafeShiftData {
   collection: number
   cashless_diff: number
   transfers_created?: boolean | number
+  wedrink_sales?: number
 }
 
 export interface CafeShiftHistoryResponse {

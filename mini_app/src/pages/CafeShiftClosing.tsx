@@ -347,6 +347,7 @@ export const CafeShiftClosing: React.FC = () => {
         shift_left: calculations.shift_left,
         collection: calculations.collection,
         cashless_diff: calculations.cashless_diff,
+        wedrink_sales: posterData.wedrink_sales ? posterData.wedrink_sales / 100 : 0,
       }).then(() => {
         if (!historyDates.includes(selectedDate)) {
           setHistoryDates(prev => [selectedDate, ...prev].sort().reverse())

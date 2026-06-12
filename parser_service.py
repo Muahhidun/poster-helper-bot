@@ -1367,10 +1367,12 @@ class ParserService:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
         headers = {"Content-Type": "application/json"}
 
+        logger.info(f"🤖 [Gemini Assistant] Sending request to model {GEMINI_MODEL}...")
         try:
             timeout = aiohttp.ClientTimeout(total=120)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, json=payload, headers=headers) as resp:
+                    logger.info(f"🤖 [Gemini Assistant] Response status received: {resp.status}")
                     if resp.status == 200:
                         result = await resp.json()
                         response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -1426,7 +1428,8 @@ class ParserService:
             response = await client.chat.completions.create(
                 model="gpt-5.4-mini",
                 messages=messages,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                timeout=30.0
             )
             response_text = response.choices[0].message.content.strip()
             json_text = self._extract_json(response_text)
