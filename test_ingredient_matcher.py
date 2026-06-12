@@ -43,12 +43,14 @@ def test_ingredient_matching():
         result = matcher.match(test_input)
 
         if result:
-            ing_id, name, unit, score = result
+            ing_id, name, unit, score, *rest = result
+            account_name = rest[0] if rest else 'Unknown'
             print(f"   ✅ Match found!")
             print(f"      ID: {ing_id}")
             print(f"      Name: {name}")
             print(f"      Unit: {unit}")
             print(f"      Score: {score}")
+            print(f"      Account: {account_name}")
         else:
             print(f"   ❌ No match found")
 

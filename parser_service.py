@@ -1397,8 +1397,8 @@ class ParserService:
         prompt_context: str,
         media_files: Optional[List[Dict]] = None
     ) -> Dict:
-        """Fallback assistant query using OpenAI GPT-4o"""
-        logger.info("⚠️ Falling back to OpenAI GPT-4o for assistant agent...")
+        """Fallback assistant query using OpenAI GPT-5.4-mini"""
+        logger.info("⚠️ Falling back to OpenAI GPT-5.4-mini for assistant agent...")
         try:
             messages = [
                 {"role": "system", "content": ASSISTANT_SYSTEM_PROMPT},
@@ -1424,7 +1424,7 @@ class ParserService:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=OPENAI_API_KEY)
             response = await client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5.4-mini",
                 messages=messages,
                 response_format={"type": "json_object"}
             )
@@ -1432,14 +1432,14 @@ class ParserService:
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
 
-            logger.info("✅ Fallback to OpenAI GPT-4o successful.")
+            logger.info("✅ Fallback to OpenAI GPT-5.4-mini successful.")
             if isinstance(parsed, dict):
-                parsed.setdefault('_model_used', 'gpt-4o')
+                parsed.setdefault('_model_used', 'gpt-5.4-mini')
             return parsed
         except Exception as e:
             logger.error(f"Failed in OpenAI fallback assistant call: {e}", exc_info=True)
             return {
-                "response_text": f"Произошла ошибка при обращении к ИИ (Gemini недоступен, резервный OpenAI GPT-4o также вернул ошибку: {str(e)})",
+                "response_text": f"Произошла ошибка при обращении к ИИ (Gemini недоступен, резервный OpenAI GPT-5.4-mini также вернул ошибку: {str(e)})",
                 "actions": []
             }
 
