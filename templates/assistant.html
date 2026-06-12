@@ -1020,9 +1020,21 @@
                         <textarea id="ai-memory-textarea" class="form-control" style="width: 100%; min-height: 250px; font-family: monospace; font-size: 12px; line-height: 1.5; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; resize: vertical; background: #ffffff;" placeholder="# Правила и нюансы поставок&#10;- Наггетсы: всегда указывать фактический вес в кг...">{{ assistant_memory or '' }}</textarea>
                     </div>
                     <div style="margin-top: 12px; display: flex; gap: 8px;">
-                        <button type="button" onclick="saveAIMemory()" class="btn-sidebar-action primary" style="width: 100%; text-align: center; justify-content: center; height: 36px; font-weight: 600;">
+                        <button type="button" onclick="saveAIMemory()" class="btn-sidebar-action primary" style="flex: 1; text-align: center; justify-content: center; height: 36px; font-weight: 600;">
                             💾 Сохранить память
                         </button>
+                        <button type="button" onclick="toggleMemoryVersions()" class="btn-sidebar-action outline" style="flex-shrink: 0; text-align: center; justify-content: center; height: 36px; font-weight: 600; min-width: 140px;">
+                            📋 История версий
+                        </button>
+                    </div>
+                    <!-- Memory versions panel (hidden by default) -->
+                    <div id="memory-versions-panel" style="display: none; margin-top: 12px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; max-height: 300px; overflow-y: auto;">
+                        <div style="padding: 8px 12px; background: #f3f4f6; font-weight: 600; font-size: 12px; color: #374151; border-bottom: 1px solid #e5e7eb;">
+                            Сохранённые версии (последние 10)
+                        </div>
+                        <div id="memory-versions-list" style="padding: 4px;">
+                            <div style="padding: 12px; text-align: center; color: #9ca3af; font-size: 12px;">Загрузка...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1978,6 +1990,70 @@
             }
         } catch (e) {
             showToast('Ошибка сети при сохранении памяти', 'danger');
+        }
+    }
+
+    // Toggle memory versions panel
+    async function toggleMemoryVersions() {
+        const panel = document.getElementById('memory-versions-panel');
+        if (panel.style.display === 'none') {
+            panel.style.display = 'block';
+            await loadMemoryVersions();
+        } else {
+            panel.style.display = 'none';
+        }
+    }
+
+    // Load memory versions from API
+    async function loadMemoryVersions() {
+        const list = document.getElementById('memory-versions-list');
+        list.innerHTML = '<div style="padding: 12px; text-align: center; color: #9ca3af; font-size: 12px;">Загрузка...</div>';
+        try {
+            const response = await fetch('/api/assistant/memory/versions');
+            const data = await response.json();
+            if (!data.success || !data.versions || data.versions.length === 0) {
+                list.innerHTML = '<div style="padding: 12px; text-align: center; color: #9ca3af; font-size: 12px;">Нет сохранённых версий</div>';
+                return;
+            }
+            let html = '';
+            data.versions.forEach((v, i) => {
+                const preview = (v.memory_text || '').replace(/[#*_`]/g, '').substring(0, 120).trim();
+                const charCount = (v.memory_text || '').length;
+                const savedAt = v.saved_at || '';
+                html += `<div style="padding: 8px 10px; border-bottom: 1px solid #f3f4f6; cursor: pointer; transition: background 0.15s;" onmouseenter="this.style.background='#f0fdf4'" onmouseleave="this.style.background='transparent'">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <span style="font-size: 11px; color: #6b7280;">${savedAt} · ${charCount} симв.</span>
+                        <button onclick="rollbackMemory(${v.id})" style="font-size: 11px; padding: 2px 10px; border: 1px solid #10b981; color: #10b981; background: transparent; border-radius: 4px; cursor: pointer; font-weight: 600;">Восстановить</button>
+                    </div>
+                    <div style="font-size: 11px; color: #374151; line-height: 1.4; word-break: break-word;">${preview}${charCount > 120 ? '...' : ''}</div>
+                </div>`;
+            });
+            list.innerHTML = html;
+        } catch (e) {
+            list.innerHTML = '<div style="padding: 12px; text-align: center; color: #ef4444; font-size: 12px;">Ошибка загрузки</div>';
+        }
+    }
+
+    // Rollback memory to a specific version
+    async function rollbackMemory(versionId) {
+        if (!confirm('Восстановить эту версию памяти? Текущая версия будет сохранена в историю.')) return;
+        try {
+            const response = await fetch('/api/assistant/memory/rollback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version_id: versionId })
+            });
+            const data = await response.json();
+            if (response.ok && data.success) {
+                const textarea = document.getElementById('ai-memory-textarea');
+                if (textarea) textarea.value = data.memory_text;
+                showToast('Память восстановлена из версии', 'success');
+                document.getElementById('memory-versions-panel').style.display = 'none';
+            } else {
+                showToast(data.message || 'Не удалось восстановить', 'danger');
+            }
+        } catch (e) {
+            showToast('Ошибка сети при откате', 'danger');
         }
     }
 

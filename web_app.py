@@ -2170,6 +2170,7 @@ def _api_assistant_message_impl():
         'find_pos_receipt': 'поиск чека в Poster',
         'delete_pos_receipt': 'удаление чека из Poster',
         'update_memory': 'обновление памяти',
+        'add_to_memory': 'добавление правила в память',
     }
     action_errors = []
 
@@ -2527,17 +2528,28 @@ def _api_assistant_message_impl():
                 finally:
                     run_async(client.close())
                             
-            # 7. Update Assistant Memory
+            # 7. Add to Assistant Memory (append-only, AI cannot delete rules)
+            elif act_type == 'add_to_memory':
+                rule_text = action.get('rule_text', '').strip()
+                if rule_text:
+                    current_memory = db.get_assistant_memory(user_id) or ''
+                    if rule_text in current_memory:
+                        logger.info(f"ℹ️ Rule already exists in memory, skipping: {rule_text[:80]}...")
+                    else:
+                        updated_memory = current_memory.rstrip() + '\n' + rule_text + '\n' if current_memory.strip() else rule_text + '\n'
+                        db.save_assistant_memory(user_id, updated_memory)
+                        logger.info(f"✅ Added rule to memory: {rule_text[:80]}...")
+
+            # Legacy: full memory replacement (kept for backwards compatibility but protected)
             elif act_type == 'update_memory':
                 mem_text = action.get('memory_text')
                 if mem_text is not None:
                     current_memory = db.get_assistant_memory(user_id)
-                    new_len = len(mem_text.strip())
                     old_len = len(current_memory.strip()) if current_memory else 0
+                    new_len = len(mem_text.strip())
                     if old_len > 50 and new_len < old_len * 0.5:
                         logger.warning(
-                            f"⚠️ Blocked memory update: new text ({new_len} chars) is less than 50% of current ({old_len} chars). "
-                            f"This looks like accidental memory loss. Skipping."
+                            f"⚠️ Blocked memory update: new text ({new_len} chars) is less than 50% of current ({old_len} chars). Skipping."
                         )
                     else:
                         db.save_assistant_memory(user_id, mem_text)
