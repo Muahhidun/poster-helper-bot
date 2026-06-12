@@ -2531,7 +2531,16 @@ def _api_assistant_message_impl():
             elif act_type == 'update_memory':
                 mem_text = action.get('memory_text')
                 if mem_text is not None:
-                    db.save_assistant_memory(user_id, mem_text)
+                    current_memory = db.get_assistant_memory(user_id)
+                    new_len = len(mem_text.strip())
+                    old_len = len(current_memory.strip()) if current_memory else 0
+                    if old_len > 50 and new_len < old_len * 0.5:
+                        logger.warning(
+                            f"⚠️ Blocked memory update: new text ({new_len} chars) is less than 50% of current ({old_len} chars). "
+                            f"This looks like accidental memory loss. Skipping."
+                        )
+                    else:
+                        db.save_assistant_memory(user_id, mem_text)
                             
         except Exception as action_err:
             logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
