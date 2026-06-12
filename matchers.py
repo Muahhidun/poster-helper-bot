@@ -453,9 +453,11 @@ class IngredientMatcher:
                              If None, uses global data directory (legacy mode)
         """
         self.telegram_user_id = telegram_user_id
-        self.ingredients: Dict[int, Dict] = {}  # ingredient_id -> ingredient_info
+        self.ingredients: Dict[int, Dict] = {}  # ingredient_id -> ingredient_info (may be overwritten by same ID from different account)
         self.names: Dict[str, int] = {}  # name -> ingredient_id
         self.aliases: Dict[str, int] = {}  # alias -> ingredient_id
+        self._name_to_info: Dict[str, Dict] = {}  # name.lower() -> full ingredient info (never has ID collision)
+        self._id_entries: Dict[int, list] = {}  # ingredient_id -> [info1, info2, ...] for all accounts
 
         # Determine CSV paths based on user (with fallback to global)
         if telegram_user_id:
@@ -494,16 +496,19 @@ class IngredientMatcher:
                 type_map = {'1': 'ingredient', '2': 'semi_product'}
                 item_type = type_map.get(poster_type, 'ingredient')
 
-                self.ingredients[ingredient_id] = {
+                info = {
                     'id': ingredient_id,
                     'name': name,
                     'unit': unit,
                     'account_name': account_name,
                     'type': item_type
                 }
+                self.ingredients[ingredient_id] = info
 
-                # Add name for matching
+                # Add name for matching (name is unique per account, safe from ID collision)
                 self.names[name.lower()] = ingredient_id
+                self._name_to_info[name.lower()] = info
+                self._id_entries.setdefault(ingredient_id, []).append(info)
 
         logger.info(f"✅ Loaded {len(self.ingredients)} ingredients from CSV for user {self.telegram_user_id}")
 
@@ -606,11 +611,10 @@ class IngredientMatcher:
             return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
 
         # 2. Exact name match
-        if text_lower in self.names:
-            ingredient_id = self.names[text_lower]
-            ingredient = self.ingredients[ingredient_id]
+        if text_lower in self._name_to_info:
+            ingredient = self._name_to_info[text_lower]
             logger.debug(f"Ingredient exact match: '{text}' -> {ingredient}")
-            return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
+            return (ingredient['id'], ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
 
         # 3. Fuzzy match on aliases first (higher confidence)
         if self.aliases:
@@ -716,10 +720,11 @@ class IngredientMatcher:
                 logger.info(f"      ❌ Rejected name match: '{text_lower}' → '{matched_name}' (score={score:.1f}, common_tokens={len(common_tokens)})")
                 continue
                 
-            ingredient_id = self.names[matched_name]
-            ingredient = self.ingredients[ingredient_id]
+            ingredient = self._name_to_info.get(matched_name)
+            if not ingredient:
+                continue
             logger.info(f"✅ Ingredient fuzzy match: '{text}' -> {ingredient['name']} (score={score})")
-            return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
+            return (ingredient['id'], ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
 
         logger.warning(f"Ingredient not matched: '{text}'")
         return None
@@ -754,10 +759,9 @@ class IngredientMatcher:
             all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
 
         # 2. Check exact name matches
-        if text_lower in self.names and not all_matches:
-            ingredient_id = self.names[text_lower]
-            ingredient = self.ingredients[ingredient_id]
-            all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
+        if text_lower in self._name_to_info and not all_matches:
+            ingredient = self._name_to_info[text_lower]
+            all_matches.append((ingredient['id'], ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
 
         # 3. Fuzzy matching - search in aliases first
         if not all_matches and self.aliases:
@@ -835,9 +839,10 @@ class IngredientMatcher:
                     logger.info(f"      ❌ Rejected name priority match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
                     continue
                     
-                ingredient_id = self.names[matched_name]
-                ingredient = self.ingredients[ingredient_id]
-                all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
+                ingredient = self._name_to_info.get(matched_name)
+                if not ingredient:
+                    continue
+                all_matches.append((ingredient['id'], ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
 
         if not all_matches:
             logger.warning(f"Ingredient not matched (priority search): '{text}'")
@@ -991,6 +996,7 @@ class ProductMatcher:
         self.products: Dict[int, Dict] = {}  # product_id -> product_info
         self.names: Dict[str, int] = {}  # name -> product_id
         self.aliases: Dict[str, int] = {}  # alias -> product_id
+        self._name_to_info: Dict[str, Dict] = {}  # name.lower() -> full product info (no ID collision)
 
         # Determine CSV paths based on user (with fallback to global)
         if telegram_user_id:
@@ -1028,16 +1034,17 @@ class ProductMatcher:
                 if category != 'Напитки':
                     continue
 
-                self.products[product_id] = {
+                info = {
                     'id': product_id,
                     'name': name,
                     'category': category,
-                    'unit': 'шт',  # Products are usually counted in pieces
+                    'unit': 'шт',
                     'account_name': account_name
                 }
+                self.products[product_id] = info
 
-                # Add name for matching
                 self.names[name.lower()] = product_id
+                self._name_to_info[name.lower()] = info
 
         logger.info(f"✅ Loaded {len(self.products)} products from CSV for user {self.telegram_user_id}")
 
@@ -1143,11 +1150,10 @@ class ProductMatcher:
             return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
 
         # 2. Exact name match
-        if text_lower in self.names:
-            product_id = self.names[text_lower]
-            product = self.products[product_id]
+        if text_lower in self._name_to_info:
+            product = self._name_to_info[text_lower]
             logger.debug(f"Product exact match: '{text}' -> {product}")
-            return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
+            return (product['id'], product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
 
         # 3. Fuzzy match on aliases first (higher confidence)
         if self.aliases:
@@ -1214,10 +1220,11 @@ class ProductMatcher:
                 logger.info(f"      ❌ Rejected product name match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
                 continue
                 
-            product_id = self.names[matched_name]
-            product = self.products[product_id]
+            product = self._name_to_info.get(matched_name)
+            if not product:
+                continue
             logger.debug(f"Product fuzzy match: '{text}' -> {product['name']} (score={score})")
-            return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
+            return (product['id'], product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
 
         logger.warning(f"Product not matched: '{text}'")
         return None
@@ -1248,14 +1255,14 @@ class ProductMatcher:
         # 1. Check aliases first
         if text_lower in self.aliases:
             product_id = self.aliases[text_lower]
-            product = self.products[product_id]
-            all_matches.append((product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
+            product = self.products.get(product_id)
+            if product:
+                all_matches.append((product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
 
         # 2. Check exact name matches
-        if text_lower in self.names and not all_matches:
-            product_id = self.names[text_lower]
-            product = self.products[product_id]
-            all_matches.append((product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
+        if text_lower in self._name_to_info and not all_matches:
+            product = self._name_to_info[text_lower]
+            all_matches.append((product['id'], product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
 
         # 3. Fuzzy matching - search in aliases first
         if not all_matches and self.aliases:
@@ -1294,7 +1301,9 @@ class ProductMatcher:
                     continue
 
                 product_id = self.aliases[matched_alias]
-                product = self.products[product_id]
+                product = self.products.get(product_id)
+                if not product:
+                    continue
                 all_matches.append((product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
 
         # 4. Fuzzy matching - search in names
@@ -1309,9 +1318,10 @@ class ProductMatcher:
             )
 
             for matched_name, score, _ in name_matches:
-                product_id = self.names[matched_name]
-                product = self.products[product_id]
-                all_matches.append((product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
+                product = self._name_to_info.get(matched_name)
+                if not product:
+                    continue
+                all_matches.append((product['id'], product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
 
         if not all_matches:
             logger.warning(f"Product not matched (priority search): '{text}'")

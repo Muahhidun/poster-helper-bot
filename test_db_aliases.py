@@ -36,7 +36,7 @@ def test_matcher():
     for alias_text in test_cases:
         result = matcher.match(alias_text)
         if result:
-            ingredient_id, name, unit, score = result
+            ingredient_id, name, unit, score, *_ = result
             print(f"✅ '{alias_text}' -> {name} (ID={ingredient_id}, score={score})")
         else:
             print(f"❌ '{alias_text}' -> NOT FOUND")
