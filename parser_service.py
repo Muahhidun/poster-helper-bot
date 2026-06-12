@@ -778,7 +778,8 @@ class ParserService:
                         }
                     }
                     
-                    async with aiohttp.ClientSession() as session:
+                    timeout = aiohttp.ClientTimeout(total=120)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.post(url, json=payload, headers=headers) as resp:
                             if resp.status == 200:
                                 result = await resp.json()
@@ -789,9 +790,9 @@ class ParserService:
                                 return self._reconcile_invoice_items(parsed)
                             else:
                                 error_text = await resp.text()
-                                logger.warning(f"Gemini API returned error status {resp.status}: {error_text}")
+                                logger.warning(f"Gemini API returned error status {resp.status}: {error_text[:500]}")
                 except Exception as e:
-                    logger.warning(f"Gemini OCR attempt failed: {e}. Falling back to Claude...")
+                    logger.warning(f"Gemini OCR attempt failed ({type(e).__name__}): {e}. Falling back to Claude...")
 
             logger.info(f"Parsing invoice from image using Claude 3.5 Sonnet Vision API")
             
@@ -963,7 +964,8 @@ class ParserService:
                     }
                 }
                 
-                async with aiohttp.ClientSession() as session:
+                timeout = aiohttp.ClientTimeout(total=120)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(url, json=payload, headers=headers) as resp:
                         if resp.status == 200:
                             result = await resp.json()
@@ -974,10 +976,10 @@ class ParserService:
                             return self._reconcile_invoice_items(parsed)
                         else:
                             error_text = await resp.text()
-                            logger.error(f"Gemini API error (status {resp.status}): {error_text}")
-                            raise Exception(f"Gemini API error: {error_text}")
+                            logger.error(f"Gemini API error (status {resp.status}): {error_text[:500]}")
+                            raise Exception(f"Gemini API error: status {resp.status}")
             except Exception as e:
-                logger.error(f"Gemini batch image parsing failed: {e}. Falling back to OpenAI...")
+                logger.error(f"Gemini batch image parsing failed ({type(e).__name__}): {e}. Falling back to OpenAI...")
 
         try:
             logger.info("Parsing batch image with GPT-4o-mini Vision...")
@@ -1112,7 +1114,8 @@ class ParserService:
                     }
                 }
                 
-                async with aiohttp.ClientSession() as session:
+                timeout = aiohttp.ClientTimeout(total=120)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(url, json=payload, headers=headers) as resp:
                         if resp.status == 200:
                             result = await resp.json()
@@ -1123,10 +1126,10 @@ class ParserService:
                             return self._reconcile_invoice_items(parsed)
                         else:
                             error_text = await resp.text()
-                            logger.error(f"Gemini API error (status {resp.status}): {error_text}")
-                            raise Exception(f"Gemini API error: {error_text}")
+                            logger.error(f"Gemini API error (status {resp.status}): {error_text[:500]}")
+                            raise Exception(f"Gemini API error: status {resp.status}")
             except Exception as e:
-                logger.error(f"Gemini batch text parsing failed: {e}. Falling back to OpenAI...")
+                logger.error(f"Gemini batch text parsing failed ({type(e).__name__}): {e}. Falling back to OpenAI...")
 
         try:
             logger.info("Parsing batch text with GPT-4o-mini...")
@@ -1365,7 +1368,8 @@ class ParserService:
         headers = {"Content-Type": "application/json"}
 
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=120)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, json=payload, headers=headers) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -1378,12 +1382,12 @@ class ParserService:
                         return parsed
                     else:
                         error_text = await resp.text()
-                        logger.error(f"Gemini API error in assistant (status {resp.status}): {error_text}")
+                        logger.error(f"Gemini API error in assistant (status {resp.status}): {error_text[:500]}")
                         if OPENAI_API_KEY:
                             return await self._fallback_to_openai_assistant(prompt_context, media_files)
                         return {"response_text": f"Ошибка API Gemini: {resp.status}", "actions": []}
         except Exception as e:
-            logger.error(f"Failed calling Gemini assistant agent: {e}")
+            logger.error(f"Failed calling Gemini assistant agent ({type(e).__name__}): {e}")
             if OPENAI_API_KEY:
                 return await self._fallback_to_openai_assistant(prompt_context, media_files)
             return {"response_text": f"Произошла ошибка при обращении к ИИ: {str(e)}", "actions": []}
@@ -1393,18 +1397,17 @@ class ParserService:
         prompt_context: str,
         media_files: Optional[List[Dict]] = None
     ) -> Dict:
-        """Fallback assistant query using OpenAI GPT-4o-mini"""
-        logger.info("⚠️ Falling back to OpenAI GPT-4o-mini for assistant agent...")
+        """Fallback assistant query using OpenAI GPT-4o"""
+        logger.info("⚠️ Falling back to OpenAI GPT-4o for assistant agent...")
         try:
             messages = [
                 {"role": "system", "content": ASSISTANT_SYSTEM_PROMPT},
             ]
-            
+
             user_content = []
             if media_files:
                 user_content.append({"type": "text", "text": prompt_context})
                 for media in media_files:
-                    # OpenAI GPT-4o-mini only supports image uploads, skip PDFs/other formats
                     if not media.get('mime_type', '').startswith('image/'):
                         continue
                     base64_data = base64.standard_b64encode(media['data']).decode("utf-8")
@@ -1421,7 +1424,7 @@ class ParserService:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=OPENAI_API_KEY)
             response = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=messages,
                 response_format={"type": "json_object"}
             )
@@ -1429,14 +1432,14 @@ class ParserService:
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
 
-            logger.info("✅ Fallback to OpenAI GPT-4o-mini successful.")
+            logger.info("✅ Fallback to OpenAI GPT-4o successful.")
             if isinstance(parsed, dict):
-                parsed.setdefault('_model_used', 'gpt-4o-mini')
+                parsed.setdefault('_model_used', 'gpt-4o')
             return parsed
         except Exception as e:
             logger.error(f"Failed in OpenAI fallback assistant call: {e}", exc_info=True)
             return {
-                "response_text": f"Произошла ошибка при обращении к ИИ (Gemini недоступен с ошибкой, резервный OpenAI также вернул ошибку: {str(e)})",
+                "response_text": f"Произошла ошибка при обращении к ИИ (Gemini недоступен, резервный OpenAI GPT-4o также вернул ошибку: {str(e)})",
                 "actions": []
             }
 
