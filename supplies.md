@@ -119,7 +119,7 @@ CREATE INDEX idx_price_history_supplier ON ingredient_price_history(telegram_use
    - Загрузить `get_ingredients()` из Poster API
    - Загрузить `get_products()` из Poster API
 2. **Ингредиенты:** Пропустить удалённые (`delete == '1'`). Тип Poster `'2'` → `'semi_product'`, иначе `'ingredient'`. Добавить `poster_account_id` и `poster_account_name`.
-3. **Товары:** Пропустить удалённые. **Только категория "Напитки"** (`category_name.startswith('Напитки')`). Тип = `'product'`. Добавить `poster_account_id`, `poster_account_name`.
+3. **Товары:** Пропустить удалённые. **Только напитки** (`is_drink_category(category_name)` — категория содержит "напит", без учёта регистра; устойчиво к вариациям названий между аккаунтами). Тип = `'product'`. Добавить `poster_account_id`, `poster_account_name`.
 4. Объединить все items из всех аккаунтов.
 5. Если `q` задан → substring match (case-insensitive), лимит 50.
 6. Если `q` пуст → вернуть **ВСЕ** items, сортированные по `(poster_account_name, name)`, **без лимита** — для предзагрузки на клиенте.

@@ -258,6 +258,18 @@ def get_date_in_kz_tz(dt_value, kz_tz) -> str:
     return created_kz.strftime("%Y-%m-%d")
 
 
+def is_drink_category(category_name) -> bool:
+    """Check whether a Poster product category represents drinks (supply-able retail
+    products such as Coca-Cola), as opposed to kitchen dishes (pizzas, burgers, doners).
+
+    Robust to casing and naming variations across accounts: matches any category whose
+    name contains "напит" (e.g. "Напитки", "напитки", "Безалкогольные напитки",
+    "Газированные напитки"). Dish categories (Пиццы, Бургеры, Донер, Хот-Доги, Фри,
+    Комбо, etc.) never contain this substring, so they stay excluded.
+    """
+    return 'напит' in (category_name or '').strip().lower()
+
+
 def load_items_from_csv(telegram_user_id=None, only_drinks=True):
     """Load ingredients and products from CSV files (with user-specific support)"""
     items = []
@@ -299,7 +311,7 @@ def load_items_from_csv(telegram_user_id=None, only_drinks=True):
                 for row in reader:
                     # Filter products if only_drinks is True
                     if only_drinks:
-                        if not row.get('category_name', '').startswith('Напитки'):
+                        if not is_drink_category(row.get('category_name', '')):
                             continue
                     items.append({
                         'id': int(row['product_id']),
@@ -319,7 +331,7 @@ def load_items_from_csv(telegram_user_id=None, only_drinks=True):
     def item_priority(item):
         if item['type'] == 'product':
             cat = item.get('category_name') or ''
-            if not cat.startswith('Напитки'):
+            if not is_drink_category(cat):
                 return 1  # dish (lower priority/comes last)
         return 0  # non-dish (higher priority/comes first)
 
@@ -371,7 +383,7 @@ def cleanup_and_migrate_legacy_rules(user_id):
         candidates = items_by_id.get(poster_id, [])
         
         # Prioritize non-dishes when matching candidates
-        candidates_sorted = sorted(candidates, key=lambda c: 1 if (c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')) else 0)
+        candidates_sorted = sorted(candidates, key=lambda c: 1 if (c['type'] == 'product' and not is_drink_category(c.get('category_name'))) else 0)
         
         matched_candidate = next((c for c in candidates_sorted if c['account_name'].strip() == target_acc), None)
         if not matched_candidate and candidates_sorted:
@@ -381,13 +393,13 @@ def cleanup_and_migrate_legacy_rules(user_id):
         if matched_candidate:
             if matched_candidate['type'] == 'product':
                 cat = matched_candidate.get('category_name') or ''
-                if not cat.startswith('Напитки'):
+                if not is_drink_category(cat):
                     is_dish = True
                     
         # If account name is empty, and there are both dish and ingredient candidates:
         if not acc_name and candidates:
-            dish_candidates = [c for c in candidates if c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')]
-            ingredient_candidates = [c for c in candidates if c['type'] == 'ingredient' or (c['type'] == 'product' and (c.get('category_name') or '').startswith('Напитки'))]
+            dish_candidates = [c for c in candidates if c['type'] == 'product' and not is_drink_category(c.get('category_name'))]
+            ingredient_candidates = [c for c in candidates if c['type'] == 'ingredient' or (c['type'] == 'product' and is_drink_category(c.get('category_name')))]
             if dish_candidates and ingredient_candidates:
                 # Check notes to distinguish if this is a dish rule or ingredient rule
                 notes_lower = (r.get('notes') or '').lower()
@@ -409,7 +421,7 @@ def cleanup_and_migrate_legacy_rules(user_id):
                 c_is_dish = False
                 if c['type'] == 'product':
                     cat = c.get('category_name') or ''
-                    if not cat.startswith('Напитки'):
+                    if not is_drink_category(cat):
                         c_is_dish = True
                 if not c_is_dish:
                     valid_candidates.append(c)
@@ -448,7 +460,7 @@ def cleanup_and_migrate_legacy_rules(user_id):
         candidates = items_by_id.get(poster_id, [])
         
         # Prioritize non-dishes when matching candidates
-        candidates_sorted = sorted(candidates, key=lambda c: 1 if (c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')) else 0)
+        candidates_sorted = sorted(candidates, key=lambda c: 1 if (c['type'] == 'product' and not is_drink_category(c.get('category_name'))) else 0)
         
         matched_candidate = next((c for c in candidates_sorted if c['account_name'].strip() == target_acc), None)
         if not matched_candidate and candidates_sorted:
@@ -457,13 +469,13 @@ def cleanup_and_migrate_legacy_rules(user_id):
         if matched_candidate:
             if matched_candidate['type'] == 'product':
                 cat = matched_candidate.get('category_name') or ''
-                if not cat.startswith('Напитки'):
+                if not is_drink_category(cat):
                     is_dish = True
                     
         # If account name is empty, and there are both dish and ingredient candidates:
         if not acc_name and candidates:
-            dish_candidates = [c for c in candidates if c['type'] == 'product' and not (c.get('category_name') or '').startswith('Напитки')]
-            ingredient_candidates = [c for c in candidates if c['type'] == 'ingredient' or (c['type'] == 'product' and (c.get('category_name') or '').startswith('Напитки'))]
+            dish_candidates = [c for c in candidates if c['type'] == 'product' and not is_drink_category(c.get('category_name'))]
+            ingredient_candidates = [c for c in candidates if c['type'] == 'ingredient' or (c['type'] == 'product' and is_drink_category(c.get('category_name')))]
             if dish_candidates and ingredient_candidates:
                 notes_lower = (h.get('notes') or '').lower()
                 if 'dish' in notes_lower or 'блюдо' in notes_lower:
@@ -482,7 +494,7 @@ def cleanup_and_migrate_legacy_rules(user_id):
                 c_is_dish = False
                 if c['type'] == 'product':
                     cat = c.get('category_name') or ''
-                    if not cat.startswith('Напитки'):
+                    if not is_drink_category(cat):
                         c_is_dish = True
                 if not c_is_dish:
                     valid_candidates.append(c)
@@ -618,7 +630,7 @@ def list_aliases():
         item_obj = item_lookup.get(key) or item_lookup.get(str(item_id))
         if item_obj and item_obj['type'] == 'product':
             cat = item_obj.get('category_name') or ''
-            if not cat.startswith('Напитки'):
+            if not is_drink_category(cat):
                 return True
         return False
 
@@ -1041,7 +1053,7 @@ def search_items():
                                 products = await poster_client.get_products()
                                 for prod in products:
                                     category = prod.get('category_name', '')
-                                    if not category.startswith('Напитки'):
+                                    if not is_drink_category(category):
                                         continue
                                     name = prod.get('product_name', '')
                                     result_items.append({
@@ -5201,7 +5213,7 @@ def list_supplies():
                                 if str(prod.get('delete', '0')) == '1':
                                     continue
                                 category = prod.get('category_name', '')
-                                if not category.startswith('Напитки'):
+                                if not is_drink_category(category):
                                     continue
                                 name = prod.get('product_name', '')
                                 sid = default_storage_id
@@ -5644,7 +5656,7 @@ def view_supply(draft_id):
                     products = run_async(_fetch_prods())
                     for prod in products:
                         category = prod.get('category_name') or ''
-                        if not category.startswith('Напитки'):
+                        if not is_drink_category(category):
                             continue
                         items.append({
                             'id': int(prod.get('product_id', 0)),
@@ -5738,7 +5750,7 @@ def update_supply_item(item_id):
                 matched_item = next((i for i in user_items if i['id'] == int(ing_id)), None)
                 if matched_item and matched_item['type'] == 'product':
                     category = matched_item.get('category_name') or ''
-                    if not category.startswith('Напитки'):
+                    if not is_drink_category(category):
                         is_item_dish = True
                         logger.info(f"Skipping learning rule/habit for dish product {ing_id} ({matched_item['name']})")
             except Exception as dish_err:
