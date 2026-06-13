@@ -606,9 +606,10 @@ class IngredientMatcher:
         # 1. Exact alias match (highest priority)
         if text_lower in self.aliases:
             ingredient_id = self.aliases[text_lower]
-            ingredient = self.ingredients[ingredient_id]
-            logger.debug(f"Ingredient alias match: '{text}' -> {ingredient}")
-            return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
+            ingredient = self.ingredients.get(ingredient_id)
+            if ingredient:
+                logger.debug(f"Ingredient alias match: '{text}' -> {ingredient}")
+                return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
 
         # 2. Exact name match
         if text_lower in self._name_to_info:
@@ -674,9 +675,10 @@ class IngredientMatcher:
 
                 if alias_match:  # Re-check after potential rejection
                     ingredient_id = self.aliases[matched_alias]
-                    ingredient = self.ingredients[ingredient_id]
-                    logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
-                    return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
+                    ingredient = self.ingredients.get(ingredient_id)
+                    if ingredient:
+                        logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
+                        return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
 
         # 4. Fuzzy match on ingredient names
         names_list = list(self.names.keys())
@@ -755,8 +757,9 @@ class IngredientMatcher:
         # 1. Check aliases first
         if text_lower in self.aliases:
             ingredient_id = self.aliases[text_lower]
-            ingredient = self.ingredients[ingredient_id]
-            all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
+            ingredient = self.ingredients.get(ingredient_id)
+            if ingredient:
+                all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
 
         # 2. Check exact name matches
         if text_lower in self._name_to_info and not all_matches:
@@ -800,7 +803,9 @@ class IngredientMatcher:
                     continue
 
                 ingredient_id = self.aliases[matched_alias]
-                ingredient = self.ingredients[ingredient_id]
+                ingredient = self.ingredients.get(ingredient_id)
+                if not ingredient:
+                    continue
                 all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
 
         # 4. Fuzzy matching - search in names
@@ -883,7 +888,7 @@ class IngredientMatcher:
             return False
 
         alias_lower = normalize_text_for_matching(alias_text)
-        ingredient = self.ingredients[ingredient_id]
+        ingredient = self.ingredients.get(ingredient_id, {})
 
         # Check if alias already exists (avoid duplicates)
         if alias_lower in self.aliases and self.aliases[alias_lower] == ingredient_id:
@@ -962,7 +967,9 @@ class IngredientMatcher:
         for match_result in matches:
             matched_text, score, _ = match_result
             ingredient_id = search_space[matched_text]
-            ingredient = self.ingredients[ingredient_id]
+            ingredient = self.ingredients.get(ingredient_id)
+            if not ingredient:
+                continue
             results.append((
                 ingredient_id,
                 ingredient['name'],
@@ -1145,9 +1152,10 @@ class ProductMatcher:
         # 1. Exact alias match (highest priority)
         if text_lower in self.aliases:
             product_id = self.aliases[text_lower]
-            product = self.products[product_id]
-            logger.debug(f"Product alias match: '{text}' -> {product}")
-            return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
+            product = self.products.get(product_id)
+            if product:
+                logger.debug(f"Product alias match: '{text}' -> {product}")
+                return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
 
         # 2. Exact name match
         if text_lower in self._name_to_info:
@@ -1175,9 +1183,10 @@ class ProductMatcher:
                 matched_alias = alias_match[0]
                 score = alias_match[1]
                 product_id = self.aliases[matched_alias]
-                product = self.products[product_id]
-                logger.info(f"✅ Product fuzzy alias match: '{text}' -> {product['name']} (score={score})")
-                return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
+                product = self.products.get(product_id)
+                if product:
+                    logger.info(f"✅ Product fuzzy alias match: '{text}' -> {product['name']} (score={score})")
+                    return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
 
         # 4. Fuzzy match on product names
         names_list = list(self.names.keys())
@@ -1362,7 +1371,7 @@ class ProductMatcher:
             return False
 
         alias_lower = normalize_text_for_matching(alias_text)
-        product = self.products[product_id]
+        product = self.products.get(product_id, {})
 
         # Check if alias already exists (avoid duplicates)
         if alias_lower in self.aliases and self.aliases[alias_lower] == product_id:
@@ -1441,7 +1450,9 @@ class ProductMatcher:
         for match_result in matches:
             matched_text, score, _ = match_result
             product_id = search_space[matched_text]
-            product = self.products[product_id]
+            product = self.products.get(product_id)
+            if not product:
+                continue
             results.append((
                 product_id,
                 product['name'],
