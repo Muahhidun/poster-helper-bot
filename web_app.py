@@ -2386,101 +2386,120 @@ def _api_assistant_message_impl():
                     )
                     
                     try:
-                        async def _fetch():
-                            return await client._request('GET', 'dash.getTransactions', params={
+                        async def _fetch_account_data():
+                            matches = []
+                            result = await client._request('GET', 'dash.getTransactions', params={
                                 'dateFrom': date_param,
                                 'dateTo': date_param
                             })
-                        result = run_async(_fetch())
-                        transactions = result.get('response', [])
-                        
-                        for tx in transactions:
-                            tx_id = tx.get('transaction_id')
-                            if not tx_id:
-                                continue
+                            transactions = result.get('response', [])
+                            if not isinstance(transactions, list):
+                                return matches
                             
-                            tx_id_int = int(tx_id)
-                            payed_sum_kzt = float(tx.get('payed_sum', 0)) / 100
-                            
-                            is_match = False
-                            
-                            if clean_order_number is not None:
-                                if tx_id_int == clean_order_number or str(clean_order_number) in str(tx_id_int):
-                                    is_match = True
-                                else:
-                                    # Check other fields that might represent the short order number or the close timestamp
-                                    for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number', 'date_close']:
-                                        val = tx.get(key)
-                                        if val is not None:
-                                            try:
-                                                val_int = int(float(val))
-                                                if val_int == clean_order_number or str(clean_order_number) in str(val_int):
-                                                    is_match = True
-                                                    break
-                                            except (ValueError, TypeError):
-                                                if str(clean_order_number) in str(val):
-                                                    is_match = True
-                                                    break
-                            
-                            if target_amount is not None:
-                                # Допускаем разницу из-за скидки (например, сумма чека от 60% до 105% от указанной)
-                                if 0.6 * target_amount <= payed_sum_kzt <= 1.05 * target_amount:
-                                    is_match = True
+                            for tx in transactions:
+                                tx_id = tx.get('transaction_id')
+                                if not tx_id:
+                                    continue
+                                
+                                tx_id_int = int(tx_id)
+                                payed_sum_kzt = float(tx.get('payed_sum', 0)) / 100
+                                
+                                is_match = False
+                                exact_id_match = False
+                                
+                                if clean_order_number is not None:
+                                    if tx_id_int == clean_order_number:
+                                        is_match = True
+                                        exact_id_match = True
+                                    elif str(clean_order_number) in str(tx_id_int):
+                                        is_match = True
+                                    else:
+                                        # Check other fields that might represent the short order number or the close timestamp
+                                        for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number', 'date_close']:
+                                            val = tx.get(key)
+                                            if val is not None:
+                                                try:
+                                                    val_int = int(float(val))
+                                                    if val_int == clean_order_number:
+                                                        is_match = True
+                                                        break
+                                                    elif str(clean_order_number) in str(val_int):
+                                                        is_match = True
+                                                        break
+                                                except (ValueError, TypeError):
+                                                    if str(clean_order_number) in str(val):
+                                                        is_match = True
+                                                        break
+                                
+                                if target_amount is not None:
+                                    # Допускаем разницу из-за скидки (например, сумма чека от 60% до 105% от указанной)
+                                    if 0.6 * target_amount <= payed_sum_kzt <= 1.05 * target_amount:
+                                        is_match = True
 
-                            if is_match:
-                                products_str = "неизвестно"
-                                try:
-                                    async def _fetch_prods():
-                                        return await client._request('GET', 'dash.getTransactionProducts', params={
+                                if is_match:
+                                    products_str = "неизвестно"
+                                    try:
+                                        prod_result = await client._request('GET', 'dash.getTransactionProducts', params={
                                             'transaction_id': tx_id_int
                                         })
-                                    prod_result = run_async(_fetch_prods())
-                                    products = prod_result.get('response', [])
-                                    if products:
-                                        products_list = []
-                                        for p in products:
-                                            p_name = p.get('product_name', 'Товар')
-                                            p_qty = float(p.get('count', 1))
-                                            products_list.append(f"{p_name} ({p_qty:g} шт)")
-                                        products_str = ", ".join(products_list)
-                                except Exception as prod_err:
-                                    logger.warning(f"Error fetching products for tx {tx_id_int}: {prod_err}")
-                                
-                                close_time = tx.get('date_close', '')
-                                if close_time:
-                                    if isinstance(close_time, str) and len(close_time) >= 16:
-                                        close_time = close_time[11:16]
-                                    else:
-                                        try:
-                                            # Try parsing as millisecond Unix timestamp
-                                            ts = float(close_time)
-                                            # If it's a 13-digit timestamp, convert to seconds
-                                            if ts > 1e11:
-                                                ts = ts / 1000.0
-                                            from datetime import datetime
-                                            dt = datetime.fromtimestamp(ts, tz=KZ_TZ)
-                                            close_time = dt.strftime("%H:%M")
-                                        except Exception:
-                                            pass
-                                
-                                status_str = "Открыт" if tx.get('status') == '1' else "Закрыт" if tx.get('status') == '2' else f"Статус {tx.get('status')}"
-                                
-                                diff = abs(payed_sum_kzt - target_amount) if target_amount is not None else 0
-                                
-                                found_matches.append({
-                                    'transaction_id': tx_id_int,
-                                    'poster_account_id': account['id'],
-                                    'account_name': account['account_name'],
-                                    'payed_sum': payed_sum_kzt,
-                                    'products': products_str,
-                                    'time': close_time,
-                                    'status': status_str,
-                                    'diff': diff
-                                })
+                                        products = prod_result.get('response', [])
+                                        if products:
+                                            products_list = []
+                                            for p in products:
+                                                p_name = p.get('product_name', 'Товар')
+                                                p_qty = float(p.get('count', 1))
+                                                products_list.append(f"{p_name} ({p_qty:g} шт)")
+                                            products_str = ", ".join(products_list)
+                                    except Exception as prod_err:
+                                        logger.warning(f"Error fetching products for tx {tx_id_int}: {prod_err}")
+                                    
+                                    close_time = tx.get('date_close', '')
+                                    if close_time:
+                                        if isinstance(close_time, str) and len(close_time) >= 16:
+                                            close_time = close_time[11:16]
+                                        else:
+                                            try:
+                                                # Try parsing as millisecond Unix timestamp
+                                                ts = float(close_time)
+                                                # If it's a 13-digit timestamp, convert to seconds
+                                                if ts > 1e11:
+                                                    ts = ts / 1000.0
+                                                from datetime import datetime
+                                                dt = datetime.fromtimestamp(ts, tz=KZ_TZ)
+                                                close_time = dt.strftime("%H:%M")
+                                            except Exception:
+                                                pass
+                                    
+                                    status_str = "Открыт" if tx.get('status') == '1' else "Закрыт" if tx.get('status') == '2' else f"Статус {tx.get('status')}"
+                                    
+                                    diff = abs(payed_sum_kzt - target_amount) if target_amount is not None else 0
+                                    
+                                    matches.append({
+                                        'transaction_id': tx_id_int,
+                                        'poster_account_id': account['id'],
+                                        'account_name': account['account_name'],
+                                        'payed_sum': payed_sum_kzt,
+                                        'products': products_str,
+                                        'time': close_time,
+                                        'status': status_str,
+                                        'diff': diff,
+                                        'exact_id_match': exact_id_match
+                                    })
+                            return matches
+
+                        result_matches = run_async(_fetch_account_data())
+                        found_matches.extend(result_matches)
                     except Exception as client_err:
                         logger.error(f"Error fetching transactions for account {account['account_name']}: {client_err}")
                     finally:
                         run_async(client.close())
+
+                # If we have any exact transaction ID matches, filter to keep ONLY them.
+                # This prevents partial/secondary matches (like matching spot_order_id) from cluttering the results
+                # when the user explicitly specified a transaction ID.
+                exact_id_matches = [m for m in found_matches if m.get('exact_id_match')]
+                if exact_id_matches:
+                    found_matches = exact_id_matches
                 
                 if not found_matches:
                     response_text = f"Чеков за сегодня по вашему запросу не найдено (сумма: {amount_val if amount_val else 'не указана'}, номер заказа: {order_number if order_number else 'не указан'})."
