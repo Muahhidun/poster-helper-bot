@@ -432,9 +432,6 @@ class SupplierMatcher:
             logger.info(f"Supplier fuzzy match (normalized/translit): '{text}' -> {supplier_id} (score={best_score}, matched_alias='{best_match}')")
             return supplier_id
 
-        logger.warning(f"Supplier not matched: '{text}'")
-        return None
-
     def get_supplier_name(self, supplier_id: int) -> Optional[str]:
         """Get supplier name by ID"""
         supplier = self.suppliers.get(supplier_id)
@@ -453,10 +450,10 @@ class IngredientMatcher:
                              If None, uses global data directory (legacy mode)
         """
         self.telegram_user_id = telegram_user_id
-        self.ingredients: Dict[int, Dict] = {}  # ingredient_id -> ingredient_info (may be overwritten by same ID from different account)
-        self.names: Dict[str, int] = {}  # name -> ingredient_id
-        self.aliases: Dict[str, int] = {}  # alias -> ingredient_id
-        self._name_to_info: Dict[str, Dict] = {}  # name.lower() -> full ingredient info (never has ID collision)
+        self.ingredients: Dict[Tuple[int, str], Dict] = {}  # (ingredient_id, account_name) -> ingredient_info
+        self.names: Dict[str, List[Tuple[int, str]]] = {}  # name.lower() -> [(ingredient_id, account_name), ...]
+        self.aliases: Dict[str, List[Tuple[int, str]]] = {}  # alias.lower() -> [(ingredient_id, account_name), ...]
+        self._name_to_info: Dict[Tuple[str, str], Dict] = {}  # (name.lower(), account_name) -> full ingredient info
         self._id_entries: Dict[int, list] = {}  # ingredient_id -> [info1, info2, ...] for all accounts
 
         # Determine CSV paths based on user (with fallback to global)
@@ -503,11 +500,11 @@ class IngredientMatcher:
                     'account_name': account_name,
                     'type': item_type
                 }
-                self.ingredients[ingredient_id] = info
+                self.ingredients[(ingredient_id, account_name)] = info
 
-                # Add name for matching (name is unique per account, safe from ID collision)
-                self.names[name.lower()] = ingredient_id
-                self._name_to_info[name.lower()] = info
+                # Add name for matching
+                self.names.setdefault(name.lower(), []).append((ingredient_id, account_name))
+                self._name_to_info[(name.lower(), account_name)] = info
                 self._id_entries.setdefault(ingredient_id, []).append(info)
 
         logger.info(f"✅ Loaded {len(self.ingredients)} ingredients from CSV for user {self.telegram_user_id}")
@@ -515,7 +512,7 @@ class IngredientMatcher:
         # Debug: показать первые 5 ID
         if self.ingredients:
             sample_ids = list(self.ingredients.keys())[:5]
-            logger.info(f"   Sample ingredient IDs: {sample_ids}")
+            logger.info(f"   Sample ingredient keys: {sample_ids}")
 
     def load_aliases(self):
         """Load ingredient aliases from database (with CSV fallback)"""
@@ -538,13 +535,42 @@ class IngredientMatcher:
                     alias = normalize_text_for_matching(row['alias_text'])
                     item_id = int(row['poster_item_id'])
 
-                    # Verify that this ingredient exists
-                    if item_id in self.ingredients:
-                        self.aliases[alias] = item_id
+                    # Find candidates by ID to resolve collisions
+                    candidates = self._id_entries.get(item_id, [])
+                    if not candidates:
+                        filtered_count += 1
+                        continue
+
+                    target_info = None
+                    if len(candidates) == 1:
+                        target_info = candidates[0]
+                    else:
+                        db_item_name = row.get('poster_item_name', '').strip().lower()
+                        best_match = None
+                        best_score = -1
+                        for cand in candidates:
+                            cand_name = cand['name'].lower()
+                            if db_item_name == cand_name:
+                                target_info = cand
+                                break
+                            score = fuzz.ratio(db_item_name, cand_name)
+                            if score > best_score:
+                                best_score = score
+                                best_match = cand
+                        if not target_info and best_match and best_score >= 80:
+                            target_info = best_match
+                        if not target_info:
+                            for cand in candidates:
+                                if cand.get('account_name') == 'Pizzburg':
+                                    target_info = cand
+                                    break
+                            if not target_info:
+                                target_info = candidates[0]
+
+                    if target_info:
+                        self.aliases.setdefault(alias, []).append((target_info['id'], target_info['account_name']))
                     else:
                         filtered_count += 1
-                        if filtered_count <= 3:  # Показать первые 3 отфильтрованных
-                            logger.warning(f"⚠️ Alias '{alias}' references non-existent ingredient ID {item_id}")
 
                 if filtered_count > 0:
                     logger.warning(f"⚠️ Filtered out {filtered_count}/{len(db_aliases)} aliases (ingredient IDs not found in self.ingredients)")
@@ -577,163 +603,30 @@ class IngredientMatcher:
                 alias = normalize_text_for_matching(row['alias_text'])
                 item_id = int(row['poster_item_id'])
 
-                # Verify that this ingredient exists
-                if item_id in self.ingredients:
-                    self.aliases[alias] = item_id
-                else:
-                    logger.warning(f"Alias '{alias}' references non-existent ingredient {item_id}")
+                candidates = self._id_entries.get(item_id, [])
+                for cand in candidates:
+                    self.aliases.setdefault(alias, []).append((cand['id'], cand['account_name']))
 
         logger.info(f"Loaded {len(self.aliases)} ingredient aliases from CSV for user {self.telegram_user_id}")
 
-    def match(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE) -> Optional[Tuple[int, str, str, int, str]]:
+    def match(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, target_account: Optional[str] = None) -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match ingredient by text (aliases, exact, or fuzzy)
 
         Args:
             text: Ingredient text to match
             score_cutoff: Minimum fuzzy match score
+            target_account: Optional target account name to prioritize
 
         Returns:
             Tuple of (ingredient_id, name, unit, score, account_name) or None
             Score is 100 for exact/alias matches, lower for fuzzy
         """
-        if not text:
-            return None
+        return self.match_with_priority(text, score_cutoff=score_cutoff, target_account=target_account)
 
-        # Normalize text for better matching
-        text_lower = normalize_text_for_matching(text)
-
-        # 1. Exact alias match (highest priority)
-        if text_lower in self.aliases:
-            ingredient_id = self.aliases[text_lower]
-            ingredient = self.ingredients.get(ingredient_id)
-            if ingredient:
-                logger.debug(f"Ingredient alias match: '{text}' -> {ingredient}")
-                return (ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
-
-        # 2. Exact name match
-        if text_lower in self._name_to_info:
-            ingredient = self._name_to_info[text_lower]
-            logger.debug(f"Ingredient exact match: '{text}' -> {ingredient}")
-            return (ingredient['id'], ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown'))
-
-        # 3. Fuzzy match on aliases first (higher confidence)
-        if self.aliases:
-            aliases_list = list(self.aliases.keys())
-
-            # Try token_set_ratio first - better for partial word matches
-            alias_match = process.extractOne(
-                text_lower,
-                aliases_list,
-                scorer=fuzz.token_set_ratio,
-                score_cutoff=score_cutoff
-            )
-
-            # Log top 3 matches for debugging (always show for ingredients)
-            top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
-            logger.info(f"      Top 3 ingredient alias matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_matches]}")
-
-            if alias_match:  # Removed higher threshold - use same as score_cutoff
-                matched_alias = alias_match[0]
-                score = alias_match[1]
-
-                # Защита от false positives при token_set_ratio:
-                # Если score очень высокий (>95), но совпадает только часть токенов,
-                # перепроверяем с WRatio чтобы избежать match только по одному общему слову
-                alias_words = set(matched_alias.split())
-                text_words = set(text_lower.split())
-                common_tokens = alias_words & text_words
-
-                # Suspicious: высокий score, но либо input/alias разной длины, либо мало общих токенов
-                is_suspicious = (
-                    score > 95 and (
-                        (len(alias_words) > 1 and len(common_tokens) == 1) or  # Только 1 общий токен
-                        (len(alias_words) <= 2 and len(text_words) >= 3) or     # Короткий alias, длинный input
-                        (len(text_words) == 1 and len(alias_words) > 1)         # Короткий input, длинный alias
-                    )
-                )
-
-                if is_suspicious:
-                    # Проверяем как длину так и WRatio
-                    wratio_score = fuzz.WRatio(text_lower, matched_alias)
-                    length_ratio = len(text_lower) / len(matched_alias) if len(matched_alias) > 0 else 1.0
-
-                    logger.info(f"      ⚠️  Suspicious match: '{text_lower}' → '{matched_alias}' (token_set={score:.1f}, WRatio={wratio_score:.1f}, length_ratio={length_ratio:.2f}, common_tokens={len(common_tokens)})")
-
-                    # Reject если:
-                    # 1. Только 1 общий токен И (WRatio < 85 ИЛИ длина input < 60% от alias)
-                    # 2. ИЛИ длина input < 40% от alias (слишком короткий)
-                    should_reject = (
-                        (len(common_tokens) == 1 and (wratio_score < 85 or length_ratio < 0.6)) or
-                        (length_ratio < 0.4)
-                    )
-
-                    if should_reject:
-                        # False positive - пропускаем этот alias
-                        logger.info(f"      ❌ Rejected due to suspicious match")
-                        alias_match = None  # Nullify match, will try names next
-
-                if alias_match:  # Re-check after potential rejection
-                    ingredient_id = self.aliases[matched_alias]
-                    ingredient = self.ingredients.get(ingredient_id)
-                    if ingredient:
-                        logger.info(f"✅ Ingredient fuzzy alias match: '{text}' -> {ingredient['name']} (score={score})")
-                        return (ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
-
-        # 4. Fuzzy match on ingredient names
-        names_list = list(self.names.keys())
-        name_matches = process.extract(
-            text_lower,
-            names_list,
-            scorer=fuzz.WRatio,
-            score_cutoff=score_cutoff,
-            limit=5
-        )
-
-        # Log top 3 ingredient name matches
-        if names_list and name_matches:
-            logger.info(f"      Top ingredient name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in name_matches[:3]]}")
-
-        # Find the best valid name match
-        for matched_name, score, _ in name_matches:
-            text_words = set(text_lower.split())
-            matched_words = set(matched_name.split())
-            common_tokens = text_words & matched_words
-            
-            # Stricter rejection for raw names (no alias support)
-            # Reject if WRatio < 85 AND they share fewer than 2 tokens (unless one of them is only 1 word)
-            is_suspicious = (
-                score < 85 and 
-                len(common_tokens) < 2 and 
-                len(text_words) > 1 and 
-                len(matched_words) > 1
-            )
-            
-            # Also reject very short generic overlaps with high score but low commonality
-            is_generic_overlap = (
-                score >= 85 and 
-                len(common_tokens) == 1 and 
-                len(text_words) > 1 and 
-                len(matched_words) > 1 and
-                len(list(common_tokens)[0]) < 5  # Common token is a very short generic word like "соус", "филе"
-            )
-
-            if is_suspicious or is_generic_overlap:
-                logger.info(f"      ❌ Rejected name match: '{text_lower}' → '{matched_name}' (score={score:.1f}, common_tokens={len(common_tokens)})")
-                continue
-                
-            ingredient = self._name_to_info.get(matched_name)
-            if not ingredient:
-                continue
-            logger.info(f"✅ Ingredient fuzzy match: '{text}' -> {ingredient['name']} (score={score})")
-            return (ingredient['id'], ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown'))
-
-        logger.warning(f"Ingredient not matched: '{text}'")
-        return None
-
-    def match_with_priority(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
+    def match_with_priority(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, primary_account: str = "Pizzburg", target_account: Optional[str] = None) -> Optional[Tuple[int, str, str, int, str]]:
         """
-        Match ingredient with priority: search in primary account first, then secondary accounts
+        Match ingredient with priority: search in primary/target account first, then secondary accounts
 
         Logic: "Всё общее идет автоматически в Pizzburg, а то что нет в Pizzburg - поставляется в Pizzburg-cafe"
 
@@ -741,6 +634,7 @@ class IngredientMatcher:
             text: Ingredient text to match
             score_cutoff: Minimum fuzzy match score
             primary_account: Name of primary account (default: "Pizzburg")
+            target_account: Optional target account to prioritize above primary
 
         Returns:
             Tuple of (ingredient_id, name, unit, score, account_name) or None
@@ -756,15 +650,17 @@ class IngredientMatcher:
 
         # 1. Check aliases first
         if text_lower in self.aliases:
-            ingredient_id = self.aliases[text_lower]
-            ingredient = self.ingredients.get(ingredient_id)
-            if ingredient:
-                all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
+            for ingredient_id, account_name in self.aliases[text_lower]:
+                ingredient = self.ingredients.get((ingredient_id, account_name))
+                if ingredient:
+                    all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
         # 2. Check exact name matches
-        if text_lower in self._name_to_info and not all_matches:
-            ingredient = self._name_to_info[text_lower]
-            all_matches.append((ingredient['id'], ingredient['name'], ingredient['unit'], 100, ingredient.get('account_name', 'Unknown')))
+        if not all_matches and text_lower in self.names:
+            for ingredient_id, account_name in self.names[text_lower]:
+                ingredient = self.ingredients.get((ingredient_id, account_name))
+                if ingredient:
+                    all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
         # 3. Fuzzy matching - search in aliases first
         if not all_matches and self.aliases:
@@ -802,11 +698,11 @@ class IngredientMatcher:
                     logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
                     continue
 
-                ingredient_id = self.aliases[matched_alias]
-                ingredient = self.ingredients.get(ingredient_id)
-                if not ingredient:
-                    continue
-                all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
+                for ingredient_id, account_name in self.aliases[matched_alias]:
+                    ingredient = self.ingredients.get((ingredient_id, account_name))
+                    if not ingredient:
+                        continue
+                    all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, account_name))
 
         # 4. Fuzzy matching - search in names
         if not all_matches:
@@ -844,37 +740,43 @@ class IngredientMatcher:
                     logger.info(f"      ❌ Rejected name priority match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
                     continue
                     
-                ingredient = self._name_to_info.get(matched_name)
-                if not ingredient:
-                    continue
-                all_matches.append((ingredient['id'], ingredient['name'], ingredient['unit'], score, ingredient.get('account_name', 'Unknown')))
+                for ingredient_id, account_name in self.names[matched_name]:
+                    ingredient = self.ingredients.get((ingredient_id, account_name))
+                    if not ingredient:
+                        continue
+                    all_matches.append((ingredient['id'], ingredient['name'], ingredient['unit'], score, account_name))
 
         if not all_matches:
             logger.warning(f"Ingredient not matched (priority search): '{text}'")
             return None
 
-        # Priority logic: prefer primary account (Pizzburg), then others
-        primary_matches = [m for m in all_matches if m[4] == primary_account]
-        secondary_matches = [m for m in all_matches if m[4] != primary_account]
+        # Priority logic: sort matches
+        def sort_key(m):
+            acc = m[4]
+            is_target = (acc == target_account) if target_account else False
+            is_primary = (acc == primary_account)
+            return (is_target, is_primary, m[3])
 
-        if primary_matches:
-            # Return best match from primary account
-            best_match = max(primary_matches, key=lambda x: x[3])  # Sort by score
-            logger.info(f"✅ Found in PRIMARY account ({primary_account}): '{text}' -> {best_match[1]} (score={best_match[3]})")
-            return best_match
-        elif secondary_matches:
-            # Return best match from secondary accounts
-            best_match = max(secondary_matches, key=lambda x: x[3])
-            logger.info(f"✅ Found in SECONDARY account ({best_match[4]}): '{text}' -> {best_match[1]} (score={best_match[3]})")
-            return best_match
+        best_match = max(all_matches, key=sort_key)
+        logger.info(f"✅ Found ingredient match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
+        return best_match
 
-        return None
+    def get_ingredient_info(self, ingredient_id: int, account_name: Optional[str] = None) -> Optional[Dict]:
+        """Get ingredient info by ID (and optional account name)"""
+        if account_name:
+            return self.ingredients.get((ingredient_id, account_name))
+        
+        candidates = self._id_entries.get(ingredient_id, [])
+        if not candidates:
+            return None
+        
+        # Prefer Pizzburg if present
+        for cand in candidates:
+            if cand.get('account_name') == 'Pizzburg':
+                return cand
+        return candidates[0]
 
-    def get_ingredient_info(self, ingredient_id: int) -> Optional[Dict]:
-        """Get ingredient info by ID"""
-        return self.ingredients.get(ingredient_id)
-
-    def add_alias(self, alias_text: str, ingredient_id: int, notes: str = ""):
+    def add_alias(self, alias_text: str, ingredient_id: int, notes: str = "", account_name: Optional[str] = None):
         """
         Add new ingredient alias and save to database (with CSV fallback)
 
@@ -882,57 +784,64 @@ class IngredientMatcher:
             alias_text: The alias text to add
             ingredient_id: The ingredient ID this alias maps to
             notes: Optional notes about this alias
+            account_name: Optional account name this alias maps to
         """
-        if ingredient_id not in self.ingredients:
+        candidates = self._id_entries.get(ingredient_id, [])
+        if not candidates:
             logger.error(f"Cannot add alias: ingredient {ingredient_id} does not exist")
             return False
 
+        target_candidates = [c for c in candidates if c['account_name'] == account_name] if account_name else candidates
+        if not target_candidates:
+            target_candidates = candidates
+
         alias_lower = normalize_text_for_matching(alias_text)
-        ingredient = self.ingredients.get(ingredient_id, {})
 
-        # Check if alias already exists (avoid duplicates)
-        if alias_lower in self.aliases and self.aliases[alias_lower] == ingredient_id:
-            logger.info(f"Alias already exists: '{alias_text}' -> {ingredient_id}")
-            return True  # Not an error, just already exists
+        # Add to memory for all matching candidates
+        for cand in target_candidates:
+            acc_name = cand['account_name']
+            current_aliases = self.aliases.setdefault(alias_lower, [])
+            if (ingredient_id, acc_name) not in current_aliases:
+                current_aliases.append((ingredient_id, acc_name))
 
-        # Add to memory
-        self.aliases[alias_lower] = ingredient_id
-
-        # Try saving to database first (for Railway/PostgreSQL)
+        # Save to database (only for the first/main candidate to avoid duplicates, but with correct name)
+        target_cand = target_candidates[0]
+        db_success = False
         if self.telegram_user_id:
             try:
                 from database import get_database
                 db = get_database()
-                success = db.add_ingredient_alias(
+                db_success = db.add_ingredient_alias(
                     telegram_user_id=self.telegram_user_id,
                     alias_text=alias_text,
                     poster_item_id=ingredient_id,
-                    poster_item_name=ingredient['name'],
+                    poster_item_name=target_cand['name'],
                     source='ingredient',
                     notes=notes
                 )
-                if success:
-                    logger.info(f"✅ Added ingredient alias to database: '{alias_text}' -> {ingredient_id} ({ingredient['name']}) for user {self.telegram_user_id}")
-                    return True
             except Exception as e:
-                logger.warning(f"Could not save alias to database: {e}. Falling back to CSV...")
+                logger.error(f"Failed to save alias to database: {e}")
 
-        # Fallback: save to CSV (for local development)
-        try:
-            with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    alias_text,
-                    ingredient_id,
-                    ingredient['name'],
-                    'ingredient',
-                    notes
-                ])
-            logger.info(f"Added ingredient alias to CSV: '{alias_text}' -> {ingredient_id} ({ingredient['name']}) for user {self.telegram_user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save alias to CSV: {e}")
-            return False
+        # Fallback to CSV if not saved to DB
+        if not db_success:
+            try:
+                # Append to CSV
+                with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        self.telegram_user_id or "",
+                        alias_text,
+                        ingredient_id,
+                        target_cand['name'],
+                        'ingredient',
+                        notes
+                    ])
+                logger.info(f"Added ingredient alias to CSV: '{alias_text}' -> {ingredient_id} ({target_cand['name']}) for user {self.telegram_user_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to save alias to CSV: {e}")
+                return False
+        return True
 
     def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int]]:
         """
@@ -966,22 +875,27 @@ class IngredientMatcher:
 
         for match_result in matches:
             matched_text, score, _ = match_result
-            ingredient_id = search_space[matched_text]
-            ingredient = self.ingredients.get(ingredient_id)
-            if not ingredient:
-                continue
-            results.append((
-                ingredient_id,
-                ingredient['name'],
-                ingredient['unit'],
-                score
-            ))
+            for ingredient_id, account_name in search_space[matched_text]:
+                ingredient = self.ingredients.get((ingredient_id, account_name))
+                if not ingredient:
+                    continue
+                display_name = ingredient['name']
+                if account_name != 'Pizzburg':
+                    display_name = f"{display_name} ({account_name})"
+                
+                results.append((
+                    ingredient_id,
+                    display_name,
+                    ingredient['unit'],
+                    score
+                ))
 
-        # Remove duplicates (same ingredient_id) keeping highest score
+        # Remove duplicates (same ingredient_id and display_name combo) keeping highest score
         seen = {}
         for ing_id, name, unit, score in results:
-            if ing_id not in seen or seen[ing_id][3] < score:
-                seen[ing_id] = (ing_id, name, unit, score)
+            combo_key = (ing_id, name)
+            if combo_key not in seen or seen[combo_key][3] < score:
+                seen[combo_key] = (ing_id, name, unit, score)
 
         # Sort by score descending
         final_results = sorted(seen.values(), key=lambda x: x[3], reverse=True)
@@ -1000,10 +914,11 @@ class ProductMatcher:
                              If None, uses global data directory (legacy mode)
         """
         self.telegram_user_id = telegram_user_id
-        self.products: Dict[int, Dict] = {}  # product_id -> product_info
-        self.names: Dict[str, int] = {}  # name -> product_id
-        self.aliases: Dict[str, int] = {}  # alias -> product_id
-        self._name_to_info: Dict[str, Dict] = {}  # name.lower() -> full product info (no ID collision)
+        self.products: Dict[Tuple[int, str], Dict] = {}  # (product_id, account_name) -> product_info
+        self.names: Dict[str, List[Tuple[int, str]]] = {}  # name.lower() -> [(product_id, account_name), ...]
+        self.aliases: Dict[str, List[Tuple[int, str]]] = {}  # alias.lower() -> [(product_id, account_name), ...]
+        self._name_to_info: Dict[Tuple[str, str], Dict] = {}  # (name.lower(), account_name) -> full product info
+        self._id_entries: Dict[int, list] = {}  # product_id -> [info1, info2, ...] for all accounts
 
         # Determine CSV paths based on user (with fallback to global)
         if telegram_user_id:
@@ -1048,17 +963,19 @@ class ProductMatcher:
                     'unit': 'шт',
                     'account_name': account_name
                 }
-                self.products[product_id] = info
+                self.products[(product_id, account_name)] = info
 
-                self.names[name.lower()] = product_id
-                self._name_to_info[name.lower()] = info
+                # Add name for matching
+                self.names.setdefault(name.lower(), []).append((product_id, account_name))
+                self._name_to_info[(name.lower(), account_name)] = info
+                self._id_entries.setdefault(product_id, []).append(info)
 
         logger.info(f"✅ Loaded {len(self.products)} products from CSV for user {self.telegram_user_id}")
 
         # Debug: показать первые 5 ID
         if self.products:
             sample_ids = list(self.products.keys())[:5]
-            logger.info(f"   Sample product IDs: {sample_ids}")
+            logger.info(f"   Sample product keys: {sample_ids}")
 
     def load_aliases(self):
         """Load product aliases from database (with CSV fallback)"""
@@ -1084,13 +1001,42 @@ class ProductMatcher:
                     alias = normalize_text_for_matching(row['alias_text'])
                     item_id = int(row['poster_item_id'])
 
-                    # Verify that this product exists
-                    if item_id in self.products:
-                        self.aliases[alias] = item_id
+                    # Find candidates by ID to resolve collisions
+                    candidates = self._id_entries.get(item_id, [])
+                    if not candidates:
+                        filtered_count += 1
+                        continue
+
+                    target_info = None
+                    if len(candidates) == 1:
+                        target_info = candidates[0]
+                    else:
+                        db_item_name = row.get('poster_item_name', '').strip().lower()
+                        best_match = None
+                        best_score = -1
+                        for cand in candidates:
+                            cand_name = cand['name'].lower()
+                            if db_item_name == cand_name:
+                                target_info = cand
+                                break
+                            score = fuzz.ratio(db_item_name, cand_name)
+                            if score > best_score:
+                                best_score = score
+                                best_match = cand
+                        if not target_info and best_match and best_score >= 80:
+                            target_info = best_match
+                        if not target_info:
+                            for cand in candidates:
+                                if cand.get('account_name') == 'Pizzburg':
+                                    target_info = cand
+                                    break
+                            if not target_info:
+                                target_info = candidates[0]
+
+                    if target_info:
+                        self.aliases.setdefault(alias, []).append((target_info['id'], target_info['account_name']))
                     else:
                         filtered_count += 1
-                        if filtered_count <= 3:  # Показать первые 3 отфильтрованных
-                            logger.warning(f"⚠️ Alias '{alias}' references non-existent product ID {item_id}")
 
                 if filtered_count > 0:
                     logger.warning(f"⚠️ Filtered out {filtered_count}/{product_count} product aliases (product IDs not found in self.products)")
@@ -1123,124 +1069,30 @@ class ProductMatcher:
                 alias = normalize_text_for_matching(row['alias_text'])
                 item_id = int(row['poster_item_id'])
 
-                # Verify that this product exists
-                if item_id in self.products:
-                    self.aliases[alias] = item_id
-                else:
-                    logger.warning(f"Alias '{alias}' references non-existent product {item_id}")
+                candidates = self._id_entries.get(item_id, [])
+                for cand in candidates:
+                    self.aliases.setdefault(alias, []).append((cand['id'], cand['account_name']))
 
         logger.info(f"Loaded {len(self.aliases)} product aliases from CSV for user {self.telegram_user_id}")
 
-    def match(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE) -> Optional[Tuple[int, str, str, int, str]]:
+    def match(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, target_account: Optional[str] = None) -> Optional[Tuple[int, str, str, int, str]]:
         """
         Match product by text (aliases, exact, or fuzzy)
 
         Args:
             text: Product text to match
             score_cutoff: Minimum fuzzy match score
+            target_account: Optional target account name to prioritize
 
         Returns:
             Tuple of (product_id, name, unit, score, account_name) or None
             Score is 100 for exact/alias matches, lower for fuzzy
         """
-        if not text:
-            return None
+        return self.match_with_priority(text, score_cutoff=score_cutoff, target_account=target_account)
 
-        # Normalize text for better matching
-        text_lower = normalize_text_for_matching(text)
-
-        # 1. Exact alias match (highest priority)
-        if text_lower in self.aliases:
-            product_id = self.aliases[text_lower]
-            product = self.products.get(product_id)
-            if product:
-                logger.debug(f"Product alias match: '{text}' -> {product}")
-                return (product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
-
-        # 2. Exact name match
-        if text_lower in self._name_to_info:
-            product = self._name_to_info[text_lower]
-            logger.debug(f"Product exact match: '{text}' -> {product}")
-            return (product['id'], product['name'], product['unit'], 100, product.get('account_name', 'Unknown'))
-
-        # 3. Fuzzy match on aliases first (higher confidence)
-        if self.aliases:
-            aliases_list = list(self.aliases.keys())
-
-            # Try token_set_ratio first - better for partial word matches
-            alias_match = process.extractOne(
-                text_lower,
-                aliases_list,
-                scorer=fuzz.token_set_ratio,
-                score_cutoff=score_cutoff
-            )
-
-            # Log top 3 matches for debugging (always show for products)
-            top_matches = process.extract(text_lower, aliases_list, scorer=fuzz.token_set_ratio, limit=3)
-            logger.info(f"      Top 3 product alias matches: {[(m[0][:40], f'{m[1]:.1f}') for m in top_matches]}")
-
-            if alias_match:  # Removed higher threshold - use same as score_cutoff
-                matched_alias = alias_match[0]
-                score = alias_match[1]
-                product_id = self.aliases[matched_alias]
-                product = self.products.get(product_id)
-                if product:
-                    logger.info(f"✅ Product fuzzy alias match: '{text}' -> {product['name']} (score={score})")
-                    return (product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
-
-        # 4. Fuzzy match on product names
-        names_list = list(self.names.keys())
-        name_matches = process.extract(
-            text_lower,
-            names_list,
-            scorer=fuzz.WRatio,
-            score_cutoff=score_cutoff,
-            limit=5
-        )
-
-        # Log top 3 product name matches
-        if names_list and name_matches:
-            logger.info(f"      Top product name matches: {[(m[0][:40], f'{m[1]:.1f}') for m in name_matches[:3]]}")
-
-        # Find the best valid name match
-        for matched_name, score, _ in name_matches:
-            text_words = set(text_lower.split())
-            matched_words = set(matched_name.split())
-            common_tokens = text_words & matched_words
-            
-            # Stricter rejection for raw names 
-            is_suspicious = (
-                score < 85 and 
-                len(common_tokens) < 2 and 
-                len(text_words) > 1 and 
-                len(matched_words) > 1
-            )
-            
-            # Also reject very short generic overlaps with high score but low commonality
-            is_generic_overlap = (
-                score >= 85 and 
-                len(common_tokens) == 1 and 
-                len(text_words) > 1 and 
-                len(matched_words) > 1 and
-                len(list(common_tokens)[0]) < 5
-            )
-
-            if is_suspicious or is_generic_overlap:
-                logger.info(f"      ❌ Rejected product name match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
-                continue
-                
-            product = self._name_to_info.get(matched_name)
-            if not product:
-                continue
-            logger.debug(f"Product fuzzy match: '{text}' -> {product['name']} (score={score})")
-            return (product['id'], product['name'], product['unit'], score, product.get('account_name', 'Unknown'))
-
-        logger.warning(f"Product not matched: '{text}'")
-        return None
-
-    def match_with_priority(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, primary_account: str = "Pizzburg") -> Optional[Tuple[int, str, str, int, str]]:
+    def match_with_priority(self, text: str, score_cutoff: int = MIN_MATCH_CONFIDENCE, primary_account: str = "Pizzburg", target_account: Optional[str] = None) -> Optional[Tuple[int, str, str, int, str]]:
         """
-        Match product with priority: search in primary account first, then secondary accounts
+        Match product with priority: search in primary/target account first, then secondary accounts
 
         Logic: "Всё общее идет автоматически в Pizzburg, а то что нет в Pizzburg - поставляется в Pizzburg-cafe"
 
@@ -1248,6 +1100,7 @@ class ProductMatcher:
             text: Product text to match
             score_cutoff: Minimum fuzzy match score
             primary_account: Name of primary account (default: "Pizzburg")
+            target_account: Optional target account to prioritize above primary
 
         Returns:
             Tuple of (product_id, name, unit, score, account_name) or None
@@ -1263,15 +1116,17 @@ class ProductMatcher:
 
         # 1. Check aliases first
         if text_lower in self.aliases:
-            product_id = self.aliases[text_lower]
-            product = self.products.get(product_id)
-            if product:
-                all_matches.append((product_id, product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
+            for product_id, account_name in self.aliases[text_lower]:
+                product = self.products.get((product_id, account_name))
+                if product:
+                    all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
         # 2. Check exact name matches
-        if text_lower in self._name_to_info and not all_matches:
-            product = self._name_to_info[text_lower]
-            all_matches.append((product['id'], product['name'], product['unit'], 100, product.get('account_name', 'Unknown')))
+        if not all_matches and text_lower in self.names:
+            for product_id, account_name in self.names[text_lower]:
+                product = self.products.get((product_id, account_name))
+                if product:
+                    all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
         # 3. Fuzzy matching - search in aliases first
         if not all_matches and self.aliases:
@@ -1309,11 +1164,11 @@ class ProductMatcher:
                     logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
                     continue
 
-                product_id = self.aliases[matched_alias]
-                product = self.products.get(product_id)
-                if not product:
-                    continue
-                all_matches.append((product_id, product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
+                for product_id, account_name in self.aliases[matched_alias]:
+                    product = self.products.get((product_id, account_name))
+                    if not product:
+                        continue
+                    all_matches.append((product_id, product['name'], product['unit'], score, account_name))
 
         # 4. Fuzzy matching - search in names
         if not all_matches:
@@ -1327,37 +1182,43 @@ class ProductMatcher:
             )
 
             for matched_name, score, _ in name_matches:
-                product = self._name_to_info.get(matched_name)
-                if not product:
-                    continue
-                all_matches.append((product['id'], product['name'], product['unit'], score, product.get('account_name', 'Unknown')))
+                for product_id, account_name in self.names[matched_name]:
+                    product = self.products.get((product_id, account_name))
+                    if not product:
+                        continue
+                    all_matches.append((product['id'], product['name'], product['unit'], score, account_name))
 
         if not all_matches:
             logger.warning(f"Product not matched (priority search): '{text}'")
             return None
 
-        # Priority logic: prefer primary account (Pizzburg), then others
-        primary_matches = [m for m in all_matches if m[4] == primary_account]
-        secondary_matches = [m for m in all_matches if m[4] != primary_account]
+        # Priority logic: sort matches
+        def sort_key(m):
+            acc = m[4]
+            is_target = (acc == target_account) if target_account else False
+            is_primary = (acc == primary_account)
+            return (is_target, is_primary, m[3])
 
-        if primary_matches:
-            # Return best match from primary account
-            best_match = max(primary_matches, key=lambda x: x[3])  # Sort by score
-            logger.info(f"✅ Found in PRIMARY account ({primary_account}): '{text}' -> {best_match[1]} (score={best_match[3]})")
-            return best_match
-        elif secondary_matches:
-            # Return best match from secondary accounts
-            best_match = max(secondary_matches, key=lambda x: x[3])
-            logger.info(f"✅ Found in SECONDARY account ({best_match[4]}): '{text}' -> {best_match[1]} (score={best_match[3]})")
-            return best_match
+        best_match = max(all_matches, key=sort_key)
+        logger.info(f"✅ Found product match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
+        return best_match
 
-        return None
+    def get_product_info(self, product_id: int, account_name: Optional[str] = None) -> Optional[Dict]:
+        """Get product info by ID (and optional account name)"""
+        if account_name:
+            return self.products.get((product_id, account_name))
+        
+        candidates = self._id_entries.get(product_id, [])
+        if not candidates:
+            return None
+        
+        # Prefer Pizzburg if present
+        for cand in candidates:
+            if cand.get('account_name') == 'Pizzburg':
+                return cand
+        return candidates[0]
 
-    def get_product_info(self, product_id: int) -> Optional[Dict]:
-        """Get product info by ID"""
-        return self.products.get(product_id)
-
-    def add_alias(self, alias_text: str, product_id: int, notes: str = ""):
+    def add_alias(self, alias_text: str, product_id: int, notes: str = "", account_name: Optional[str] = None):
         """
         Add new product alias and save to database (with CSV fallback)
 
@@ -1365,57 +1226,64 @@ class ProductMatcher:
             alias_text: The alias text to add
             product_id: The product ID this alias maps to
             notes: Optional notes about this alias
+            account_name: Optional account name this alias maps to
         """
-        if product_id not in self.products:
+        candidates = self._id_entries.get(product_id, [])
+        if not candidates:
             logger.error(f"Cannot add alias: product {product_id} does not exist")
             return False
 
+        target_candidates = [c for c in candidates if c['account_name'] == account_name] if account_name else candidates
+        if not target_candidates:
+            target_candidates = candidates
+
         alias_lower = normalize_text_for_matching(alias_text)
-        product = self.products.get(product_id, {})
 
-        # Check if alias already exists (avoid duplicates)
-        if alias_lower in self.aliases and self.aliases[alias_lower] == product_id:
-            logger.info(f"Alias already exists: '{alias_text}' -> {product_id}")
-            return True  # Not an error, just already exists
+        # Add to memory for all matching candidates
+        for cand in target_candidates:
+            acc_name = cand['account_name']
+            current_aliases = self.aliases.setdefault(alias_lower, [])
+            if (product_id, acc_name) not in current_aliases:
+                current_aliases.append((product_id, acc_name))
 
-        # Add to memory
-        self.aliases[alias_lower] = product_id
-
-        # Try saving to database first (for Railway/PostgreSQL)
+        # Save to database (only for the first/main candidate to avoid duplicates, but with correct name)
+        target_cand = target_candidates[0]
+        db_success = False
         if self.telegram_user_id:
             try:
                 from database import get_database
                 db = get_database()
-                success = db.add_ingredient_alias(
+                db_success = db.add_ingredient_alias(
                     telegram_user_id=self.telegram_user_id,
                     alias_text=alias_text,
                     poster_item_id=product_id,
-                    poster_item_name=product['name'],
+                    poster_item_name=target_cand['name'],
                     source='product',
                     notes=notes
                 )
-                if success:
-                    logger.info(f"✅ Added product alias to database: '{alias_text}' -> {product_id} ({product['name']}) for user {self.telegram_user_id}")
-                    return True
             except Exception as e:
-                logger.warning(f"Could not save alias to database: {e}. Falling back to CSV...")
+                logger.error(f"Failed to save product alias to database: {e}")
 
-        # Fallback: save to CSV (for local development)
-        try:
-            with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    alias_text,
-                    product_id,
-                    product['name'],
-                    'product',
-                    notes
-                ])
-            logger.info(f"Added product alias to CSV: '{alias_text}' -> {product_id} ({product['name']}) for user {self.telegram_user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save alias to CSV: {e}")
-            return False
+        # Fallback to CSV if not saved to DB
+        if not db_success:
+            try:
+                # Append to CSV
+                with open(self.aliases_csv, 'a', encoding='utf-8', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        self.telegram_user_id or "",
+                        alias_text,
+                        product_id,
+                        target_cand['name'],
+                        'product',
+                        notes
+                    ])
+                logger.info(f"Added product alias to CSV: '{alias_text}' -> {product_id} ({target_cand['name']}) for user {self.telegram_user_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to save product alias to CSV: {e}")
+                return False
+        return True
 
     def get_top_matches(self, text: str, limit: int = 5, score_cutoff: int = 60) -> List[Tuple[int, str, str, int]]:
         """
@@ -1449,22 +1317,27 @@ class ProductMatcher:
 
         for match_result in matches:
             matched_text, score, _ = match_result
-            product_id = search_space[matched_text]
-            product = self.products.get(product_id)
-            if not product:
-                continue
-            results.append((
-                product_id,
-                product['name'],
-                product['unit'],
-                score
-            ))
+            for product_id, account_name in search_space[matched_text]:
+                product = self.products.get((product_id, account_name))
+                if not product:
+                    continue
+                display_name = product['name']
+                if account_name != 'Pizzburg':
+                    display_name = f"{display_name} ({account_name})"
+                
+                results.append((
+                    product_id,
+                    display_name,
+                    product['unit'],
+                    score
+                ))
 
-        # Remove duplicates (same product_id) keeping highest score
+        # Remove duplicates (same product_id and display_name combo) keeping highest score
         seen = {}
         for prod_id, name, unit, score in results:
-            if prod_id not in seen or seen[prod_id][3] < score:
-                seen[prod_id] = (prod_id, name, unit, score)
+            combo_key = (prod_id, name)
+            if combo_key not in seen or seen[combo_key][3] < score:
+                seen[combo_key] = (prod_id, name, unit, score)
 
         # Sort by score descending
         final_results = sorted(seen.values(), key=lambda x: x[3], reverse=True)

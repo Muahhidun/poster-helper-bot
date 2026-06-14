@@ -1477,6 +1477,22 @@ def api_supply_ocr(draft_id):
         accounts = db.get_accounts(g.user_id)
         account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
         
+        # Get target account for matching priority
+        draft_info = db.get_supply_draft_with_items(draft_id)
+        target_account = None
+        target_account_id = None
+        if draft_info:
+            target_account_id = draft_info.get('account_id')
+            if not target_account_id and draft_info.get('linked_expense_draft_id'):
+                expense = db.get_expense_draft(draft_info['linked_expense_draft_id'])
+                if expense:
+                    target_account_id = expense.get('poster_account_id')
+            if target_account_id and accounts:
+                for acc in accounts:
+                    if acc['id'] == target_account_id:
+                        target_account = acc['account_name']
+                        break
+                        
         # We need matcher to link items to Poster IDs
         ing_matcher = get_ingredient_matcher(g.user_id)
         prod_matcher = get_product_matcher(g.user_id)
@@ -1501,14 +1517,14 @@ def api_supply_ocr(draft_id):
             account_id = None
             
             # Try ingredient matching first
-            match_result = ing_matcher.match(name)
+            match_result = ing_matcher.match(name, target_account=target_account)
             if match_result:
                 # Returns (ingredient_id, name, unit, score, account_name)
                 item_id, matched_name, _, _, account_name = match_result
                 item_type = 'ingredient'
             else:
                 # Try product matching if ingredient not found
-                prod_match_result = prod_matcher.match(name)
+                prod_match_result = prod_matcher.match(name, target_account=target_account)
                 if prod_match_result:
                     # Returns (product_id, name, unit, score, account_name)
                     item_id, matched_name, _, _, account_name = prod_match_result
@@ -3541,6 +3557,21 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
     accounts = db.get_accounts(user_id)
     account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
 
+    # Get target account for matching priority
+    supply_draft = db.get_supply_draft_with_items(supply_draft_id)
+    target_account = None
+    if supply_draft:
+        target_account_id = supply_draft.get('account_id')
+        if not target_account_id and supply_draft.get('linked_expense_draft_id'):
+            expense = db.get_expense_draft(supply_draft['linked_expense_draft_id'])
+            if expense:
+                target_account_id = expense.get('poster_account_id')
+        if target_account_id and accounts:
+            for acc in accounts:
+                if acc['id'] == target_account_id:
+                    target_account = acc['account_name']
+                    break
+
     rules = db.get_packaging_rules(user_id)
     habits = db.get_ingredient_habits(user_id)
     habits_dict = {(h['poster_ingredient_id'], h.get('account_name', '').strip()): h['default_price'] for h in habits if h['default_price']}
@@ -3558,12 +3589,12 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
             account_name = None
             account_id = None
 
-            match_result = ing_matcher.match(name)
+            match_result = ing_matcher.match(name, target_account=target_account)
             if match_result:
                 item_id, matched_name, _, _, account_name = match_result
                 item_type = 'ingredient'
             else:
-                prod_match_result = prod_matcher.match(name)
+                prod_match_result = prod_matcher.match(name, target_account=target_account)
                 if prod_match_result:
                     item_id, matched_name, _, _, account_name = prod_match_result
                     item_type = 'product'
@@ -3933,12 +3964,23 @@ def api_import_batch():
                 if not res_supplier_id:
                     res_supplier_name = "Фарш (Поставщик фарша)"
                     
+                # Target account determination
+                accounts = db.get_accounts(user_id)
+                target_account = None
+                poster_account_id = draft.get('poster_account_id')
+                if poster_account_id and accounts:
+                    for acc in accounts:
+                        if acc['id'] == poster_account_id:
+                            target_account = acc['account_name']
+                            break
+
                 supply_draft_id = db.create_empty_supply_draft(
                     telegram_user_id=user_id,
                     supplier_name=res_supplier_name,
                     invoice_date=invoice_date,
                     total_sum=draft['amount'],
                     linked_expense_draft_id=draft['id'],
+                    account_id=poster_account_id,
                     source=draft['source'],
                     supplier_id=res_supplier_id
                 )
@@ -3951,12 +3993,11 @@ def api_import_batch():
                     account_name = None
                     account_id = None
                     
-                    match_result = ing_matcher.match("Фарш")
+                    match_result = ing_matcher.match("Фарш", target_account=target_account)
                     if match_result:
                         item_id, matched_name, _, _, account_name = match_result
                         
                     if account_name:
-                        accounts = db.get_accounts(user_id)
                         account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
                         account_id = account_name_to_id.get(account_name)
                         
@@ -3976,19 +4017,30 @@ def api_import_batch():
                 items = draft.get('items', [])
                 if items:
                     invoice_date = date_str[:10] if date_str else datetime.now().strftime("%Y-%m-%d")
+                    poster_account_id = draft.get('poster_account_id')
+                    
+                    # Target account determination
+                    accounts = db.get_accounts(user_id)
+                    target_account = None
+                    if poster_account_id and accounts:
+                        for acc in accounts:
+                            if acc['id'] == poster_account_id:
+                                target_account = acc['account_name']
+                                break
+
                     supply_draft_id = db.create_empty_supply_draft(
                         telegram_user_id=user_id,
                         supplier_name=draft['description'],
                         invoice_date=invoice_date,
                         total_sum=draft['amount'],
                         linked_expense_draft_id=draft['id'],
+                        account_id=poster_account_id,
                         source=draft['source']
                     )
                     if supply_draft_id:
                         from matchers import get_ingredient_matcher, get_product_matcher
                         ing_matcher = get_ingredient_matcher(user_id)
                         prod_matcher = get_product_matcher(user_id)
-                        accounts = db.get_accounts(user_id)
                         account_name_to_id = {acc['account_name']: acc['id'] for acc in accounts} if accounts else {}
                         
                         for item in items:
@@ -4002,12 +4054,12 @@ def api_import_batch():
                             account_name = None
                             account_id = None
                             
-                            match_result = ing_matcher.match(name)
+                            match_result = ing_matcher.match(name, target_account=target_account)
                             if match_result:
                                 item_id, matched_name, _, _, account_name = match_result
                                 item_type = 'ingredient'
                             else:
-                                prod_match_result = prod_matcher.match(name)
+                                prod_match_result = prod_matcher.match(name, target_account=target_account)
                                 if prod_match_result:
                                     item_id, matched_name, _, _, account_name = prod_match_result
                                     item_type = 'product'
@@ -4036,6 +4088,7 @@ def api_import_batch():
                         invoice_date=invoice_date,
                         total_sum=draft['amount'],
                         linked_expense_draft_id=draft['id'],
+                        account_id=draft.get('poster_account_id'),
                         source=draft['source']
                     )
                     linked_supplies_count += 1
