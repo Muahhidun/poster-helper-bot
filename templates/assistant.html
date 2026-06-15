@@ -801,6 +801,15 @@
     .draft-row.completed { background-color: rgba(34, 197, 94, 0.03); }
     .draft-row.partial { background-color: rgba(234, 179, 8, 0.03); }
     .draft-row.poster-mismatch { background-color: rgba(239, 68, 68, 0.02); }
+
+    /* Supplies sidebar card premium styling */
+    .assistant-supply-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .assistant-supply-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+    }
 </style>
 
 <div class="assistant-container">
@@ -901,7 +910,8 @@
     <div class="drafts-sidebar">
         <!-- Sidebar Tabs -->
         <div class="sidebar-tabs">
-            <button class="sidebar-tab-btn active" onclick="switchTab('cash')" id="tab-btn-cash">Наличка</button>
+            <button class="sidebar-tab-btn active" onclick="switchTab('supplies')" id="tab-btn-supplies">📦 Поставки</button>
+            <button class="sidebar-tab-btn" onclick="switchTab('cash')" id="tab-btn-cash">Наличка</button>
             <button class="sidebar-tab-btn" onclick="switchTab('kaspi')" id="tab-btn-kaspi">Kaspi Pay</button>
             <button class="sidebar-tab-btn" onclick="switchTab('halyk')" id="tab-btn-halyk">Halyk</button>
             <button class="sidebar-tab-btn" onclick="switchTab('memory')" id="tab-btn-memory">🧠 Память ИИ</button>
@@ -910,8 +920,15 @@
         <!-- Drafts Content (Form wrapping all tabs to support action buttons) -->
         <form id="drafts-form" method="POST" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
             <div class="drafts-tab-content">
+                <!-- Supplies Tab -->
+                <div class="drafts-account-section active" id="tab-section-supplies">
+                    <div id="assistant-supplies-container">
+                        {% include 'assistant_supplies_table.html' %}
+                    </div>
+                </div>
+
                 <!-- Cash Account Tab -->
-                <div class="drafts-account-section active" id="tab-section-cash">
+                <div class="drafts-account-section" id="tab-section-cash">
                     <div class="reconciliation-row mb-3">
                         <label for="cash-fact-input">Факт в кассе:</label>
                         <input type="number" id="cash-fact-input" class="reconciliation-input" 
@@ -1428,6 +1445,64 @@
             }
         }
 
+        // Delete supply draft
+        if (e.target.closest('.btn-delete-supply-inline')) {
+            const btn = e.target.closest('.btn-delete-supply-inline');
+            if (!confirm('Удалить эту поставку?')) return;
+            const id = btn.dataset.id;
+
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/supplies/delete/${id}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast('Поставка удалена', 'success');
+                    const card = btn.closest('.assistant-supply-card');
+                    if (card) card.remove();
+                } else {
+                    showToast('Ошибка при удалении поставки', 'error');
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('Ошибка сети при удалении', 'error');
+                btn.disabled = false;
+            }
+        }
+
+        // Process supply draft (send to Poster)
+        if (e.target.closest('.btn-process-supply-inline')) {
+            const btn = e.target.closest('.btn-process-supply-inline');
+            const id = btn.dataset.id;
+
+            btn.disabled = true;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⌛ ...';
+            try {
+                const res = await fetch(`/supplies/process/${id}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast('Поставка успешно создана в Poster!', 'success');
+                    const card = btn.closest('.assistant-supply-card');
+                    if (card) card.remove();
+                    
+                    // Reload dynamic sections after delay to let updates complete and render in Poster
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    showToast('Ошибка: ' + (data.error || 'Неизвестная ошибка'), 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('Ошибка сети при обработке', 'error');
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
         // Autocomplete item click
         if (e.target.classList.contains('autocomplete-item')) {
             const item = e.target;
@@ -1706,6 +1781,13 @@
                 document.getElementById('drafts-tbody-cash').innerHTML = data.cash_html;
                 document.getElementById('drafts-tbody-kaspi').innerHTML = data.kaspi_html;
                 document.getElementById('drafts-tbody-halyk').innerHTML = data.halyk_html;
+                
+                if (data.supplies_html) {
+                    const suppliesContainer = document.getElementById('assistant-supplies-container');
+                    if (suppliesContainer) {
+                        suppliesContainer.innerHTML = data.supplies_html;
+                    }
+                }
                 
                 // Re-bind autocomplete and change listeners to the newly rendered rows
                 setupTableListeners();

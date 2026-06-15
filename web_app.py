@@ -1851,6 +1851,32 @@ def view_assistant():
     all_drafts = db.get_expense_drafts(g.user_id, status="all")
     drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == selected_date]
 
+    # Load supply drafts for date
+    all_supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
+    supply_drafts = []
+    for sd in all_supply_drafts:
+        created_date = get_date_in_kz_tz(sd.get('created_at'), KZ_TZ)
+        if created_date != selected_date:
+            continue
+        sd_with_items = db.get_supply_draft_with_items(sd['id'])
+        if sd_with_items:
+            if 'items' in sd_with_items:
+                for item in sd_with_items['items']:
+                    if 'poster_ingredient_id' in item and 'ingredient_id' not in item:
+                        item['ingredient_id'] = item['poster_ingredient_id']
+                    if 'ingredient_name' not in item:
+                        item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
+                    if 'price_per_unit' in item and 'price' not in item:
+                        item['price'] = item['price_per_unit']
+            if sd_with_items.get('linked_expense_draft_id'):
+                expense = db.get_expense_draft(sd_with_items['linked_expense_draft_id'])
+                if expense:
+                    sd_with_items['linked_expense_amount'] = expense.get('amount', 0)
+                    sd_with_items['linked_expense_source'] = expense.get('source', 'cash')
+            if not sd_with_items.get('source'):
+                sd_with_items['source'] = 'cash'
+            supply_drafts.append(sd_with_items)
+
     # Load categories, accounts, poster accounts
     categories = []
     accounts = []
@@ -1968,6 +1994,7 @@ def view_assistant():
 
     return render_template('assistant.html',
                            drafts=drafts,
+                           supply_drafts=supply_drafts,
                            categories=categories,
                            accounts=accounts,
                            poster_accounts=poster_accounts_list,
@@ -2617,6 +2644,32 @@ def _api_assistant_message_impl():
     updated_drafts_all = db.get_expense_drafts(user_id, status="all")
     updated_drafts = [d for d in updated_drafts_all if d.get('created_at') and str(d['created_at'])[:10] == date_str]
     
+    # Reload supply drafts
+    all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
+    supply_drafts = []
+    for sd in all_supply_drafts:
+        created_date = get_date_in_kz_tz(sd.get('created_at'), KZ_TZ)
+        if created_date != date_str:
+            continue
+        sd_with_items = db.get_supply_draft_with_items(sd['id'])
+        if sd_with_items:
+            if 'items' in sd_with_items:
+                for item in sd_with_items['items']:
+                    if 'poster_ingredient_id' in item and 'ingredient_id' not in item:
+                        item['ingredient_id'] = item['poster_ingredient_id']
+                    if 'ingredient_name' not in item:
+                        item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
+                    if 'price_per_unit' in item and 'price' not in item:
+                        item['price'] = item['price_per_unit']
+            if sd_with_items.get('linked_expense_draft_id'):
+                expense = db.get_expense_draft(sd_with_items['linked_expense_draft_id'])
+                if expense:
+                    sd_with_items['linked_expense_amount'] = expense.get('amount', 0)
+                    sd_with_items['linked_expense_source'] = expense.get('source', 'cash')
+            if not sd_with_items.get('source'):
+                sd_with_items['source'] = 'cash'
+            supply_drafts.append(sd_with_items)
+
     # Fetch list of accounts and poster_accounts for rendering
     poster_accounts_list = []
     poster_accounts = db.get_accounts(user_id)
@@ -2638,6 +2691,7 @@ def _api_assistant_message_impl():
     cash_html = render_template('assistant_drafts_table.html', drafts=updated_drafts, account_type='cash', accounts=accounts, poster_accounts=poster_accounts_list)
     kaspi_html = render_template('assistant_drafts_table.html', drafts=updated_drafts, account_type='kaspi', accounts=accounts, poster_accounts=poster_accounts_list)
     halyk_html = render_template('assistant_drafts_table.html', drafts=updated_drafts, account_type='halyk', accounts=accounts, poster_accounts=poster_accounts_list)
+    supplies_html = render_template('assistant_supplies_table.html', supply_drafts=supply_drafts)
     
     return jsonify({
         'success': True,
@@ -2646,6 +2700,7 @@ def _api_assistant_message_impl():
         'cash_html': cash_html,
         'kaspi_html': kaspi_html,
         'halyk_html': halyk_html,
+        'supplies_html': supplies_html,
         'assistant_memory': db.get_assistant_memory(user_id)
     })
 
