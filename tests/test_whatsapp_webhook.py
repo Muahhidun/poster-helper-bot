@@ -1,0 +1,219 @@
+import json
+import os
+import pytest
+import threading
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from tests.conftest import TEST_USER_ID
+
+@pytest.fixture
+def app_client():
+    from web_app import app
+    app.config['TESTING'] = True
+    return app.test_client()
+
+@pytest.fixture
+def mock_whatsapp_config():
+    """Mock config settings for WhatsApp testing"""
+    with patch("config.WHATSAPP_GROUP_ID", "120363000000000000@g.us"), \
+         patch("config.WHATSAPP_USER_ID_MAPPING", TEST_USER_ID), \
+         patch("config.WHATSAPP_API_URL", "https://api.green-api.com"), \
+         patch("config.WHATSAPP_INSTANCE_ID", "12345"), \
+         patch("config.WHATSAPP_API_TOKEN", "mock_token"):
+        yield
+
+@pytest.fixture(autouse=True)
+def patch_thread():
+    """Safely mock threading.Thread to run the WhatsApp worker synchronously without breaking flask_limiter timers"""
+    original_thread = threading.Thread
+    
+    class MockThread(original_thread):
+        def start(self):
+            target_name = getattr(self._target, '__name__', '')
+            if target_name == '_process_whatsapp_async':
+                # Run the target function synchronously in the test thread
+                self._target(*self._args, **self._kwargs)
+            else:
+                super().start()
+                
+    with patch("threading.Thread", new=MockThread):
+        yield
+
+def test_whatsapp_webhook_ignored_type(app_client):
+    """Webhook ignores non-message webhooks"""
+    response = app_client.post(
+        '/api/whatsapp/webhook',
+        json={"typeWebhook": "stateInstanceChanged"}
+    )
+    assert response.status_code == 200
+    assert response.data.decode('utf-8') == 'Ignored webhook type'
+
+def test_whatsapp_webhook_ignored_chat(app_client, mock_whatsapp_config):
+    """Webhook ignores messages from other chats/groups"""
+    payload = {
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {
+            "chatId": "wrong_group@g.us"
+        }
+    }
+    response = app_client.post(
+        '/api/whatsapp/webhook',
+        json=payload
+    )
+    assert response.status_code == 200
+    assert response.data.decode('utf-8') == 'Ignored non-target chat'
+
+def test_whatsapp_webhook_unconfigured_user(app_client):
+    """Webhook returns error or ignores if user mapping is 0/unset"""
+    with patch("config.WHATSAPP_GROUP_ID", "120363000000000000@g.us"), \
+         patch("config.WHATSAPP_USER_ID_MAPPING", 0):
+        
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {
+                "chatId": "120363000000000000@g.us"
+            }
+        }
+        response = app_client.post(
+            '/api/whatsapp/webhook',
+            json=payload
+        )
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'User mapping not configured'
+
+def test_whatsapp_webhook_no_content(app_client, mock_whatsapp_config):
+    """Webhook ignores messages that have no text and no file"""
+    payload = {
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {
+            "chatId": "120363000000000000@g.us"
+        },
+        "messageData": {
+            "typeMessage": "other"
+        }
+    }
+    response = app_client.post(
+        '/api/whatsapp/webhook',
+        json=payload
+    )
+    assert response.status_code == 200
+    assert response.data.decode('utf-8') == 'No content to parse'
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config):
+    """Webhook successfully handles a text message and calls Gemini asynchronously"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    # Mocking Gemini response
+    mock_agent_response = {
+        "response_text": "Расход сохранен.",
+        "actions": [{"action": "create_expense", "amount": 500, "description": "Молоко"}],
+        "_model_used": "mock-gemini"
+    }
+    
+    # Mock action execution
+    mock_execute_actions.return_value = ("Расход сохранен.", ["Расход: Молоко (500₸, Прочее)"])
+
+    payload = {
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {
+            "chatId": "120363000000000000@g.us"
+        },
+        "messageData": {
+            "typeMessage": "textMessage",
+            "textMessageData": {
+                "textMessage": "Расход молоко 500"
+            }
+        }
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
+        response = app_client.post(
+            '/api/whatsapp/webhook',
+            json=payload
+        )
+        
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'OK'
+        
+        # Verify Gemini agent was called with correct message text
+        mock_call_gemini.assert_called_once()
+        assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
+        
+        # Verify actions executed
+        mock_execute_actions.assert_called_once()
+        assert mock_execute_actions.call_args[0][0] == TEST_USER_ID
+        assert mock_execute_actions.call_args[0][1] == [{"action": "create_expense", "amount": 500, "description": "Молоко"}]
+        
+        # Verify message was sent to WhatsApp
+        mock_send_whatsapp.assert_called_once()
+        sent_chat_id = mock_send_whatsapp.call_args[0][0]
+        sent_message = mock_send_whatsapp.call_args[0][1]
+        
+        assert sent_chat_id == "120363000000000000@g.us"
+        assert "🤖 *Ассистент PizzBurg*" in sent_message
+        assert "Расход сохранен" in sent_message
+        assert "Расход: Молоко" in sent_message
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+@patch("web_app.download_whatsapp_media")
+def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config, tmp_path):
+    """Webhook downloads media, passes it to Gemini, and replies successfully"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    # Create a dummy image file
+    dummy_file = tmp_path / "test.jpg"
+    dummy_file.write_bytes(b"dummy image data")
+    
+    mock_download.return_value = str(dummy_file)
+    
+    # Mocking Gemini response
+    mock_agent_response = {
+        "response_text": "Чек распознан.",
+        "actions": [{"action": "create_expense", "amount": 1200, "description": "Сливки"}],
+        "_model_used": "mock-gemini"
+    }
+    mock_execute_actions.return_value = ("Чек распознан.", ["Расход: Сливки (1200₸, Прочее)"])
+
+    payload = {
+        "typeWebhook": "incomingFileMessageReceived",
+        "senderData": {
+            "chatId": "120363000000000000@g.us"
+        },
+        "messageData": {
+            "typeMessage": "imageMessage",
+            "imageMessageData": {
+                "downloadUrl": "https://api.green-api.com/download/some_id.jpg",
+                "fileName": "receipt.jpg",
+                "caption": "расход сливки"
+            }
+        }
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
+        response = app_client.post(
+            '/api/whatsapp/webhook',
+            json=payload
+        )
+        
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'OK'
+        
+        # Verify media download was called
+        from unittest.mock import ANY
+        mock_download.assert_called_once_with("https://api.green-api.com/download/some_id.jpg", ANY)
+        
+        # Verify Gemini agent was called with caption and image data
+        mock_call_gemini.assert_called_once()
+        assert mock_call_gemini.call_args.kwargs['user_message'] == "расход сливки"
+        media_files = mock_call_gemini.call_args.kwargs['media_files']
+        assert len(media_files) == 1
+        assert media_files[0]['mime_type'] == 'image/jpeg'
+        assert media_files[0]['data'] == b"dummy image data"
+        
+        # Verify WhatsApp message sent
+        mock_send_whatsapp.assert_called_once()
+        assert "Чек распознан" in mock_send_whatsapp.call_args[0][1]
+

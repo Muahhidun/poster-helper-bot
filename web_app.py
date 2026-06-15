@@ -100,7 +100,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 # ========================================
 
 # Paths that don't require authentication
-OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health', '/telegram-webhook', '/mini-app')
+OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health', '/telegram-webhook', '/mini-app', '/api/whatsapp/webhook')
 
 
 def get_home_for_role(role):
@@ -2204,437 +2204,8 @@ def _api_assistant_message_impl():
     response_text = agent_response.get('response_text', 'Не удалось получить ответ.')
     actions = agent_response.get('actions', [])
 
-    # Human-readable labels for action error reporting
-    _ACTION_LABELS = {
-        'create_expense': 'создание расхода',
-        'update_expense': 'обновление расхода',
-        'add_supply_items': 'добавление позиций в поставку',
-        'create_supply': 'создание поставки',
-        'find_pos_receipt': 'поиск чека в Poster',
-        'delete_pos_receipt': 'удаление чека из Poster',
-        'update_memory': 'обновление памяти',
-        'add_to_memory': 'добавление правила в память',
-    }
-    action_errors = []
-
-    # Process actions safely
-    for action in actions:
-        try:
-            act_type = action.get('action')
-            
-            # 1. Create Expense
-            if act_type == 'create_expense':
-                amount_val = action.get('amount')
-                try:
-                    amount = float(amount_val) if amount_val is not None else 0
-                except (ValueError, TypeError):
-                    amount = 0
-
-                # Normalize category to a real Poster category via fuzzy matching,
-                # so handwritten-sheet categories land exactly on the catalog names
-                category = action.get('category', 'Прочее')
-                try:
-                    from matchers import get_category_matcher
-                    cat_matcher = get_category_matcher(user_id)
-                    cat_match = cat_matcher.match(category) or cat_matcher.match(action.get('description', ''))
-                    if cat_match:
-                        category = cat_match[1]
-                except Exception as cat_err:
-                    logger.warning(f"Category matching failed for '{category}': {cat_err}")
-
-                expense_type = action.get('expense_type', 'transaction')
-                is_income = bool(action.get('is_income', False))
-
-                expense_draft_id = db.create_expense_draft(
-                    telegram_user_id=user_id,
-                    amount=amount,
-                    description=action.get('description'),
-                    expense_type=expense_type,
-                    category=category,
-                    source=action.get('source', 'cash'),
-                    is_income=is_income,
-                    created_at=date_str
-                )
-
-                if expense_type == 'supply' and expense_draft_id:
-                    try:
-                        description = action.get('description', '').strip()
-                        source_val = action.get('source', 'cash')
-                        items = action.get('items', [])
-
-                        if _check_duplicate_supply(db, user_id, description, amount, date_str):
-                            logger.warning(f"Skipping duplicate supply from create_expense for '{description}' {amount}")
-                        elif items:
-                            try:
-                                items = parser.reconcile_items(items)
-                            except Exception:
-                                pass
-                            invoice = {'supplier': description, 'total_sum': amount, 'items': items}
-                            create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source_val)
-                        else:
-                            resolved_name, resolved_id = resolve_supplier_name_and_id(user_id, description)
-                            db.create_empty_supply_draft(
-                                telegram_user_id=user_id,
-                                supplier_name=resolved_name or description,
-                                invoice_date=date_str,
-                                total_sum=amount,
-                                linked_expense_draft_id=expense_draft_id,
-                                source=source_val,
-                                supplier_id=resolved_id
-                            )
-                    except Exception as supply_err:
-                        logger.warning(f"Failed to auto-create supply draft for expense {expense_draft_id}: {supply_err}")
-                
-            # 2. Update Expense
-            elif act_type == 'update_expense':
-                draft_id = action.get('id')
-                if draft_id and not str(draft_id).startswith('placeholder'):
-                    update_fields = {}
-                    if 'amount' in action and action['amount'] is not None:
-                        try:
-                            update_fields['amount'] = float(action['amount'])
-                        except (ValueError, TypeError):
-                            pass
-                    if 'description' in action and action['description'] is not None:
-                        update_fields['description'] = action['description']
-                    if 'category' in action and action['category'] is not None:
-                        update_fields['category'] = action['category']
-                    if 'source' in action and action['source'] is not None:
-                        update_fields['source'] = action['source']
-
-                    if update_fields:
-                        db.update_expense_draft(draft_id, **update_fields)
-                
-            # 3. Add Supply Items
-            elif act_type == 'add_supply_items':
-                expense_draft_id = action.get('expense_draft_id')
-                items = action.get('items', [])
-
-                try:
-                    items = parser.reconcile_items(items)
-                except Exception as rec_err:
-                    logger.warning(f"Item reconciliation failed: {rec_err}")
-
-                supplies = db.get_supply_drafts(user_id, status="all")
-                supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
-
-                if supply:
-                    _add_items_to_supply_draft(db, user_id, supply['id'], items)
-                else:
-                    logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
-                    
-            # 4. Create Supply
-            elif act_type == 'create_supply':
-                supplier_name = action.get('supplier_name', 'Поставщик')
-                total_sum_val = action.get('total_sum', 0)
-                try:
-                    total_sum = float(total_sum_val) if total_sum_val is not None else 0.0
-                except (ValueError, TypeError):
-                    total_sum = 0.0
-
-                source = action.get('source', 'kaspi')
-                items = action.get('items', [])
-
-                try:
-                    items = parser.reconcile_items(items)
-                except Exception as rec_err:
-                    logger.warning(f"Item reconciliation failed: {rec_err}")
-
-                items_total = sum(
-                    float(i.get('sum') or 0) for i in items
-                    if i.get('sum') is not None
-                )
-                if items_total > 0 and abs(items_total - total_sum) > 1.0:
-                    logger.info(f"create_supply: correcting total_sum {total_sum} → {items_total}")
-                    total_sum = round(items_total, 2)
-
-                resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
-
-                if _check_duplicate_supply(db, user_id, resolved_supplier_name or supplier_name, total_sum, date_str):
-                    logger.warning(f"Skipping duplicate supply for '{supplier_name}' with sum {total_sum}")
-                    response_text += f"\n⚠️ Поставка «{resolved_supplier_name or supplier_name}» на {total_sum:,.0f}₸ уже существует — пропускаю дубликат."
-                    continue
-
-                expense_draft_id = db.create_expense_draft(
-                    telegram_user_id=user_id,
-                    amount=total_sum,
-                    description=resolved_supplier_name or supplier_name or 'Поставка',
-                    expense_type='supply',
-                    category='Прочее',
-                    source=source,
-                    created_at=date_str
-                )
-
-                invoice = {'supplier': resolved_supplier_name or supplier_name, 'total_sum': total_sum, 'items': items}
-                create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source)
-                            
-            # 5. Find POS Receipt
-            elif act_type == 'find_pos_receipt':
-                amount_val = action.get('amount')
-                order_number = action.get('order_number')
-                
-                clean_order_number = None
-                if order_number is not None:
-                    import re
-                    digits = re.findall(r'\d+', str(order_number))
-                    if digits:
-                        clean_order_number = int(digits[0])
-
-                target_amount = None
-                if amount_val is not None:
-                    try:
-                        target_amount = float(amount_val)
-                    except (ValueError, TypeError):
-                        pass
-
-                if not clean_order_number and not target_amount:
-                    response_text = "Пожалуйста, укажите сумму чека или номер заказа, чтобы я мог найти его."
-                    continue
-
-                poster_accounts = db.get_accounts(user_id)
-                if not poster_accounts:
-                    response_text = "У вас не настроены аккаунты Poster. Не могу выполнить поиск чеков."
-                    continue
-
-                try:
-                    date_param = date_str.replace('-', '')
-                except Exception:
-                    date_param = _kz_now().strftime("%Y%m%d")
-
-                found_matches = []
-
-                for account in poster_accounts:
-                    from poster_client import PosterClient
-                    client = PosterClient(
-                        telegram_user_id=user_id,
-                        poster_token=account['poster_token'],
-                        poster_user_id=account['poster_user_id'],
-                        poster_base_url=account['poster_base_url']
-                    )
-                    
-                    try:
-                        async def _fetch_account_data():
-                            matches = []
-                            result = await client._request('GET', 'dash.getTransactions', params={
-                                'dateFrom': date_param,
-                                'dateTo': date_param
-                            })
-                            transactions = result.get('response', [])
-                            if not isinstance(transactions, list):
-                                return matches
-                            
-                            for tx in transactions:
-                                tx_id = tx.get('transaction_id')
-                                if not tx_id:
-                                    continue
-                                
-                                tx_id_int = int(tx_id)
-                                payed_sum_kzt = float(tx.get('payed_sum', 0)) / 100
-                                
-                                is_match = False
-                                exact_id_match = False
-                                
-                                if clean_order_number is not None:
-                                    if tx_id_int == clean_order_number:
-                                        is_match = True
-                                        exact_id_match = True
-                                    elif str(clean_order_number) in str(tx_id_int):
-                                        is_match = True
-                                    else:
-                                        # Check other fields that might represent the short order number or the close timestamp
-                                        for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number', 'date_close']:
-                                            val = tx.get(key)
-                                            if val is not None:
-                                                try:
-                                                    val_int = int(float(val))
-                                                    if val_int == clean_order_number:
-                                                        is_match = True
-                                                        break
-                                                    elif str(clean_order_number) in str(val_int):
-                                                        is_match = True
-                                                        break
-                                                except (ValueError, TypeError):
-                                                    if str(clean_order_number) in str(val):
-                                                        is_match = True
-                                                        break
-                                
-                                if target_amount is not None:
-                                    # Допускаем разницу из-за скидки (например, сумма чека от 60% до 105% от указанной)
-                                    if 0.6 * target_amount <= payed_sum_kzt <= 1.05 * target_amount:
-                                        is_match = True
-
-                                if is_match:
-                                    products_str = "неизвестно"
-                                    try:
-                                        prod_result = await client._request('GET', 'dash.getTransactionProducts', params={
-                                            'transaction_id': tx_id_int
-                                        })
-                                        products = prod_result.get('response', [])
-                                        if products:
-                                            products_list = []
-                                            for p in products:
-                                                p_name = p.get('product_name', 'Товар')
-                                                p_qty = float(p.get('count', 1))
-                                                products_list.append(f"{p_name} ({p_qty:g} шт)")
-                                            products_str = ", ".join(products_list)
-                                    except Exception as prod_err:
-                                        logger.warning(f"Error fetching products for tx {tx_id_int}: {prod_err}")
-                                    
-                                    close_time = tx.get('date_close', '')
-                                    if close_time:
-                                        if isinstance(close_time, str) and len(close_time) >= 16:
-                                            close_time = close_time[11:16]
-                                        else:
-                                            try:
-                                                # Try parsing as millisecond Unix timestamp
-                                                ts = float(close_time)
-                                                # If it's a 13-digit timestamp, convert to seconds
-                                                if ts > 1e11:
-                                                    ts = ts / 1000.0
-                                                from datetime import datetime
-                                                dt = datetime.fromtimestamp(ts, tz=KZ_TZ)
-                                                close_time = dt.strftime("%H:%M")
-                                            except Exception:
-                                                pass
-                                    
-                                    status_str = "Открыт" if tx.get('status') == '1' else "Закрыт" if tx.get('status') == '2' else f"Статус {tx.get('status')}"
-                                    
-                                    diff = abs(payed_sum_kzt - target_amount) if target_amount is not None else 0
-                                    
-                                    matches.append({
-                                        'transaction_id': tx_id_int,
-                                        'poster_account_id': account['id'],
-                                        'account_name': account['account_name'],
-                                        'payed_sum': payed_sum_kzt,
-                                        'products': products_str,
-                                        'time': close_time,
-                                        'status': status_str,
-                                        'diff': diff,
-                                        'exact_id_match': exact_id_match
-                                    })
-                            return matches
-
-                        result_matches = run_async(_fetch_account_data())
-                        found_matches.extend(result_matches)
-                    except Exception as client_err:
-                        logger.error(f"Error fetching transactions for account {account['account_name']}: {client_err}")
-                    finally:
-                        run_async(client.close())
-
-                # If we have any exact transaction ID matches, filter to keep ONLY them.
-                # This prevents partial/secondary matches (like matching spot_order_id) from cluttering the results
-                # when the user explicitly specified a transaction ID.
-                exact_id_matches = [m for m in found_matches if m.get('exact_id_match')]
-                if exact_id_matches:
-                    found_matches = exact_id_matches
-                
-                if not found_matches:
-                    response_text = f"Чеков за сегодня по вашему запросу не найдено (сумма: {amount_val if amount_val else 'не указана'}, номер заказа: {order_number if order_number else 'не указан'})."
-                elif len(found_matches) == 1:
-                    match = found_matches[0]
-                    response_text = (
-                        f"Найден чек №{match['transaction_id']} в отделе '{match['account_name']}' на сумму {match['payed_sum']:,.0f}₸ ({match['time']}, {match['status']}).\n"
-                        f"Состав чека: {match['products']}.\n\n"
-                        f"Точно он? Удаляем?\n\n"
-                        f"[Метаданные: ID чека: {match['transaction_id']}, ID аккаунта: {match['poster_account_id']}]"
-                    )
-                else:
-                    found_matches.sort(key=lambda x: x['diff'])
-                    lines = [f"Найдено несколько подходящих чеков за сегодня:"]
-                    for idx, match in enumerate(found_matches[:3]):
-                        lines.append(
-                            f"{idx+1}. Чек №{match['transaction_id']} ('{match['account_name']}') на сумму {match['payed_sum']:,.0f}₸ ({match['time']}). Состав: {match['products']}."
-                        )
-                    lines.append("\nПожалуйста, уточните номер заказа (например, напишите 'удали чек №...' или выберите нужный).")
-                    response_text = "\n".join(lines)
-
-            # 6. Delete POS Receipt
-            elif act_type == 'delete_pos_receipt':
-                tx_id = action.get('transaction_id')
-                poster_account_id = action.get('poster_account_id')
-                
-                if not tx_id:
-                    response_text = "Не передан ID чека для удаления."
-                    continue
-                    
-                poster_accounts = db.get_accounts(user_id)
-                account = None
-                if poster_account_id:
-                    account = next((a for a in poster_accounts if a['id'] == int(poster_account_id)), None)
-                if not account and poster_accounts:
-                    account = poster_accounts[0]
-                    
-                if not account:
-                    response_text = "Аккаунт Poster не найден для удаления чека."
-                    continue
-                    
-                from poster_client import PosterClient
-                client = PosterClient(
-                    telegram_user_id=user_id,
-                    poster_token=account['poster_token'],
-                    poster_user_id=account['poster_user_id'],
-                    poster_base_url=account['poster_base_url']
-                )
-                
-                try:
-                    async def _remove():
-                        return await client.remove_transaction(int(tx_id))
-                    success = run_async(_remove())
-                    if success:
-                        response_text = f"Чек №{tx_id} успешно удалён из Poster (отдел '{account['account_name']}')."
-                    else:
-                        response_text = f"Не удалось удалить чек №{tx_id} из Poster."
-                except Exception as del_err:
-                    logger.error(f"Error deleting transaction {tx_id}: {del_err}")
-                    response_text = f"Ошибка при удалении чека №{tx_id}: {str(del_err)}"
-                finally:
-                    run_async(client.close())
-                            
-            # 7. Add to Assistant Memory (append-only, AI cannot delete rules)
-            elif act_type == 'add_to_memory':
-                rule_text = action.get('rule_text', '').strip()
-                if rule_text:
-                    current_memory = db.get_assistant_memory(user_id) or ''
-                    if rule_text in current_memory:
-                        logger.info(f"ℹ️ Rule already exists in memory, skipping: {rule_text[:80]}...")
-                    else:
-                        updated_memory = current_memory.rstrip() + '\n' + rule_text + '\n' if current_memory.strip() else rule_text + '\n'
-                        db.save_assistant_memory(user_id, updated_memory)
-                        logger.info(f"✅ Added rule to memory: {rule_text[:80]}...")
-
-            # Legacy: full memory replacement (kept for backwards compatibility but protected)
-            elif act_type == 'update_memory':
-                mem_text = action.get('memory_text')
-                if mem_text is not None:
-                    current_memory = db.get_assistant_memory(user_id)
-                    old_len = len(current_memory.strip()) if current_memory else 0
-                    new_len = len(mem_text.strip())
-                    if old_len > 50 and new_len < old_len * 0.5:
-                        logger.warning(
-                            f"⚠️ Blocked memory update: new text ({new_len} chars) is less than 50% of current ({old_len} chars). Skipping."
-                        )
-                    else:
-                        db.save_assistant_memory(user_id, mem_text)
-                            
-        except Exception as action_err:
-            logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
-            label = _ACTION_LABELS.get(action.get('action'), f"действие {action.get('action')}")
-            detail = ''
-            if action.get('supplier_name'):
-                detail = f" ({action.get('supplier_name')}"
-                if action.get('total_sum'):
-                    detail += f", {action.get('total_sum')}₸"
-                detail += ")"
-            elif action.get('description'):
-                detail = f" ({action.get('description')})"
-            action_errors.append(
-                f"⚠️ Не удалось выполнить: {label}{detail}. Ошибка: {action_err}. "
-                f"Данные не потеряны — попробуйте повторить или внесите вручную."
-            )
-
-    # Surface action errors in the chat bubble instead of failing silently
-    if action_errors:
-        response_text = (response_text + "\n\n" if response_text else "") + "\n".join(action_errors)
+    # Execute assistant actions via the shared engine
+    response_text, _ = execute_assistant_actions(user_id, actions, date_str, response_text)
 
     # Save assistant message to database
     model_used = agent_response.get('_model_used', 'gemini-3.5-flash')
@@ -8688,6 +8259,661 @@ def start_background_sync():
 # Auto-start background sync when module is imported (production)
 if os.getenv('USE_WEBHOOK') == 'true' or os.getenv('RAILWAY_ENVIRONMENT'):
     start_background_sync()
+
+
+# ========================================
+# WhatsApp Group Integration (Green-API)
+# ========================================
+
+def send_whatsapp_message(chat_id: str, message: str) -> bool:
+    """Send text message to WhatsApp group/chat via Green-API"""
+    import requests
+    from config import WHATSAPP_API_URL, WHATSAPP_INSTANCE_ID, WHATSAPP_API_TOKEN
+    
+    if not WHATSAPP_INSTANCE_ID or not WHATSAPP_API_TOKEN:
+        logger.warning("WhatsApp instance credentials not set. Cannot send message.")
+        return False
+        
+    url = f"{WHATSAPP_API_URL.rstrip('/')}/waInstance{WHATSAPP_INSTANCE_ID}/sendMessage/{WHATSAPP_API_TOKEN}"
+    payload = {
+        "chatId": chat_id,
+        "message": message
+    }
+    
+    try:
+        logger.info(f"Sending WhatsApp message to {chat_id}: {message[:100]}...")
+        response = requests.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        resp_data = response.json()
+        logger.info(f"WhatsApp message sent successfully: {resp_data}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send WhatsApp message: {e}")
+        return False
+
+
+def download_whatsapp_media(download_url: str, filename: str) -> str:
+    """Download media file from Green-API and save it to storage/ directory"""
+    import requests
+    from config import STORAGE_DIR
+    
+    local_path = STORAGE_DIR / filename
+    logger.info(f"Downloading WhatsApp media from {download_url} -> {local_path}")
+    
+    response = requests.get(download_url, timeout=60)
+    response.raise_for_status()
+    
+    with open(local_path, 'wb') as f:
+        f.write(response.content)
+        
+    return str(local_path)
+
+
+def execute_assistant_actions(user_id: int, actions: list, date_str: str, response_text: str) -> tuple[str, list[str]]:
+    """Execute assistant actions (create/update drafts, search/delete receipts, update memory)
+    and return updated response_text and a list of human-readable created drafts descriptions.
+    """
+    db = get_database()
+    from parser_service import get_parser_service
+    parser = get_parser_service()
+
+    _ACTION_LABELS = {
+        'create_expense': 'создание расхода',
+        'update_expense': 'обновление расхода',
+        'add_supply_items': 'добавление позиций в поставку',
+        'create_supply': 'создание поставки',
+        'find_pos_receipt': 'поиск чека в Poster',
+        'delete_pos_receipt': 'удаление чека из Poster',
+        'update_memory': 'обновление памяти',
+        'add_to_memory': 'добавление правила в память',
+    }
+    action_errors = []
+    created_drafts = []
+
+    for action in actions:
+        try:
+            act_type = action.get('action')
+            
+            # 1. Create Expense
+            if act_type == 'create_expense':
+                amount_val = action.get('amount')
+                try:
+                    amount = float(amount_val) if amount_val is not None else 0
+                except (ValueError, TypeError):
+                    amount = 0
+
+                category = action.get('category', 'Прочее')
+                try:
+                    from matchers import get_category_matcher
+                    cat_matcher = get_category_matcher(user_id)
+                    cat_match = cat_matcher.match(category) or cat_matcher.match(action.get('description', ''))
+                    if cat_match:
+                        category = cat_match[1]
+                except Exception as cat_err:
+                    logger.warning(f"Category matching failed for '{category}': {cat_err}")
+
+                expense_type = action.get('expense_type', 'transaction')
+                is_income = bool(action.get('is_income', False))
+
+                expense_draft_id = db.create_expense_draft(
+                    telegram_user_id=user_id,
+                    amount=amount,
+                    description=action.get('description'),
+                    expense_type=expense_type,
+                    category=category,
+                    source=action.get('source', 'cash'),
+                    is_income=is_income,
+                    created_at=date_str
+                )
+
+                if expense_draft_id:
+                    if expense_type == 'supply':
+                        try:
+                            description = action.get('description', '').strip()
+                            source_val = action.get('source', 'cash')
+                            items = action.get('items', [])
+
+                            if _check_duplicate_supply(db, user_id, description, amount, date_str):
+                                logger.warning(f"Skipping duplicate supply from create_expense for '{description}' {amount}")
+                                response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{description}» на {amount:,.0f}₸ уже существует — пропускаю дубликат."
+                            elif items:
+                                try:
+                                    items = parser.reconcile_items(items)
+                                except Exception:
+                                    pass
+                                invoice = {'supplier': description, 'total_sum': amount, 'items': items}
+                                create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source_val)
+                                created_drafts.append(f"Поставка: {description} на {amount:,.0f}₸ ({len(items)} поз.)")
+                            else:
+                                resolved_name, resolved_id = resolve_supplier_name_and_id(user_id, description)
+                                db.create_empty_supply_draft(
+                                    telegram_user_id=user_id,
+                                    supplier_name=resolved_name or description,
+                                    invoice_date=date_str,
+                                    total_sum=amount,
+                                    linked_expense_draft_id=expense_draft_id,
+                                    source=source_val,
+                                    supplier_id=resolved_id
+                                )
+                                created_drafts.append(f"Поставка (пустая): {resolved_name or description} на {amount:,.0f}₸")
+                        except Exception as supply_err:
+                            logger.warning(f"Failed to auto-create supply draft for expense {expense_draft_id}: {supply_err}")
+                    else:
+                        sign = '+' if is_income else '-'
+                        created_drafts.append(f"Расход: {action.get('description')} ({sign}{amount:,.0f}₸, {category})")
+                
+            # 2. Update Expense
+            elif act_type == 'update_expense':
+                draft_id = action.get('id')
+                if draft_id and not str(draft_id).startswith('placeholder'):
+                    update_fields = {}
+                    if 'amount' in action and action['amount'] is not None:
+                        try:
+                            update_fields['amount'] = float(action['amount'])
+                        except (ValueError, TypeError):
+                            pass
+                    if 'description' in action and action['description'] is not None:
+                        update_fields['description'] = action['description']
+                    if 'category' in action and action['category'] is not None:
+                        update_fields['category'] = action['category']
+                    if 'source' in action and action['source'] is not None:
+                        update_fields['source'] = action['source']
+
+                    if update_fields:
+                        db.update_expense_draft(draft_id, **update_fields)
+                        created_drafts.append(f"Обновлен черновик расхода ID {draft_id}")
+                
+            # 3. Add Supply Items
+            elif act_type == 'add_supply_items':
+                expense_draft_id = action.get('expense_draft_id')
+                items = action.get('items', [])
+
+                try:
+                    items = parser.reconcile_items(items)
+                except Exception as rec_err:
+                    logger.warning(f"Item reconciliation failed: {rec_err}")
+
+                supplies = db.get_supply_drafts(user_id, status="all")
+                supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
+
+                if supply:
+                    _add_items_to_supply_draft(db, user_id, supply['id'], items)
+                    created_drafts.append(f"Добавлено {len(items)} поз. в поставку {supply.get('supplier_name')}")
+                else:
+                    logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
+                    
+            # 4. Create Supply
+            elif act_type == 'create_supply':
+                supplier_name = action.get('supplier_name', 'Поставщик')
+                total_sum_val = action.get('total_sum', 0)
+                try:
+                    total_sum = float(total_sum_val) if total_sum_val is not None else 0.0
+                except (ValueError, TypeError):
+                    total_sum = 0.0
+
+                source = action.get('source', 'kaspi')
+                items = action.get('items', [])
+
+                try:
+                    items = parser.reconcile_items(items)
+                except Exception as rec_err:
+                    logger.warning(f"Item reconciliation failed: {rec_err}")
+
+                items_total = sum(
+                    float(i.get('sum') or 0) for i in items
+                    if i.get('sum') is not None
+                )
+                if items_total > 0 and abs(items_total - total_sum) > 1.0:
+                    logger.info(f"create_supply: correcting total_sum {total_sum} → {items_total}")
+                    total_sum = round(items_total, 2)
+
+                resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
+
+                if _check_duplicate_supply(db, user_id, resolved_supplier_name or supplier_name, total_sum, date_str):
+                    logger.warning(f"Skipping duplicate supply for '{supplier_name}' with sum {total_sum}")
+                    response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{resolved_supplier_name or supplier_name}» на {total_sum:,.0f}₸ уже существует — пропускаю дубликат."
+                    continue
+
+                expense_draft_id = db.create_expense_draft(
+                    telegram_user_id=user_id,
+                    amount=total_sum,
+                    description=resolved_supplier_name or supplier_name or 'Поставка',
+                    expense_type='supply',
+                    category='Прочее',
+                    source=source,
+                    created_at=date_str
+                )
+
+                invoice = {'supplier': resolved_supplier_name or supplier_name, 'total_sum': total_sum, 'items': items}
+                create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source)
+                created_drafts.append(f"Поставка: {resolved_supplier_name or supplier_name} на {total_sum:,.0f}₸ ({len(items)} поз.)")
+                            
+            # 5. Find POS Receipt
+            elif act_type == 'find_pos_receipt':
+                amount_val = action.get('amount')
+                order_number = action.get('order_number')
+                
+                clean_order_number = None
+                if order_number is not None:
+                    import re
+                    digits = re.findall(r'\d+', str(order_number))
+                    if digits:
+                        clean_order_number = int(digits[0])
+
+                target_amount = None
+                if amount_val is not None:
+                    try:
+                        target_amount = float(amount_val)
+                    except (ValueError, TypeError):
+                        pass
+
+                if not clean_order_number and not target_amount:
+                    response_text = "Пожалуйста, укажите сумму чека или номер заказа, чтобы я мог найти его."
+                    continue
+
+                poster_accounts = db.get_accounts(user_id)
+                if not poster_accounts:
+                    response_text = "У вас не настроены аккаунты Poster. Не могу выполнить поиск чеков."
+                    continue
+
+                try:
+                    date_param = date_str.replace('-', '')
+                except Exception:
+                    date_param = _kz_now().strftime("%Y%m%d")
+
+                found_matches = []
+
+                for account in poster_accounts:
+                    from poster_client import PosterClient
+                    client = PosterClient(
+                        telegram_user_id=user_id,
+                        poster_token=account['poster_token'],
+                        poster_user_id=account['poster_user_id'],
+                        poster_base_url=account['poster_base_url']
+                    )
+                    
+                    try:
+                        async def _fetch_account_data():
+                            matches = []
+                            result = await client._request('GET', 'dash.getTransactions', params={
+                                'dateFrom': date_param,
+                                'dateTo': date_param
+                            })
+                            transactions = result.get('response', [])
+                            if not isinstance(transactions, list):
+                                return matches
+                            
+                            for tx in transactions:
+                                tx_id = tx.get('transaction_id')
+                                if not tx_id:
+                                    continue
+                                
+                                tx_id_int = int(tx_id)
+                                payed_sum_kzt = float(tx.get('payed_sum', 0)) / 100
+                                
+                                is_match = False
+                                exact_id_match = False
+                                
+                                if clean_order_number is not None:
+                                    if tx_id_int == clean_order_number:
+                                        is_match = True
+                                        exact_id_match = True
+                                    elif str(clean_order_number) in str(tx_id_int):
+                                        is_match = True
+                                    else:
+                                        for key in ['spot_order_id', 'spot_order_num', 'order_num', 'order_id', 'transaction_history_id', 'receipt_number', 'date_close']:
+                                            val = tx.get(key)
+                                            if val is not None:
+                                                try:
+                                                    val_int = int(float(val))
+                                                    if val_int == clean_order_number:
+                                                        is_match = True
+                                                        break
+                                                    elif str(clean_order_number) in str(val_int):
+                                                        is_match = True
+                                                        break
+                                                except (ValueError, TypeError):
+                                                    if str(clean_order_number) in str(val):
+                                                        is_match = True
+                                                        break
+                                
+                                if target_amount is not None:
+                                    if 0.6 * target_amount <= payed_sum_kzt <= 1.05 * target_amount:
+                                        is_match = True
+
+                                if is_match:
+                                    products_str = "неизвестно"
+                                    try:
+                                        prod_result = await client._request('GET', 'dash.getTransactionProducts', params={
+                                            'transaction_id': tx_id_int
+                                        })
+                                        products = prod_result.get('response', [])
+                                        if products:
+                                            products_list = []
+                                            for p in products:
+                                                p_name = p.get('product_name', 'Товар')
+                                                p_qty = float(p.get('count', 1))
+                                                products_list.append(f"{p_name} ({p_qty:g} шт)")
+                                            products_str = ", ".join(products_list)
+                                    except Exception as prod_err:
+                                        logger.warning(f"Error fetching products for tx {tx_id_int}: {prod_err}")
+                                    
+                                    close_time = tx.get('date_close', '')
+                                    if close_time:
+                                        if isinstance(close_time, str) and len(close_time) >= 16:
+                                            close_time = close_time[11:16]
+                                        else:
+                                            try:
+                                                ts = float(close_time)
+                                                if ts > 1e11:
+                                                    ts = ts / 1000.0
+                                                from datetime import datetime
+                                                dt = datetime.fromtimestamp(ts, tz=KZ_TZ)
+                                                close_time = dt.strftime("%H:%M")
+                                            except Exception:
+                                                pass
+                                    
+                                    status_str = "Открыт" if tx.get('status') == '1' else "Закрыт" if tx.get('status') == '2' else f"Статус {tx.get('status')}"
+                                    diff = abs(payed_sum_kzt - target_amount) if target_amount is not None else 0
+                                    
+                                    matches.append({
+                                        'transaction_id': tx_id_int,
+                                        'poster_account_id': account['id'],
+                                        'account_name': account['account_name'],
+                                        'payed_sum': payed_sum_kzt,
+                                        'products': products_str,
+                                        'time': close_time,
+                                        'status': status_str,
+                                        'diff': diff,
+                                        'exact_id_match': exact_id_match
+                                    })
+                            return matches
+
+                        result_matches = run_async(_fetch_account_data())
+                        found_matches.extend(result_matches)
+                    except Exception as client_err:
+                        logger.error(f"Error fetching transactions for account {account['account_name']}: {client_err}")
+                    finally:
+                        run_async(client.close())
+
+                exact_id_matches = [m for m in found_matches if m.get('exact_id_match')]
+                if exact_id_matches:
+                    found_matches = exact_id_matches
+                
+                if not found_matches:
+                    response_text = f"Чеков за сегодня по вашему запросу не найдено (сумма: {amount_val if amount_val else 'не указана'}, номер заказа: {order_number if order_number else 'не указан'})."
+                elif len(found_matches) == 1:
+                    match = found_matches[0]
+                    response_text = (
+                        f"Найден чек №{match['transaction_id']} в отделе '{match['account_name']}' на сумму {match['payed_sum']:,.0f}₸ ({match['time']}, {match['status']}).\n"
+                        f"Состав чека: {match['products']}.\n\n"
+                        f"Точно он? Удаляем?\n\n"
+                        f"[Метаданные: ID чека: {match['transaction_id']}, ID аккаунта: {match['poster_account_id']}]"
+                    )
+                else:
+                    found_matches.sort(key=lambda x: x['diff'])
+                    lines = [f"Найдено несколько подходящих чеков за сегодня:"]
+                    for idx, match in enumerate(found_matches[:3]):
+                        lines.append(
+                            f"{idx+1}. Чек №{match['transaction_id']} ('{match['account_name']}') на сумму {match['payed_sum']:,.0f}₸ ({match['time']}). Состав: {match['products']}."
+                        )
+                    lines.append("\nПожалуйста, уточните номер заказа (например, напишите 'удали чек №...' или выберите нужный).")
+                    response_text = "\n".join(lines)
+
+            # 6. Delete POS Receipt
+            elif act_type == 'delete_pos_receipt':
+                tx_id = action.get('transaction_id')
+                poster_account_id = action.get('poster_account_id')
+                
+                if not tx_id:
+                    response_text = "Не передан ID чека для удаления."
+                    continue
+                    
+                poster_accounts = db.get_accounts(user_id)
+                account = None
+                if poster_account_id:
+                    account = next((a for a in poster_accounts if a['id'] == int(poster_account_id)), None)
+                if not account and poster_accounts:
+                    account = poster_accounts[0]
+                    
+                if not account:
+                    response_text = "Аккаунт Poster не найден для удаления чека."
+                    continue
+                    
+                from poster_client import PosterClient
+                client = PosterClient(
+                    telegram_user_id=user_id,
+                    poster_token=account['poster_token'],
+                    poster_user_id=account['poster_user_id'],
+                    poster_base_url=account['poster_base_url']
+                )
+                
+                try:
+                    async def _remove():
+                        return await client.remove_transaction(int(tx_id))
+                    success = run_async(_remove())
+                    if success:
+                        response_text = f"Чек №{tx_id} успешно удалён из Poster (отдел '{account['account_name']}')."
+                        created_drafts.append(f"Удален чек №{tx_id} из Poster")
+                    else:
+                        response_text = f"Не удалось удалить чек №{tx_id} из Poster."
+                except Exception as del_err:
+                    logger.error(f"Error deleting transaction {tx_id}: {del_err}")
+                    response_text = f"Ошибка при удалении чека №{tx_id}: {str(del_err)}"
+                finally:
+                    run_async(client.close())
+                            
+            # 7. Add to Assistant Memory
+            elif act_type == 'add_to_memory':
+                rule_text = action.get('rule_text', '').strip()
+                if rule_text:
+                    current_memory = db.get_assistant_memory(user_id) or ''
+                    if rule_text in current_memory:
+                        logger.info(f"ℹ️ Rule already exists in memory, skipping: {rule_text[:80]}...")
+                    else:
+                        updated_memory = current_memory.rstrip() + '\n' + rule_text + '\n' if current_memory.strip() else rule_text + '\n'
+                        db.save_assistant_memory(user_id, updated_memory)
+                        logger.info(f"✅ Added rule to memory: {rule_text[:80]}...")
+                        created_drafts.append(f"Добавлено правило в память: {rule_text[:30]}...")
+
+            # 8. Update Memory
+            elif act_type == 'update_memory':
+                mem_text = action.get('memory_text')
+                if mem_text is not None:
+                    current_memory = db.get_assistant_memory(user_id)
+                    old_len = len(current_memory.strip()) if current_memory else 0
+                    new_len = len(mem_text.strip())
+                    if old_len > 50 and new_len < old_len * 0.5:
+                        logger.warning(
+                            f"⚠️ Blocked memory update: new text ({new_len} chars) is less than 50% of current ({old_len} chars). Skipping."
+                        )
+                    else:
+                        db.save_assistant_memory(user_id, mem_text)
+                        created_drafts.append("Память ассистента полностью обновлена")
+                            
+        except Exception as action_err:
+            logger.error(f"Error processing assistant action {action}: {action_err}", exc_info=True)
+            label = _ACTION_LABELS.get(action.get('action'), f"действие {action.get('action')}")
+            detail = ''
+            if action.get('supplier_name'):
+                detail = f" ({action.get('supplier_name')}"
+                if action.get('total_sum'):
+                    detail += f", {action.get('total_sum')}₸"
+                detail += ")"
+            elif action.get('description'):
+                detail = f" ({action.get('description')})"
+            action_errors.append(
+                f"⚠️ Не удалось выполнить: {label}{detail}. Ошибка: {action_err}. "
+                f"Данные не потеряны — попробуйте повторить или внесите вручную."
+            )
+
+    if action_errors:
+        response_text = (response_text + "\n\n" if response_text else "") + "\n".join(action_errors)
+
+    return response_text, created_drafts
+
+
+@app.route('/api/whatsapp/webhook', methods=['POST'])
+@limiter.limit("100 per minute")
+def whatsapp_webhook():
+    """Handle incoming WhatsApp messages from Green-API"""
+    from config import WHATSAPP_GROUP_ID, WHATSAPP_USER_ID_MAPPING
+    from parser_service import get_parser_service
+    
+    try:
+        payload = request.get_json(force=True) or {}
+        type_webhook = payload.get('typeWebhook')
+        
+        # We only care about incoming messages
+        if type_webhook not in ('incomingMessageReceived', 'incomingFileMessageReceived'):
+            return 'Ignored webhook type', 200
+            
+        sender_data = payload.get('senderData', {})
+        chat_id = sender_data.get('chatId', '')
+        
+        # Verify the message comes from the configured group ID
+        if WHATSAPP_GROUP_ID and chat_id != WHATSAPP_GROUP_ID:
+            logger.info(f"Ignored WhatsApp webhook from chat '{chat_id}' (configured group: '{WHATSAPP_GROUP_ID}')")
+            return 'Ignored non-target chat', 200
+            
+        # Verify we have a mapped user to save drafts to
+        user_id = WHATSAPP_USER_ID_MAPPING
+        if not user_id:
+            logger.error("WhatsApp user ID mapping (WHATSAPP_USER_ID_MAPPING) is not set or is 0")
+            return 'User mapping not configured', 200
+            
+        message_data = payload.get('messageData', {})
+        type_message = message_data.get('typeMessage', '')
+        
+        message_text = ''
+        media_paths = []
+        
+        # 1. Parse text message
+        if type_message == 'textMessage':
+            text_data = message_data.get('textMessageData', {})
+            message_text = text_data.get('textMessage', '')
+        # 2. Parse text with file (extendedTextMessage)
+        elif type_message == 'extendedTextMessage':
+            ext_text_data = message_data.get('extendedTextMessageData', {})
+            message_text = ext_text_data.get('text', '')
+            
+        # 3. Parse and download file message
+        file_msg_data = message_data.get('fileMessageData') or message_data.get('imageMessageData') or message_data.get('documentMessageData') or {}
+        if file_msg_data:
+            download_url = file_msg_data.get('downloadUrl')
+            file_name = file_msg_data.get('fileName', 'attachment.jpg')
+            caption = file_msg_data.get('caption', '')
+            if caption and not message_text:
+                message_text = caption
+                
+            if download_url:
+                try:
+                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-')
+                    if not safe_filename:
+                        safe_filename = 'whatsapp_file.jpg'
+                    unique_filename = f"wa_{int(_time.time())}_{safe_filename}"
+                    local_path = download_whatsapp_media(download_url, unique_filename)
+                    media_paths.append(local_path)
+                except Exception as file_err:
+                    logger.error(f"Failed to download file from WhatsApp webhook: {file_err}")
+                    send_whatsapp_message(chat_id, f"⚠️ Не удалось скачать файл: {file_name}")
+                    
+        if not message_text and not media_paths:
+            return 'No content to parse', 200
+            
+        logger.info(f"Processing WhatsApp message from group {chat_id} for user {user_id}. Text: '{message_text[:100]}', media_count: {len(media_paths)}")
+        
+        # Run parsing and database saving
+        def _process_whatsapp_async():
+            db = get_database()
+            parser = get_parser_service()
+            
+            now_kz = _kz_now()
+            date_str = now_kz.strftime('%Y-%m-%d')
+            
+            chat_history = db.get_assistant_chat_history(user_id, limit=30)
+            
+            all_drafts = db.get_expense_drafts(user_id, status="all")
+            active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
+            
+            all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
+            for sd in all_supply_drafts:
+                sd_with_items = db.get_supply_draft_with_items(sd['id'])
+                if sd_with_items:
+                    active_drafts.append({
+                        'id': sd['id'],
+                        'type': 'supply',
+                        'supplier_name': sd.get('supplier_name'),
+                        'total_sum': sd.get('total_sum'),
+                        'items': sd_with_items.get('items', [])
+                    })
+                    
+            supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+            assistant_memory = db.get_assistant_memory(user_id)
+            
+            # Prepare files in format expected by agent
+            media_files = []
+            for path in media_paths:
+                file_ext = os.path.splitext(path.lower())[1]
+                mime_type = 'application/pdf' if file_ext == '.pdf' else 'image/jpeg'
+                with open(path, 'rb') as f:
+                    file_data = f.read()
+                media_files.append({'mime_type': mime_type, 'data': file_data})
+            
+            agent_response = run_async(parser.call_gemini_assistant_agent(
+                user_message=message_text,
+                chat_history=chat_history,
+                active_drafts=active_drafts,
+                supplier_profiles=supplier_profiles,
+                media_files=media_files,
+                assistant_memory=assistant_memory
+            ))
+            
+            response_text = agent_response.get('response_text', '')
+            actions = agent_response.get('actions', [])
+            
+            # Execute assistant actions
+            response_text, created_drafts = execute_assistant_actions(user_id, actions, date_str, response_text)
+            
+            # Save message to database chat history
+            saved_media_urls = []
+            for path in media_paths:
+                # Store in static uploads for persistence/display on dashboard
+                import uuid
+                import shutil
+                upload_dir = os.path.join(app.root_path, 'static', 'uploads', 'assistant')
+                os.makedirs(upload_dir, exist_ok=True)
+                file_ext = os.path.splitext(path)[1]
+                unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+                dest_path = os.path.join(upload_dir, unique_filename)
+                shutil.copy2(path, dest_path)
+                saved_media_urls.append(f"/static/uploads/assistant/{unique_filename}")
+                
+            db.add_assistant_chat_message(user_id, 'user', message_text, saved_media_urls)
+            db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=agent_response.get('_model_used', 'gemini-3.5-flash'))
+            
+            # Send reply to WhatsApp group
+            reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
+            if created_drafts:
+                reply_msg += "\n\n*Созданные черновики:*\n" + "\n".join(f"• {d}" for d in created_drafts)
+                reply_msg += "\n\n👉 Проверить на сайте: https://worker-production-85f0.up.railway.app/assistant"
+                
+            send_whatsapp_message(chat_id, reply_msg)
+            
+            for local_path in media_paths:
+                try:
+                    os.unlink(local_path)
+                except Exception:
+                    pass
+                    
+        import threading
+        thread = threading.Thread(target=_process_whatsapp_async, daemon=True)
+        thread.start()
+        
+        return 'OK', 200
+    except Exception as e:
+        logger.error(f"Error handling WhatsApp webhook: {e}", exc_info=True)
+        return 'Error', 500
 
 
 if __name__ == '__main__':

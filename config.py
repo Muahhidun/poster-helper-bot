@@ -39,6 +39,14 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip() or None  # Railway URL, на�
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "false").lower() == "true"
 WEBHOOK_PATH = "/telegram-webhook"  # Путь для webhook endpoint
 
+# WhatsApp settings (Green-API)
+WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "https://api.green-api.com").strip()
+WHATSAPP_INSTANCE_ID = os.getenv("WHATSAPP_INSTANCE_ID", "").strip()
+WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", "").strip()
+WHATSAPP_GROUP_ID = os.getenv("WHATSAPP_GROUP_ID", "").strip()
+WHATSAPP_USER_ID_MAPPING = int(os.getenv("WHATSAPP_USER_ID_MAPPING", "0"))
+
+
 # Poster API
 POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "pizz-burg")
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
