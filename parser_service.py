@@ -1520,8 +1520,8 @@ class ParserService:
                     }
                 })
 
-        # Use gemini-1.5-flash as the fast classifier model (highly optimized for speed and cost)
-        classifier_model = "gemini-1.5-flash"
+        # Use configured GEMINI_MODEL for classification. If not set, fallback to gemini-1.5-flash.
+        classifier_model = GEMINI_MODEL or "gemini-1.5-flash"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{classifier_model}:generateContent?key={GEMINI_API_KEY}"
         headers = {"Content-Type": "application/json"}
 

@@ -8970,10 +8970,11 @@ def whatsapp_webhook():
             
             # Send reply to WhatsApp group only if explicitly addressed OR if drafts were created
             if is_addressed or created_drafts:
-                reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
                 if created_drafts:
-                    reply_msg += "\n\n*Созданные черновики:*\n" + "\n".join(f"• {d}" for d in created_drafts)
-                    reply_msg += "\n\n👉 Проверить на сайте: https://worker-production-85f0.up.railway.app/assistant"
+                    reply_msg = "🤖 *Ассистент PizzBurg*\n" + "\n".join(f"✅ {d}" for d in created_drafts)
+                    reply_msg += "\n👉 https://worker-production-85f0.up.railway.app/assistant"
+                else:
+                    reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
                 send_whatsapp_message(chat_id, reply_msg)
             else:
                 logger.info(f"Silent processing completed for WhatsApp group. Chat history saved. Drafts created: {len(created_drafts)}")

@@ -153,7 +153,6 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         
         assert sent_chat_id == "120363000000000000@g.us"
         assert "🤖 *Ассистент PizzBurg*" in sent_message
-        assert "Расход сохранен" in sent_message
         assert "Расход: Молоко" in sent_message
 
 @patch("web_app.send_whatsapp_message")
@@ -215,7 +214,7 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         
         # Verify WhatsApp message sent
         mock_send_whatsapp.assert_called_once()
-        assert "Чек распознан" in mock_send_whatsapp.call_args[0][1]
+        assert "Расход: Сливки" in mock_send_whatsapp.call_args[0][1]
 
 
 @patch("web_app.send_whatsapp_message")
