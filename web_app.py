@@ -8972,7 +8972,6 @@ def whatsapp_webhook():
             if is_addressed or created_drafts:
                 if created_drafts:
                     reply_msg = "🤖 *Ассистент PizzBurg*\n" + "\n".join(f"✅ {d}" for d in created_drafts)
-                    reply_msg += "\n👉 https://worker-production-85f0.up.railway.app/assistant"
                 else:
                     reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
                 send_whatsapp_message(chat_id, reply_msg)
