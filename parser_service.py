@@ -1472,6 +1472,85 @@ class ParserService:
         logger.debug(f"Extracted JSON: {json_text}")
         return json_text
 
+    async def check_message_intent(self, message_text: str, media_files: Optional[List[Dict]] = None) -> bool:
+        """
+        Check if the incoming message or media has business bookkeeping intent.
+        Returns True if yes, False if it is banter, chit-chat, or random kitchen photo.
+        """
+        if not GEMINI_API_KEY:
+            # Fallback to processing if no key is configured
+            return True
+
+        import base64
+        import aiohttp
+        import json
+
+        prompt = """
+        Вы — быстрый ИИ-классификатор намерений для бухгалтерского ассистента сети ресторанов PizzBurg.
+        Проанализируйте входящее сообщение (текст и/или прикрепленные медиафайлы/фото).
+        Определите, содержит ли сообщение финансовую информацию, накладную, чек, отчет о расходах или команду для бота-бухгалтера.
+
+        Условия для ответа ДА (is_business_intent = true):
+        1. В сообщении есть финансовый документ (накладная поставщика, фискальный чек, товарный чек, чек из банковского терминала, скриншот перевода).
+        2. В тексте сообщается о тратах/поставках (например, "мойка 5500", "заплатили за мясо 20000", "дали аванс Беке 10к").
+        3. Сообщение содержит команду боту (например, "удали чек", "покажи расходы за сегодня", "отчет").
+
+        Условия для ответа НЕТ (is_business_intent = false):
+        1. Обычный разговор/болтовня сотрудников, подтверждения без финансовой сути (например, "ок", "спасибо", "приняла", "во сколько завтра?", "Мадина!!!", "я на месте").
+        2. Фотография еды, кухни, ведер, упаковок продуктов, испорченного товара, плесени или весов, если на фото НЕТ никакого бумажного чека/накладной и в тексте НЕТ описания расхода с суммой.
+
+        Верните результат строго в формате JSON:
+        {
+          "is_business_intent": true/false,
+          "reason": "краткое объяснение на русском"
+        }
+        """
+
+        parts = [
+            {"text": prompt},
+            {"text": f"=== Входящее сообщение ===\nТекст: {message_text}\nКоличество файлов: {len(media_files) if media_files else 0}"}
+        ]
+
+        if media_files:
+            for media in media_files:
+                parts.append({
+                    "inlineData": {
+                        "mimeType": media['mime_type'],
+                        "data": base64.standard_b64encode(media['data']).decode("utf-8")
+                    }
+                })
+
+        # Use gemini-1.5-flash as the fast classifier model (highly optimized for speed and cost)
+        classifier_model = "gemini-1.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{classifier_model}:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                        json_text = self._extract_json(response_text)
+                        parsed = json.loads(json_text)
+                        is_intent = bool(parsed.get('is_business_intent', False))
+                        logger.info(f"🤖 [Intent Classifier] Classification result: {is_intent}. Reason: {parsed.get('reason')}")
+                        return is_intent
+                    else:
+                        error_text = await resp.text()
+                        logger.error(f"Failed to classify intent (status {resp.status}): {error_text[:300]}")
+                        return True
+        except Exception as e:
+            logger.error(f"Error in intent classification: {e}")
+            return True
+
+
 
 # Singleton instance
 _parser_service = None

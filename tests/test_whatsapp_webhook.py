@@ -2,7 +2,7 @@ import json
 import os
 import pytest
 import threading
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 from tests.conftest import TEST_USER_ID
 
@@ -331,6 +331,108 @@ def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsa
         response = app_client.post('/api/whatsapp/webhook', json=payload)
         assert response.status_code == 200
         assert response.data.decode('utf-8') == 'Ignored non-target chat'
+
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_classifier_ignored(mock_execute_actions, mock_send_whatsapp, app_client, db):
+    """Test webhook ignores non-business intents (banter) determined by classifier"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    with patch("config.WHATSAPP_GROUP_ID", "group1@g.us"), \
+         patch("config.WHATSAPP_USER_ID_MAPPING", TEST_USER_ID):
+        
+        # Image payload of random photo (e.g. food photo)
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {"chatId": "group1@g.us"},
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "imageMessageData": {
+                    "downloadUrl": "https://example.com/jalapeno.jpg",
+                    "fileName": "jalapeno.jpg",
+                    "caption": "Халапеньо на кухне"
+                }
+            }
+        }
+        
+        # Mock download media and check_message_intent returning False
+        with patch("web_app.download_whatsapp_media", return_value="temp.jpg"), \
+             patch("builtins.open", mock_open(read_data=b"fake image data")), \
+             patch("parser_service.ParserService.check_message_intent", new_callable=AsyncMock, return_value=False) as mock_check_intent, \
+             patch("parser_service.ParserService.call_gemini_assistant_agent") as mock_call_gemini, \
+             patch("os.unlink") as mock_unlink:
+            
+            response = app_client.post('/api/whatsapp/webhook', json=payload)
+            assert response.status_code == 200
+            assert response.data.decode('utf-8') == 'OK'
+            
+            # Classifier should be called since it is a photo with no "Бот" prefix
+            mock_check_intent.assert_called_once()
+            
+            # The main Gemini agent should NOT be called
+            mock_call_gemini.assert_not_called()
+            
+            # No message should be sent to WhatsApp group
+            mock_send_whatsapp.assert_not_called()
+
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_whatsapp, app_client, db):
+    """Test webhook processes business intents determined by classifier"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    with patch("config.WHATSAPP_GROUP_ID", "group1@g.us"), \
+         patch("config.WHATSAPP_USER_ID_MAPPING", TEST_USER_ID):
+        
+        # Image payload of a real invoice
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {"chatId": "group1@g.us"},
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "imageMessageData": {
+                    "downloadUrl": "https://example.com/invoice.jpg",
+                    "fileName": "invoice.jpg",
+                    "caption": "Накладная от Япоша"
+                }
+            }
+        }
+        
+        # Mock Gemini response
+        mock_agent_response = {
+            "response_text": "Поставка Япоша на 15000 зафиксирована.",
+            "actions": [{"action": "create_expense", "amount": 15000, "description": "Япоша", "expense_type": "supply"}],
+            "_model_used": "mock-gemini"
+        }
+        
+        mock_execute_actions.return_value = ("Поставка Япоша зафиксирована.", ["Поставка: Япоша (15000₸)"])
+        
+        with patch("web_app.download_whatsapp_media", return_value="temp.jpg"), \
+             patch("builtins.open", mock_open(read_data=b"fake image data")), \
+             patch("shutil.copy2"), \
+             patch("os.makedirs"), \
+             patch("parser_service.ParserService.check_message_intent", new_callable=AsyncMock, return_value=True) as mock_check_intent, \
+             patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini, \
+             patch("os.unlink") as mock_unlink:
+            
+            response = app_client.post('/api/whatsapp/webhook', json=payload)
+            assert response.status_code == 200
+            assert response.data.decode('utf-8') == 'OK'
+            
+            # Classifier should be called
+            mock_check_intent.assert_called_once()
+            
+            # The main Gemini agent should be called
+            mock_call_gemini.assert_called_once()
+            
+            # Actions should be executed
+            mock_execute_actions.assert_called_once()
+            
+            # Message should be sent to WhatsApp group since drafts were created
+            mock_send_whatsapp.assert_called_once()
+
 
 
 

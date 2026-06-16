@@ -8921,7 +8921,21 @@ def whatsapp_webhook():
                 with open(path, 'rb') as f:
                     file_data = f.read()
                 media_files.append({'mime_type': mime_type, 'data': file_data})
-            
+
+            # Check intent using the fast classifier
+            is_business = True
+            if not is_addressed:
+                is_business = run_async(parser.check_message_intent(message_text, media_files))
+
+            if not is_business:
+                logger.info(f"🤖 [Intent Classifier] Message '{message_text[:50]}' ignored by intent classifier.")
+                for local_path in media_paths:
+                    try:
+                        os.unlink(local_path)
+                    except Exception:
+                        pass
+                return
+
             agent_response = run_async(parser.call_gemini_assistant_agent(
                 user_message=message_text,
                 chat_history=chat_history,
