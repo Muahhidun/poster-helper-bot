@@ -217,3 +217,60 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         mock_send_whatsapp.assert_called_once()
         assert "Чек распознан" in mock_send_whatsapp.call_args[0][1]
 
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_fallback_user(mock_execute_actions, mock_send_whatsapp, app_client, db):
+    """Test webhook handles fallback user when configured mapping doesn't exist in DB"""
+    # Clean up existing users in the test database to ensure isolation
+    conn = db._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Create an active user in the database (e.g. 167084307)
+    db.create_user(167084307, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    # Configure user mapping to 123456789 (which does not exist in DB)
+    with patch("config.WHATSAPP_GROUP_ID", "120363000000000000@g.us"), \
+         patch("config.WHATSAPP_USER_ID_MAPPING", 123456789):
+        
+        # Mocking Gemini response
+        mock_agent_response = {
+            "response_text": "Расход сохранен.",
+            "actions": [],
+            "_model_used": "mock-gemini"
+        }
+        
+        mock_execute_actions.return_value = ("Расход сохранен.", [])
+
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {
+                "chatId": "120363000000000000@g.us"
+            },
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {
+                    "textMessage": "Расход молоко 500"
+                }
+            }
+        }
+
+        with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
+            response = app_client.post(
+                '/api/whatsapp/webhook',
+                json=payload
+            )
+            
+            assert response.status_code == 200
+            assert response.data.decode('utf-8') == 'OK'
+            
+            # Verify action execution is called with the fallback user ID (167084307)
+            mock_execute_actions.assert_called_once()
+            assert mock_execute_actions.call_args[0][0] == 167084307
+
+

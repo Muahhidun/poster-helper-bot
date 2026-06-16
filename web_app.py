@@ -8785,6 +8785,33 @@ def whatsapp_webhook():
         if not user_id:
             logger.error("WhatsApp user ID mapping (WHATSAPP_USER_ID_MAPPING) is not set or is 0")
             return 'User mapping not configured', 200
+
+        # Check if the configured user exists in the database. If not, look for a fallback user.
+        db = get_database()
+        user = db.get_user(user_id)
+        if not user:
+            logger.warning(f"Configured WHATSAPP_USER_ID_MAPPING ({user_id}) is not present in database. Looking for fallbacks...")
+            conn = db._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT telegram_user_id FROM users ORDER BY created_at ASC")
+                rows = cursor.fetchall()
+                if rows:
+                    row = rows[0]
+                    if isinstance(row, dict):
+                        fallback_user_id = row['telegram_user_id']
+                    elif hasattr(row, 'keys') and 'telegram_user_id' in row.keys():
+                        fallback_user_id = row['telegram_user_id']
+                    else:
+                        fallback_user_id = row[0]
+                    logger.info(f"Fallback to user {fallback_user_id} (found users: {[r['telegram_user_id'] if isinstance(r, dict) or (hasattr(r, 'keys') and 'telegram_user_id' in r.keys()) else r[0] for r in rows]})")
+                    user_id = fallback_user_id
+                else:
+                    logger.error("No users found in database at all!")
+            except Exception as db_err:
+                logger.error(f"Error querying users for fallback: {db_err}")
+            finally:
+                conn.close()
             
         message_data = payload.get('messageData', {})
         type_message = message_data.get('typeMessage', '')
