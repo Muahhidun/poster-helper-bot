@@ -8776,9 +8776,11 @@ def whatsapp_webhook():
         chat_id = sender_data.get('chatId', '')
         
         # Verify the message comes from the configured group ID
-        if WHATSAPP_GROUP_ID and chat_id != WHATSAPP_GROUP_ID:
-            logger.info(f"Ignored WhatsApp webhook from chat '{chat_id}' (configured group: '{WHATSAPP_GROUP_ID}')")
-            return 'Ignored non-target chat', 200
+        if WHATSAPP_GROUP_ID:
+            allowed_groups = [g.strip() for g in WHATSAPP_GROUP_ID.split(",") if g.strip()]
+            if allowed_groups and chat_id not in allowed_groups:
+                logger.info(f"Ignored WhatsApp webhook from chat '{chat_id}' (configured groups: {allowed_groups})")
+                return 'Ignored non-target chat', 200
             
         # Verify we have a mapped user to save drafts to
         user_id = WHATSAPP_USER_ID_MAPPING

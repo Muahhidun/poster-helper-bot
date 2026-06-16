@@ -274,3 +274,63 @@ def test_whatsapp_webhook_fallback_user(mock_execute_actions, mock_send_whatsapp
             assert mock_execute_actions.call_args[0][0] == 167084307
 
 
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsapp, app_client, db):
+    """Test webhook handles multiple comma-separated groups correctly"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    # Configure user mapping and two allowed group IDs
+    with patch("config.WHATSAPP_GROUP_ID", "group1@g.us, group2@g.us"), \
+         patch("config.WHATSAPP_USER_ID_MAPPING", TEST_USER_ID):
+        
+        mock_agent_response = {
+            "response_text": "Расход сохранен.",
+            "actions": [],
+            "_model_used": "mock-gemini"
+        }
+        mock_execute_actions.return_value = ("Расход сохранен.", [])
+
+        # 1. First group is allowed
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {"chatId": "group1@g.us"},
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {"textMessage": "Тест"}
+            }
+        }
+        with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response):
+            response = app_client.post('/api/whatsapp/webhook', json=payload)
+            assert response.status_code == 200
+            assert response.data.decode('utf-8') == 'OK'
+
+        # 2. Second group is allowed
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {"chatId": "group2@g.us"},
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {"textMessage": "Тест"}
+            }
+        }
+        with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response):
+            response = app_client.post('/api/whatsapp/webhook', json=payload)
+            assert response.status_code == 200
+            assert response.data.decode('utf-8') == 'OK'
+
+        # 3. Third group is ignored
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {"chatId": "group3@g.us"},
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {"textMessage": "Тест"}
+            }
+        }
+        response = app_client.post('/api/whatsapp/webhook', json=payload)
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'Ignored non-target chat'
+
+
+
