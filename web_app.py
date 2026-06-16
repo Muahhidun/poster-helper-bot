@@ -8766,6 +8766,8 @@ def whatsapp_webhook():
         payload = request.get_json(force=True) or {}
         type_webhook = payload.get('typeWebhook')
         
+        logger.info(f"Received WhatsApp webhook. typeWebhook: {type_webhook}, payload keys: {list(payload.keys())}")
+        
         # We only care about incoming messages
         if type_webhook not in ('incomingMessageReceived', 'incomingFileMessageReceived'):
             return 'Ignored webhook type', 200
