@@ -5646,8 +5646,12 @@ class UserDatabase:
         results = [dict(row) for row in rows]
         results.reverse()
         
-        # Deserialize JSON media_paths if present
+        # Deserialize JSON media_paths if present and convert timestamps to Almaty TZ
         import json
+        from datetime import datetime
+        import pytz
+        kz_tz = pytz.timezone('Asia/Almaty')
+        
         for msg in results:
             if msg.get('media_paths'):
                 try:
@@ -5657,6 +5661,27 @@ class UserDatabase:
             else:
                 msg['media_paths'] = []
                 
+            c_at = msg.get('created_at')
+            if c_at:
+                if isinstance(c_at, str):
+                    try:
+                        if '.' in c_at:
+                            dt = datetime.strptime(c_at, "%Y-%m-%d %H:%M:%S.%f")
+                        else:
+                            dt = datetime.strptime(c_at, "%Y-%m-%d %H:%M:%S")
+                        dt_utc = pytz.utc.localize(dt)
+                        dt_kz = dt_utc.astimezone(kz_tz)
+                        msg['created_at'] = dt_kz.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        pass
+                elif isinstance(c_at, datetime):
+                    if c_at.tzinfo is None:
+                        dt_utc = pytz.utc.localize(c_at)
+                    else:
+                        dt_utc = c_at
+                    dt_kz = dt_utc.astimezone(kz_tz)
+                    msg['created_at'] = dt_kz.strftime("%Y-%m-%d %H:%M:%S")
+                    
         return results
 
     def add_assistant_chat_message(self, telegram_user_id: int, sender: str, message_text: str, media_paths: Optional[list] = None, model_name: Optional[str] = None) -> int:

@@ -123,7 +123,7 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         "messageData": {
             "typeMessage": "textMessage",
             "textMessageData": {
-                "textMessage": "Расход молоко 500"
+                "textMessage": "Бот Расход молоко 500"
             }
         }
     }
@@ -255,7 +255,7 @@ def test_whatsapp_webhook_fallback_user(mock_execute_actions, mock_send_whatsapp
             "messageData": {
                 "typeMessage": "textMessage",
                 "textMessageData": {
-                    "textMessage": "Расход молоко 500"
+                    "textMessage": "Бот Расход молоко 500"
                 }
             }
         }
@@ -297,7 +297,7 @@ def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsa
             "senderData": {"chatId": "group1@g.us"},
             "messageData": {
                 "typeMessage": "textMessage",
-                "textMessageData": {"textMessage": "Тест"}
+                "textMessageData": {"textMessage": "Бот Тест"}
             }
         }
         with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response):
@@ -311,7 +311,7 @@ def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsa
             "senderData": {"chatId": "group2@g.us"},
             "messageData": {
                 "typeMessage": "textMessage",
-                "textMessageData": {"textMessage": "Тест"}
+                "textMessageData": {"textMessage": "Бот Тест"}
             }
         }
         with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response):
@@ -325,7 +325,7 @@ def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsa
             "senderData": {"chatId": "group3@g.us"},
             "messageData": {
                 "typeMessage": "textMessage",
-                "textMessageData": {"textMessage": "Тест"}
+                "textMessageData": {"textMessage": "Бот Тест"}
             }
         }
         response = app_client.post('/api/whatsapp/webhook', json=payload)

@@ -46,6 +46,13 @@ def _kz_now():
     return datetime(kz_struct.tm_year, kz_struct.tm_mon, kz_struct.tm_mday,
                     kz_struct.tm_hour, kz_struct.tm_min, kz_struct.tm_sec)
 
+def _kz_business_today():
+    """Get current Kazakhstan time shifted by -2 hours to define the business day.
+    Between 00:00 and 02:00 AM, the business date remains the previous calendar day.
+    """
+    from datetime import timedelta
+    return _kz_now() - timedelta(hours=2)
+
 def run_async(coro):
     """Run an async coroutine from sync Flask code.
     Creates a new event loop, runs the coroutine, and cleans up."""
@@ -253,8 +260,9 @@ def get_date_in_kz_tz(dt_value, kz_tz) -> str:
         if created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
 
-    # Convert to Kazakhstan time and get date
-    created_kz = created_dt.astimezone(kz_tz)
+    # Convert to Kazakhstan time and get date (shifted by -2 hours for business day)
+    from datetime import timedelta
+    created_kz = created_dt.astimezone(kz_tz) - timedelta(hours=2)
     return created_kz.strftime("%Y-%m-%d")
 
 
@@ -1838,7 +1846,7 @@ def list_expenses():
 def view_assistant():
     """Render the interactive AI Bookkeeper Assistant page"""
     db = get_database()
-    today = _kz_now().strftime("%Y-%m-%d")
+    today = _kz_business_today().strftime("%Y-%m-%d")
     selected_date = request.args.get('date', today)
 
     # Validate date
@@ -1849,7 +1857,7 @@ def view_assistant():
 
     # Load drafts for date
     all_drafts = db.get_expense_drafts(g.user_id, status="all")
-    drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == selected_date]
+    drafts = [d for d in all_drafts if d.get('created_at') and get_date_in_kz_tz(d['created_at'], KZ_TZ) == selected_date]
 
     # Load supply drafts for date
     all_supply_drafts = db.get_supply_drafts(g.user_id, status="pending")
@@ -8853,21 +8861,42 @@ def whatsapp_webhook():
                     
         if not message_text and not media_paths:
             return 'No content to parse', 200
+
+        # Check if the user explicitly addressed the bot
+        is_addressed = False
+        if message_text:
+            cleaned_lower = message_text.strip().lower()
+            # Check prefixes
+            for prefix in ('бот:', 'bot:', 'бот,', 'bot,', 'бот', 'bot', '+', '/'):
+                if cleaned_lower.startswith(prefix):
+                    is_addressed = True
+                    # Strip prefix for cleaner Gemini prompt
+                    message_text = message_text.strip()[len(prefix):].strip()
+                    if message_text.startswith(',') or message_text.startswith(':'):
+                        message_text = message_text[1:].strip()
+                    break
+
+        # If text-only (no media), we ignore it if it is not explicitly addressed to the bot
+        if not media_paths and not is_addressed:
+            logger.info(f"Ignored text-only WhatsApp message without bot prefix: '{message_text[:50]}'")
+            return 'Ignored non-bot text message', 200
             
-        logger.info(f"Processing WhatsApp message from group {chat_id} for user {user_id}. Text: '{message_text[:100]}', media_count: {len(media_paths)}")
+        logger.info(f"Processing WhatsApp message from group {chat_id} for user {user_id} (is_addressed: {is_addressed}). Text: '{message_text[:100]}', media_count: {len(media_paths)}")
         
         # Run parsing and database saving
         def _process_whatsapp_async():
             db = get_database()
             parser = get_parser_service()
             
-            now_kz = _kz_now()
+            # Shift Almaty time by -2 hours for business date classification
+            from datetime import timedelta
+            now_kz = _kz_now() - timedelta(hours=2)
             date_str = now_kz.strftime('%Y-%m-%d')
             
             chat_history = db.get_assistant_chat_history(user_id, limit=30)
             
             all_drafts = db.get_expense_drafts(user_id, status="all")
-            active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
+            active_drafts = [d for d in all_drafts if d.get('created_at') and get_date_in_kz_tz(d['created_at'], KZ_TZ) == date_str]
             
             all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
             for sd in all_supply_drafts:
@@ -8925,13 +8954,15 @@ def whatsapp_webhook():
             db.add_assistant_chat_message(user_id, 'user', message_text, saved_media_urls)
             db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=agent_response.get('_model_used', 'gemini-3.5-flash'))
             
-            # Send reply to WhatsApp group
-            reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
-            if created_drafts:
-                reply_msg += "\n\n*Созданные черновики:*\n" + "\n".join(f"• {d}" for d in created_drafts)
-                reply_msg += "\n\n👉 Проверить на сайте: https://worker-production-85f0.up.railway.app/assistant"
-                
-            send_whatsapp_message(chat_id, reply_msg)
+            # Send reply to WhatsApp group only if explicitly addressed OR if drafts were created
+            if is_addressed or created_drafts:
+                reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
+                if created_drafts:
+                    reply_msg += "\n\n*Созданные черновики:*\n" + "\n".join(f"• {d}" for d in created_drafts)
+                    reply_msg += "\n\n👉 Проверить на сайте: https://worker-production-85f0.up.railway.app/assistant"
+                send_whatsapp_message(chat_id, reply_msg)
+            else:
+                logger.info(f"Silent processing completed for WhatsApp group. Chat history saved. Drafts created: {len(created_drafts)}")
             
             for local_path in media_paths:
                 try:
