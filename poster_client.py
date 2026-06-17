@@ -146,8 +146,11 @@ class PosterClient:
     async def get_expense_categories(self) -> List[Dict]:
         """Get list of finance expense categories"""
         try:
-            result = await self._request('GET', 'finance.getExpenseCategories')
-            return result.get('response', [])
+            categories = await self.get_categories()
+            expense_cats = [c for c in categories if str(c.get('type')) == '2']
+            if expense_cats:
+                return expense_cats
+            return categories
         except Exception as e:
             logger.warning(f"Failed to get expense categories from Poster: {e}")
             return []
