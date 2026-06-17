@@ -1876,6 +1876,8 @@ def view_assistant():
                         item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
                     if 'price_per_unit' in item and 'price' not in item:
                         item['price'] = item['price_per_unit']
+                    if 'sum' not in item:
+                        item['sum'] = item.get('total') or (item.get('quantity', 0) * item.get('price', 0))
                 sd_with_items['supply_items'] = sd_with_items['items']
             if sd_with_items.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(sd_with_items['linked_expense_draft_id'])
@@ -2241,6 +2243,8 @@ def _api_assistant_message_impl():
                         item['ingredient_name'] = item.get('poster_ingredient_name') or item.get('item_name', '')
                     if 'price_per_unit' in item and 'price' not in item:
                         item['price'] = item['price_per_unit']
+                    if 'sum' not in item:
+                        item['sum'] = item.get('total') or (item.get('quantity', 0) * item.get('price', 0))
                 sd_with_items['supply_items'] = sd_with_items['items']
             if sd_with_items.get('linked_expense_draft_id'):
                 expense = db.get_expense_draft(sd_with_items['linked_expense_draft_id'])
