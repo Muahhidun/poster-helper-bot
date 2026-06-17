@@ -8982,8 +8982,8 @@ def whatsapp_webhook():
             db.add_assistant_chat_message(user_id, 'user', message_text, saved_media_urls)
             db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=agent_response.get('_model_used', 'gemini-3.5-flash'))
             
-            # Send reply to WhatsApp group only if explicitly addressed OR if drafts were created
-            if is_addressed or created_drafts:
+            # Send reply to WhatsApp group if explicitly addressed, if drafts were created, or if any assistant actions were executed
+            if is_addressed or created_drafts or actions:
                 if created_drafts:
                     reply_msg = "🤖 *Ассистент PizzBurg*\n" + "\n".join(f"✅ {d}" for d in created_drafts)
                 else:
