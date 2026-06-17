@@ -8323,7 +8323,7 @@ def download_whatsapp_media(download_url: str, filename: str) -> str:
     return str(local_path)
 
 
-def execute_assistant_actions(user_id: int, actions: list, date_str: str, response_text: str) -> tuple[str, list[str]]:
+def execute_assistant_actions(user_id: int, actions: list, date_str: str, response_text: str, is_webhook: bool = False) -> tuple[str, list[str]]:
     """Execute assistant actions (create/update drafts, search/delete receipts, update memory)
     and return updated response_text and a list of human-readable created drafts descriptions.
     """
@@ -8454,9 +8454,15 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
                 supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
 
                 if supply:
-                    db.clear_supply_draft_items(supply['id'])
-                    _add_items_to_supply_draft(db, user_id, supply['id'], items)
-                    created_drafts.append(f"Обновлено {len(items)} поз. в поставке {supply.get('supplier_name')}")
+                    sd_with_items = db.get_supply_draft_with_items(supply['id'])
+                    has_items = sd_with_items and len(sd_with_items.get('items', [])) > 0
+                    if is_webhook and has_items:
+                        logger.info(f"Skipping add_supply_items from webhook to prevent overwriting manual edits/existing items for '{supply.get('supplier_name')}'")
+                        response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{supply.get('supplier_name')}» на {supply.get('total_sum', 0):,.0f}₸ уже существует — пропускаю импорт позиций из WhatsApp."
+                    else:
+                        db.clear_supply_draft_items(supply['id'])
+                        _add_items_to_supply_draft(db, user_id, supply['id'], items)
+                        created_drafts.append(f"Обновлено {len(items)} поз. в поставке {supply.get('supplier_name')}")
                 else:
                     logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
                     
@@ -8957,7 +8963,7 @@ def whatsapp_webhook():
             actions = agent_response.get('actions', [])
             
             # Execute assistant actions
-            response_text, created_drafts = execute_assistant_actions(user_id, actions, date_str, response_text)
+            response_text, created_drafts = execute_assistant_actions(user_id, actions, date_str, response_text, is_webhook=True)
             
             # Save message to database chat history
             saved_media_urls = []
