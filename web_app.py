@@ -8368,6 +8368,13 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
 
                 expense_type = action.get('expense_type', 'transaction')
                 is_income = bool(action.get('is_income', False))
+                description = action.get('description', '').strip()
+
+                if expense_type == 'supply':
+                    if _check_duplicate_supply(db, user_id, description, amount, date_str):
+                        logger.warning(f"Skipping duplicate supply & expense from create_expense for '{description}' {amount}")
+                        response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{description}» на {amount:,.0f}₸ уже существует — пропускаю дубликат."
+                        continue
 
                 expense_draft_id = db.create_expense_draft(
                     telegram_user_id=user_id,
@@ -8383,14 +8390,10 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
                 if expense_draft_id:
                     if expense_type == 'supply':
                         try:
-                            description = action.get('description', '').strip()
                             source_val = action.get('source', 'cash')
                             items = action.get('items', [])
 
-                            if _check_duplicate_supply(db, user_id, description, amount, date_str):
-                                logger.warning(f"Skipping duplicate supply from create_expense for '{description}' {amount}")
-                                response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{description}» на {amount:,.0f}₸ уже существует — пропускаю дубликат."
-                            elif items:
+                            if items:
                                 try:
                                     items = parser.reconcile_items(items)
                                 except Exception:
@@ -8451,8 +8454,9 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
                 supply = next((s for s in supplies if s.get('linked_expense_draft_id') == expense_draft_id), None)
 
                 if supply:
+                    db.clear_supply_draft_items(supply['id'])
                     _add_items_to_supply_draft(db, user_id, supply['id'], items)
-                    created_drafts.append(f"Добавлено {len(items)} поз. в поставку {supply.get('supplier_name')}")
+                    created_drafts.append(f"Обновлено {len(items)} поз. в поставке {supply.get('supplier_name')}")
                 else:
                     logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
                     

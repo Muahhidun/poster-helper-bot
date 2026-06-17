@@ -5135,6 +5135,24 @@ class UserDatabase:
             logger.error(f"Failed to delete supply draft item: {e}")
             return False
 
+    def clear_supply_draft_items(self, supply_draft_id: int) -> bool:
+        """Удалить все позиции из черновика поставки."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM supply_draft_items WHERE supply_draft_id = ?", (supply_draft_id,))
+            else:
+                cursor.execute("DELETE FROM supply_draft_items WHERE supply_draft_id = %s", (supply_draft_id,))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear supply draft items for draft {supply_draft_id}: {e}")
+            return False
+
     def get_supply_drafts(self, telegram_user_id: int, status: str = "pending") -> list:
         """
         Получить черновики поставок пользователя
