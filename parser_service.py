@@ -564,9 +564,63 @@ class ParserService:
         self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
         self.openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
+    async def _call_gemini_api(
+        self,
+        parts: List[Dict],
+        response_mime_type: str = "application/json",
+        timeout_seconds: int = 120
+    ) -> str:
+        """
+        Helper method to call Gemini API with retries (up to 10 attempts, 60s delay).
+        """
+        if not GEMINI_API_KEY:
+            raise Exception("GEMINI_API_KEY is not configured!")
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+        
+        payload = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseMimeType": response_mime_type
+            }
+        }
+
+        import asyncio
+        max_attempts = 10
+        delay_seconds = 60
+
+        for attempt in range(1, max_attempts + 1):
+            logger.info(f"🤖 [Gemini API] Request attempt {attempt}/{max_attempts} using model {GEMINI_MODEL}...")
+            try:
+                timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload, headers=headers) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                            return response_text
+                        elif resp.status == 429 or resp.status >= 500:
+                            error_text = await resp.text()
+                            logger.warning(f"Gemini API returned retryable status {resp.status} (attempt {attempt}/{max_attempts}): {error_text[:500]}")
+                        else:
+                            error_text = await resp.text()
+                            logger.error(f"Gemini API returned non-retryable status {resp.status}: {error_text[:500]}")
+                            raise Exception(f"Gemini API error status {resp.status}: {error_text[:200]}")
+            except Exception as e:
+                if "Gemini API error status" in str(e):
+                    raise e
+                logger.warning(f"Gemini API call failed on attempt {attempt}/{max_attempts} ({type(e).__name__}): {e}")
+            
+            if attempt < max_attempts:
+                logger.info(f"Waiting {delay_seconds} seconds before next Gemini API attempt...")
+                await asyncio.sleep(delay_seconds)
+
+        raise Exception(f"Не удалось выполнить запрос к ИИ. Попробовали {max_attempts} раз с моделью {GEMINI_MODEL}, но ИИ временно недоступен.")
+
     async def parse_transaction(self, text: str) -> Optional[Dict]:
         """
-        Parse transaction data from text using Claude
+        Parse transaction data from text using Gemini
 
         Args:
             text: Input text (from voice or manual input)
@@ -594,18 +648,8 @@ class ParserService:
 
             prompt = TRANSACTION_PARSER_PROMPT.format(text=text)
 
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                max_tokens=512,
-                temperature=0,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
-
-            response_text = response.choices[0].message.content.strip()
-            logger.debug(f"OpenAI raw response: {response_text}")
+            parts = [{"text": prompt}]
+            response_text = await self._call_gemini_api(parts)
 
             # Try to extract JSON from response
             json_text = self._extract_json(response_text)
@@ -619,16 +663,13 @@ class ParserService:
 
             return parsed
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Claude response as JSON: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Claude parsing failed: {e}")
+            logger.error(f"Transaction parsing failed: {e}")
             return None
 
     async def parse_supply(self, text: str) -> Optional[Dict]:
         """
-        Parse supply data from text using Claude
+        Parse supply data from text using Gemini
 
         Args:
             text: Input text (from voice or manual input)
@@ -641,26 +682,11 @@ class ParserService:
 
             prompt = SUPPLY_PARSER_PROMPT.format(text=text)
 
-            try:
-                response = await self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    max_tokens=1024,
-                    temperature=0,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    response_format={"type": "json_object"}
-                )
-            except Exception as api_error:
-                logger.error(f"OpenAI API call failed: {type(api_error).__name__}: {api_error}")
-                raise
-
-            response_text = response.choices[0].message.content.strip()
-            logger.debug(f"OpenAI raw response: {response_text}")
+            parts = [{"text": prompt}]
+            response_text = await self._call_gemini_api(parts)
 
             # Extract JSON from response
             json_text = self._extract_json(response_text)
-            logger.debug(f"json_text type: {type(json_text)}, repr: {repr(json_text)}")
             parsed = json.loads(json_text)
             logger.info(f"✅ Supply parsed successfully: {parsed}")
 
@@ -671,16 +697,13 @@ class ParserService:
 
             return parsed
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Claude response as JSON: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Claude supply parsing failed: {e}")
+            logger.error(f"Supply parsing failed: {e}")
             return None
 
     async def parse_multiple_transactions(self, text: str) -> Optional[Dict]:
         """
-        Parse multiple transactions from text using Claude
+        Parse multiple transactions from text using Gemini
 
         Args:
             text: Input text with multiple transactions
@@ -693,18 +716,8 @@ class ParserService:
 
             prompt = MULTIPLE_TRANSACTIONS_PARSER_PROMPT.format(text=text)
 
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                max_tokens=1024,
-                temperature=0,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-            )
-
-            response_text = response.choices[0].message.content.strip()
-            logger.debug(f"OpenAI raw response: {response_text}")
+            parts = [{"text": prompt}]
+            response_text = await self._call_gemini_api(parts)
 
             # Try to extract JSON from response
             json_text = self._extract_json(response_text)
@@ -718,11 +731,8 @@ class ParserService:
 
             return parsed
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Claude response as JSON: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Claude multiple transactions parsing failed: {e}")
+            logger.error(f"Multiple transactions parsing failed: {e}")
             return None
 
     async def parse_invoice_image(self, image_data: bytes, media_type: str = "image/jpeg") -> Optional[Dict]:
@@ -740,7 +750,7 @@ class ParserService:
 
     async def _parse_invoice_with_vision(self, file_data: bytes, media_type: str) -> Optional[Dict]:
         """
-        Parse supply invoice from image using Claude 3.5 Sonnet Vision API
+        Parse supply invoice from image using Gemini Vision API
         
         Args:
             file_data: Image bytes
@@ -750,285 +760,61 @@ class ParserService:
             Parsed supply dict or None if parsing failed
         """
         try:
-            # Encode to base64
             file_base64 = base64.standard_b64encode(file_data).decode("utf-8")
-            
             if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
-                media_type = "image/jpeg" # Fallback
+                media_type = "image/jpeg"
                 
-            # 0. Try Gemini first if API key is set
-            if GEMINI_API_KEY:
-                try:
-                    logger.info(f"Attempting OCR with Gemini: {GEMINI_MODEL}")
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-                    headers = {"Content-Type": "application/json"}
-                    
-                    payload = {
-                        "contents": [
-                            {
-                                "parts": [
-                                    {
-                                        "text": INVOICE_PARSER_PROMPT
-                                    },
-                                    {
-                                        "inlineData": {
-                                            "mimeType": media_type,
-                                            "data": file_base64
-                                        }
-                                    }
-                                ]
-                            }
-                        ],
-                        "generationConfig": {
-                            "responseMimeType": "application/json"
-                        }
-                    }
-                    
-                    timeout = aiohttp.ClientTimeout(total=120)
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.post(url, json=payload, headers=headers) as resp:
-                            if resp.status == 200:
-                                result = await resp.json()
-                                response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                                json_text = self._extract_json(response_text)
-                                parsed = json.loads(json_text)
-                                logger.info(f"✅ Invoice parsed successfully with Gemini. Items: {len(parsed.get('items', []))}")
-                                return self._reconcile_invoice_items(parsed)
-                            else:
-                                error_text = await resp.text()
-                                logger.warning(f"Gemini API returned error status {resp.status}: {error_text[:500]}")
-                except Exception as e:
-                    logger.warning(f"Gemini OCR attempt failed ({type(e).__name__}): {e}. Falling back to Claude...")
-
-            logger.info(f"Parsing invoice from image using Claude 3.5 Sonnet Vision API")
+            parts = [
+                {"text": INVOICE_PARSER_PROMPT},
+                {"inlineData": {"mimeType": media_type, "data": file_base64}}
+            ]
             
-            # Claude expects image/jpeg, image/png, image/gif, or image/webp
-            if media_type == "application/pdf":
-                logger.error("Claude 3.5 Sonnet API currently does not support direct PDF parsing in this implementation format. Convert to image first.")
-                return None
-
-            # Using fresh client for thread-safety in Flask (run_async creates a new event loop)
-            from anthropic import AsyncAnthropic, NotFoundError as AnthropicNotFoundError
-            from openai import AsyncOpenAI
-            from config import ANTHROPIC_API_KEY, OPENAI_API_KEY
-            
-            response_text = None
-            last_error = None
-            
-            # 1. Try Claude 3.5 Sonnet first (Best OCR overall)
-            try:
-                async with AsyncAnthropic(api_key=ANTHROPIC_API_KEY) as anthropic_client:
-                    for claude_model in ["claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620"]:
-                        try:
-                            logger.info(f"Attempting OCR with Anthropic: {claude_model}")
-                            response = await anthropic_client.messages.create(
-                                model=claude_model,
-                                max_tokens=4096,
-                                temperature=0,
-                                messages=[
-                                    {
-                                        "role": "user",
-                                        "content": [
-                                            {
-                                                "type": "image",
-                                                "source": {
-                                                    "type": "base64",
-                                                    "media_type": media_type,
-                                                    "data": file_base64,
-                                                }
-                                            },
-                                            {
-                                                "type": "text",
-                                                "text": INVOICE_PARSER_PROMPT
-                                            }
-                                        ]
-                                    }
-                                ]
-                            )
-                            response_text = ""
-                            for block in response.content:
-                                if block.type == 'text':
-                                    response_text += block.text
-                            break # Success!
-                        except AnthropicNotFoundError as e:
-                            logger.warning(f"Anthropic model {claude_model} not available (404). Trying next...")
-                            last_error = e
-                            continue
-            except Exception as e:
-                logger.warning(f"Anthropic client error: {e}")
-                last_error = e
-
-            # 2. Fallback to OpenAI GPT-4o-mini (Great at handwriting, cheap, no evaluation limits)
-            if not response_text:
-                logger.info("Falling back to OpenAI GPT-4o-mini for Vision OCR due to Anthropic limits...")
-                try:
-                    data_uri = f"data:{media_type};base64,{file_base64}"
-                    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-                    
-                    response = await openai_client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        max_tokens=4096,
-                        temperature=0,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": INVOICE_PARSER_PROMPT
-                                    },
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": data_uri
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    )
-                    response_text = response.choices[0].message.content
-                    logger.info("✅ OpenAI OCR successful")
-                except Exception as e:
-                    logger.error(f"OpenAI fallback failed: {e}")
-                    raise Exception(f"Все ИИ-модели недоступны. Anthropic Error: {last_error}, OpenAI Error: {e}")
-            
-            if not response_text:
-                raise Exception(f"Не удалось получить текст от распознавания. Последняя ошибка: {last_error}")
-                    
-            logger.info(f"Claude Vision raw response: {response_text[:500]}...")
-
-            # Extract JSON from response
+            response_text = await self._call_gemini_api(parts)
             json_text = self._extract_json(response_text)
-            logger.debug(f"Extracted JSON: {json_text[:500]}...")
-
-            try:
-                parsed = json.loads(json_text)
-            except json.JSONDecodeError as e:
-                # Try to fix common JSON issues
-                logger.warning(f"JSON parse error: {e}, attempting to fix...")
-                # Replace single quotes with double quotes (common GPT error)
-                json_text = json_text.replace("'", '"')
-                # Try again
-                try:
-                    parsed = json.loads(json_text)
-                    logger.info("✅ Fixed JSON successfully")
-                except json.JSONDecodeError as e2:
-                    logger.error(f"Failed to fix JSON: {e2}")
-                    logger.error(f"Problematic JSON: {json_text}")
-                    raise
-
-            logger.info(f"✅ Invoice parsed successfully: supplier={parsed.get('supplier')}, items={len(parsed.get('items', []))}")
-
-            # Validate required fields (supplier is optional, will be selected manually if missing)
-            if not parsed.get("items"):
-                logger.warning("Parsed invoice has no items")
-                return None
-
+            parsed = json.loads(json_text)
+            logger.info(f"✅ Invoice parsed successfully with Gemini. Items: {len(parsed.get('items', []))}")
             return self._reconcile_invoice_items(parsed)
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Claude Vision response as JSON: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Claude Vision invoice parsing failed: {e}")
-            raise Exception(f"Claude API Error: {str(e)}")
+            logger.error(f"Gemini Vision invoice parsing failed: {e}")
+            raise Exception(f"Gemini API Error: {str(e)}")
 
     async def parse_batch_image(self, file_data: bytes, media_type: str = "image/jpeg") -> Optional[Dict]:
         """
-        Parse image using Gemini API (or fall back to OpenAI Vision API if GEMINI_API_KEY is not set)
-        to classify it (cashier_sheet or printed_invoice) and extract structured expenses / supply items.
+        Parse image using Gemini API to classify it (cashier_sheet or printed_invoice) 
+        and extract structured expenses / supply items.
         """
-        file_base64 = base64.standard_b64encode(file_data).decode("utf-8")
-        if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
-            media_type = "image/jpeg"
+        try:
+            file_base64 = base64.standard_b64encode(file_data).decode("utf-8")
+            if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+                media_type = "image/jpeg"
 
-        if GEMINI_API_KEY:
-            try:
-                logger.info(f"Parsing batch image with Gemini {GEMINI_MODEL}...")
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-                headers = {"Content-Type": "application/json"}
-                
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {
-                                    "text": UNIFIED_BATCH_PARSER_PROMPT
-                                },
-                                {
-                                    "inlineData": {
-                                        "mimeType": media_type,
-                                        "data": file_base64
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                    "generationConfig": {
-                        "responseMimeType": "application/json"
+            parts = [
+                {
+                    "text": UNIFIED_BATCH_PARSER_PROMPT
+                },
+                {
+                    "inlineData": {
+                        "mimeType": media_type,
+                        "data": file_base64
                     }
                 }
-                
-                timeout = aiohttp.ClientTimeout(total=120)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, json=payload, headers=headers) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                            json_text = self._extract_json(response_text)
-                            parsed = json.loads(json_text)
-                            logger.info(f"✅ Batch image parsed successfully with Gemini. Type: {parsed.get('document_type')}")
-                            return self._reconcile_invoice_items(parsed)
-                        else:
-                            error_text = await resp.text()
-                            logger.error(f"Gemini API error (status {resp.status}): {error_text[:500]}")
-                            raise Exception(f"Gemini API error: status {resp.status}")
-            except Exception as e:
-                logger.error(f"Gemini batch image parsing failed ({type(e).__name__}): {e}. Falling back to OpenAI...")
+            ]
 
-        try:
-            logger.info("Parsing batch image with GPT-4o-mini Vision...")
-            data_uri = f"data:{media_type};base64,{file_base64}"
-            
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                max_tokens=4096,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": UNIFIED_BATCH_PARSER_PROMPT
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": data_uri
-                                }
-                            }
-                        ]
-                    }
-                ],
-                response_format={"type": "json_object"}
-            )
-            
-            response_text = response.choices[0].message.content.strip()
+            response_text = await self._call_gemini_api(parts)
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
-            logger.info(f"✅ Batch image parsed successfully with OpenAI. Type: {parsed.get('document_type')}")
+            logger.info(f"✅ Batch image parsed successfully with Gemini. Type: {parsed.get('document_type')}")
             return self._reconcile_invoice_items(parsed)
-            
+
         except Exception as e:
             logger.error(f"Failed to parse batch image: {e}")
             raise Exception(f"Vision parsing error: {str(e)}")
 
     async def parse_batch_text(self, text: str) -> Optional[Dict]:
         """
-        Parse text using Gemini API (or fall back to OpenAI if GEMINI_API_KEY is not set)
-        to classify it (cashier_sheet or printed_invoice) and extract structured expenses / supply items.
+        Parse text using Gemini API to classify it (cashier_sheet or printed_invoice) 
+        and extract structured expenses / supply items.
         """
         prompt = f"""Ты — интеллектуальный помощник по автоматизации бухгалтерии сети ресторанов PizzBurg.
 Перед тобой текстовые данные: это может быть список расходов кассира за смену (рукописный лист с разными тратами: зарплаты курьерам/поварам/кассирам, такси, хозтовары, разовые мелкие закупы продуктов), скопированный текст выписки банка (например Kaspi) или печатная накладная от поставщика.
@@ -1099,65 +885,14 @@ class ParserService:
 ВХОДНЫЕ ТЕКСТОВЫЕ ДАННЫЕ:
 {text}
 """
-        if GEMINI_API_KEY:
-            try:
-                logger.info(f"Parsing batch text with Gemini {GEMINI_MODEL}...")
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-                headers = {"Content-Type": "application/json"}
-                
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {
-                                    "text": prompt
-                                }
-                            ]
-                        }
-                    ],
-                    "generationConfig": {
-                        "responseMimeType": "application/json"
-                    }
-                }
-                
-                timeout = aiohttp.ClientTimeout(total=120)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, json=payload, headers=headers) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                            json_text = self._extract_json(response_text)
-                            parsed = json.loads(json_text)
-                            logger.info(f"✅ Batch text parsed successfully with Gemini. Type: {parsed.get('document_type')}")
-                            return self._reconcile_invoice_items(parsed)
-                        else:
-                            error_text = await resp.text()
-                            logger.error(f"Gemini API error (status {resp.status}): {error_text[:500]}")
-                            raise Exception(f"Gemini API error: status {resp.status}")
-            except Exception as e:
-                logger.error(f"Gemini batch text parsing failed ({type(e).__name__}): {e}. Falling back to OpenAI...")
-
         try:
-            logger.info("Parsing batch text with GPT-4o-mini...")
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                max_tokens=4096,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                response_format={"type": "json_object"}
-            )
-            
-            response_text = response.choices[0].message.content.strip()
+            parts = [{"text": prompt}]
+            response_text = await self._call_gemini_api(parts)
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
-            logger.info(f"✅ Batch text parsed successfully with OpenAI. Type: {parsed.get('document_type')}")
+            logger.info(f"✅ Batch text parsed successfully with Gemini. Type: {parsed.get('document_type')}")
             return self._reconcile_invoice_items(parsed)
-            
+
         except Exception as e:
             logger.error(f"Failed to parse batch text: {e}")
             raise Exception(f"Text parsing error: {str(e)}")
@@ -1359,96 +1094,19 @@ class ParserService:
                     }
                 })
 
-        payload = {
-            "contents": [
-                {
-                    "parts": parts
-                }
-            ],
-            "generationConfig": {
-                "responseMimeType": "application/json"
-            }
-        }
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-        headers = {"Content-Type": "application/json"}
-
         logger.info(f"🤖 [Gemini Assistant] Sending request to model {GEMINI_MODEL}...")
         try:
-            timeout = aiohttp.ClientTimeout(total=120)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload, headers=headers) as resp:
-                    logger.info(f"🤖 [Gemini Assistant] Response status received: {resp.status}")
-                    if resp.status == 200:
-                        result = await resp.json()
-                        response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                        json_text = self._extract_json(response_text)
-                        parsed = json.loads(json_text)
-                        logger.info("✅ Gemini assistant agent returned structured JSON successfully.")
-                        if isinstance(parsed, dict):
-                            parsed.setdefault('_model_used', GEMINI_MODEL)
-                        return parsed
-                    else:
-                        error_text = await resp.text()
-                        logger.error(f"Gemini API error in assistant (status {resp.status}): {error_text[:500]}")
-                        if OPENAI_API_KEY:
-                            return await self._fallback_to_openai_assistant(prompt_context, media_files)
-                        return {"response_text": f"Ошибка API Gemini: {resp.status}", "actions": []}
-        except Exception as e:
-            logger.error(f"Failed calling Gemini assistant agent ({type(e).__name__}): {e}")
-            if OPENAI_API_KEY:
-                return await self._fallback_to_openai_assistant(prompt_context, media_files)
-            return {"response_text": f"Произошла ошибка при обращении к ИИ: {str(e)}", "actions": []}
-
-    async def _fallback_to_openai_assistant(
-        self,
-        prompt_context: str,
-        media_files: Optional[List[Dict]] = None
-    ) -> Dict:
-        """Fallback assistant query using OpenAI GPT-5.4-mini"""
-        logger.info("⚠️ Falling back to OpenAI GPT-5.4-mini for assistant agent...")
-        try:
-            messages = [
-                {"role": "system", "content": ASSISTANT_SYSTEM_PROMPT},
-            ]
-
-            user_content = []
-            if media_files:
-                user_content.append({"type": "text", "text": prompt_context})
-                for media in media_files:
-                    if not media.get('mime_type', '').startswith('image/'):
-                        continue
-                    base64_data = base64.standard_b64encode(media['data']).decode("utf-8")
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media['mime_type']};base64,{base64_data}"
-                        }
-                    })
-                messages.append({"role": "user", "content": user_content})
-            else:
-                messages.append({"role": "user", "content": prompt_context})
-
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-            response = await client.chat.completions.create(
-                model="gpt-5.4-mini",
-                messages=messages,
-                response_format={"type": "json_object"},
-                timeout=30.0
-            )
-            response_text = response.choices[0].message.content.strip()
+            response_text = await self._call_gemini_api(parts)
             json_text = self._extract_json(response_text)
             parsed = json.loads(json_text)
-
-            logger.info("✅ Fallback to OpenAI GPT-5.4-mini successful.")
+            logger.info("✅ Gemini assistant agent returned structured JSON successfully.")
             if isinstance(parsed, dict):
-                parsed.setdefault('_model_used', 'gpt-5.4-mini')
+                parsed.setdefault('_model_used', GEMINI_MODEL)
             return parsed
         except Exception as e:
-            logger.error(f"Failed in OpenAI fallback assistant call: {e}", exc_info=True)
+            logger.error(f"Failed calling Gemini assistant agent ({type(e).__name__}): {e}")
             return {
-                "response_text": f"Произошла ошибка при обращении к ИИ (Gemini недоступен, резервный OpenAI GPT-5.4-mini также вернул ошибку: {str(e)})",
+                "response_text": f"Ошибка: Ассистент Gemini временно недоступен. Пожалуйста, отправьте запрос повторно позже. Ошибка: {str(e)}",
                 "actions": []
             }
 
@@ -1480,10 +1138,6 @@ class ParserService:
         if not GEMINI_API_KEY:
             # Fallback to processing if no key is configured
             return True
-
-        import base64
-        import aiohttp
-        import json
 
         prompt = """
         Вы — быстрый ИИ-классификатор намерений для бухгалтерского ассистента сети ресторанов PizzBurg.
@@ -1520,32 +1174,13 @@ class ParserService:
                     }
                 })
 
-        # Use configured GEMINI_MODEL for classification. If not set, fallback to gemini-1.5-flash.
-        classifier_model = GEMINI_MODEL or "gemini-1.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{classifier_model}:generateContent?key={GEMINI_API_KEY}"
-        headers = {"Content-Type": "application/json"}
-
-        payload = {
-            "contents": [{"parts": parts}],
-            "generationConfig": {"responseMimeType": "application/json"}
-        }
-
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload, headers=headers) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        response_text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                        json_text = self._extract_json(response_text)
-                        parsed = json.loads(json_text)
-                        is_intent = bool(parsed.get('is_business_intent', False))
-                        logger.info(f"🤖 [Intent Classifier] Classification result: {is_intent}. Reason: {parsed.get('reason')}")
-                        return is_intent
-                    else:
-                        error_text = await resp.text()
-                        logger.error(f"Failed to classify intent (status {resp.status}): {error_text[:300]}")
-                        return True
+            response_text = await self._call_gemini_api(parts, timeout_seconds=30)
+            json_text = self._extract_json(response_text)
+            parsed = json.loads(json_text)
+            is_intent = bool(parsed.get('is_business_intent', False))
+            logger.info(f"🤖 [Intent Classifier] Classification result: {is_intent}. Reason: {parsed.get('reason')}")
+            return is_intent
         except Exception as e:
             logger.error(f"Error in intent classification: {e}")
             return True
