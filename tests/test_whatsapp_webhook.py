@@ -155,6 +155,48 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         assert "🤖 *Ассистент PizzBurg*" in sent_message
         assert "Расход: Молоко" in sent_message
 
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_success_outgoing_text(mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config):
+    """Webhook successfully handles an outgoing text message (sent from phone) and calls Gemini"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    mock_agent_response = {
+        "response_text": "Расход сохранен.",
+        "actions": [{"action": "create_expense", "amount": 500, "description": "Молоко"}],
+        "_model_used": "mock-gemini"
+    }
+    
+    mock_execute_actions.return_value = ("Расход сохранен.", ["Расход: Молоко (500₸, Прочее)"])
+
+    payload = {
+        "typeWebhook": "outgoingMessageReceived",
+        "senderData": {
+            "chatId": "120363000000000000@g.us"
+        },
+        "messageData": {
+            "typeMessage": "textMessage",
+            "textMessageData": {
+                "textMessage": "Бот Расход молоко 500"
+            }
+        }
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
+        response = app_client.post(
+            '/api/whatsapp/webhook',
+            json=payload
+        )
+        
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'OK'
+        
+        mock_call_gemini.assert_called_once()
+        assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
+        mock_execute_actions.assert_called_once()
+        mock_send_whatsapp.assert_called_once()
+
 @patch("web_app.send_whatsapp_message")
 @patch("web_app.execute_assistant_actions")
 @patch("web_app.download_whatsapp_media")

@@ -8790,8 +8790,8 @@ def whatsapp_webhook():
         
         logger.info(f"Received WhatsApp webhook. typeWebhook: {type_webhook}, payload keys: {list(payload.keys())}")
         
-        # We only care about incoming messages
-        if type_webhook not in ('incomingMessageReceived', 'incomingFileMessageReceived'):
+        # We only care about incoming messages and messages sent manually from the linked phone
+        if type_webhook not in ('incomingMessageReceived', 'incomingFileMessageReceived', 'outgoingMessageReceived', 'outgoingFileMessageReceived'):
             return 'Ignored webhook type', 200
             
         sender_data = payload.get('senderData', {})
