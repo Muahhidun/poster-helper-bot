@@ -8956,7 +8956,8 @@ def whatsapp_webhook():
                 active_drafts=active_drafts,
                 supplier_profiles=supplier_profiles,
                 media_files=media_files,
-                assistant_memory=assistant_memory
+                assistant_memory=assistant_memory,
+                is_whatsapp=True
             ))
             
             response_text = agent_response.get('response_text', '')
