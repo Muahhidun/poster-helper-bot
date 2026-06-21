@@ -8867,7 +8867,7 @@ def whatsapp_webhook():
         )
         audio_path = None
         if file_msg_data:
-            download_url = file_msg_data.get('downloadUrl')
+            download_url = file_msg_data.get('downloadUrl') or file_msg_data.get('fileUrl')
             file_name = file_msg_data.get('fileName', 'attachment.jpg')
             caption = file_msg_data.get('caption', '')
             if caption and not message_text:

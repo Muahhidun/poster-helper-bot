@@ -566,14 +566,14 @@ def test_whatsapp_webhook_success_audio(mock_transcribe, mock_download, mock_exe
     mock_execute_actions.return_value = ("Расход сохранен.", ["Расход: Молоко (500₸)"])
 
     payload = {
-        "typeWebhook": "incomingMessageReceived",
+        "typeWebhook": "outgoingMessageReceived",
         "senderData": {
             "chatId": "120363000000000000@g.us"
         },
         "messageData": {
             "typeMessage": "audioMessage",
             "audioMessageData": {
-                "downloadUrl": "https://api.green-api.com/download/some_voice.ogg",
+                "fileUrl": "https://api.green-api.com/download/some_voice.ogg",
                 "fileName": "voice.ogg"
             }
         }
