@@ -2332,6 +2332,41 @@ def api_assistant_memory_rollback():
     return jsonify({"success": False, "message": "Версия не найдена"}), 404
 
 
+def transcribe_voice_file(file_path: str, user_id: int) -> str:
+    """Transcribe audio file using OpenAI Whisper API with domain vocabulary."""
+    from config import OPENAI_API_KEY
+    if not OPENAI_API_KEY:
+        raise ValueError("Ключ OpenAI API не настроен на сервере")
+
+    from openai import OpenAI
+    
+    whisper_prompt = (
+        "Расходы и поставки ресторана PizzBurg: фарш, лаваш, айран, донер, "
+        "Кюрдамир, Япоша, Алимжан, Смолл, Каспи, Халык, тенге, зарплата, "
+        "инкассация, поставка, накладная, черновик, чек, удали чек."
+    )
+    try:
+        db = get_database()
+        supplier_names = []
+        profiles = db.get_supplier_ingredient_profiles(user_id)
+        if isinstance(profiles, dict):
+            supplier_names = list(profiles.keys())[:20]
+        if supplier_names:
+            whisper_prompt += " Поставщики: " + ", ".join(supplier_names) + "."
+    except Exception as e:
+        logger.warning(f"Failed to load supplier names for whisper prompt: {e}")
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    with open(file_path, 'rb') as f:
+        transcription = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f,
+            language="ru",
+            prompt=whisper_prompt[:900]
+        )
+    return transcription.text
+
+
 @app.route('/api/assistant/transcribe', methods=['POST'])
 def api_assistant_transcribe():
     """Transcribe voice note using OpenAI Whisper"""
@@ -2342,13 +2377,8 @@ def api_assistant_transcribe():
     if not audio_file or not audio_file.filename:
         return jsonify({'error': 'Пустой файл аудио'}), 400
 
-    from config import OPENAI_API_KEY
-    if not OPENAI_API_KEY:
-        return jsonify({'error': 'Ключ OpenAI API не настроен на сервере'}), 500
-
     import tempfile
     import os
-    from openai import OpenAI
 
     try:
         suffix = os.path.splitext(audio_file.filename)[1] or '.webm'
@@ -2357,33 +2387,7 @@ def api_assistant_transcribe():
             temp_path = temp_audio.name
 
         try:
-            # Domain vocabulary primes Whisper for restaurant/supplier terms,
-            # so dictated commands need no manual correction
-            whisper_prompt = (
-                "Расходы и поставки ресторана PizzBurg: фарш, лаваш, айран, донер, "
-                "Кюрдамир, Япоша, Алимжан, Смолл, Каспи, Халык, тенге, зарплата, "
-                "инкассация, поставка, накладная, черновик, чек, удали чек."
-            )
-            try:
-                supplier_names = []
-                db = get_database()
-                profiles = db.get_supplier_ingredient_profiles(g.user_id)
-                if isinstance(profiles, dict):
-                    supplier_names = list(profiles.keys())[:20]
-                if supplier_names:
-                    whisper_prompt += " Поставщики: " + ", ".join(supplier_names) + "."
-            except Exception:
-                pass
-
-            client = OpenAI(api_key=OPENAI_API_KEY)
-            with open(temp_path, 'rb') as f:
-                transcription = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=f,
-                    language="ru",
-                    prompt=whisper_prompt[:900]
-                )
-            text = transcription.text
+            text = transcribe_voice_file(temp_path, g.user_id)
             return jsonify({'success': True, 'text': text})
         finally:
             if os.path.exists(temp_path):
@@ -8853,7 +8857,15 @@ def whatsapp_webhook():
             message_text = ext_text_data.get('text', '')
             
         # 3. Parse and download file message
-        file_msg_data = message_data.get('fileMessageData') or message_data.get('imageMessageData') or message_data.get('documentMessageData') or {}
+        is_audio = (type_message == 'audioMessage')
+        file_msg_data = (
+            message_data.get('fileMessageData') or 
+            message_data.get('imageMessageData') or 
+            message_data.get('documentMessageData') or 
+            message_data.get('audioMessageData') or 
+            {}
+        )
+        audio_path = None
         if file_msg_data:
             download_url = file_msg_data.get('downloadUrl')
             file_name = file_msg_data.get('fileName', 'attachment.jpg')
@@ -8865,15 +8877,18 @@ def whatsapp_webhook():
                 try:
                     safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-')
                     if not safe_filename:
-                        safe_filename = 'whatsapp_file.jpg'
+                        safe_filename = 'whatsapp_file.jpg' if not is_audio else 'whatsapp_audio.ogg'
                     unique_filename = f"wa_{int(_time.time())}_{safe_filename}"
                     local_path = download_whatsapp_media(download_url, unique_filename)
-                    media_paths.append(local_path)
+                    if is_audio:
+                        audio_path = local_path
+                    else:
+                        media_paths.append(local_path)
                 except Exception as file_err:
                     logger.error(f"Failed to download file from WhatsApp webhook: {file_err}")
                     send_whatsapp_message(chat_id, f"⚠️ Не удалось скачать файл: {file_name}")
                     
-        if not message_text and not media_paths:
+        if not message_text and not media_paths and not audio_path:
             return 'No content to parse', 200
 
         # Check if the user explicitly addressed the bot
@@ -8894,8 +8909,39 @@ def whatsapp_webhook():
         
         # Run parsing and database saving
         def _process_whatsapp_async():
+            nonlocal message_text, is_addressed
             db = get_database()
             parser = get_parser_service()
+            
+            if audio_path:
+                try:
+                    logger.info(f"Transcribing audio file: {audio_path}")
+                    transcribed_text = transcribe_voice_file(audio_path, user_id)
+                    logger.info(f"Audio transcription success: '{transcribed_text}'")
+                    message_text = transcribed_text
+                    
+                    if message_text:
+                        cleaned_lower = message_text.strip().lower()
+                        for prefix in ('бот:', 'bot:', 'бот,', 'bot,', 'бот', 'bot', '+', '/'):
+                            if cleaned_lower.startswith(prefix):
+                                is_addressed = True
+                                message_text = message_text.strip()[len(prefix):].strip()
+                                if message_text.startswith(',') or message_text.startswith(':'):
+                                    message_text = message_text[1:].strip()
+                                break
+                except Exception as trans_err:
+                    logger.error(f"Failed to transcribe WhatsApp voice message: {trans_err}", exc_info=True)
+                    send_whatsapp_message(chat_id, f"⚠️ Не удалось распознать голосовое сообщение: {trans_err}")
+                    try:
+                        os.unlink(audio_path)
+                    except Exception:
+                        pass
+                    return
+                finally:
+                    try:
+                        os.unlink(audio_path)
+                    except Exception:
+                        pass
             
             # Shift Almaty time by -2 hours for business date classification
             from datetime import timedelta

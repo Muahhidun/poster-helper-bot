@@ -542,5 +542,67 @@ def test_whatsapp_webhook_text_no_prefix_banter(mock_execute_actions, mock_send_
         mock_send_whatsapp.assert_not_called()
 
 
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+@patch("web_app.download_whatsapp_media")
+@patch("web_app.transcribe_voice_file")
+def test_whatsapp_webhook_success_audio(mock_transcribe, mock_download, mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config, tmp_path):
+    """Voice note message is downloaded, transcribed via Whisper, and then processed normally"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    # Create a dummy audio file
+    dummy_file = tmp_path / "voice.ogg"
+    dummy_file.write_bytes(b"fake audio data")
+    
+    mock_download.return_value = str(dummy_file)
+    mock_transcribe.return_value = "Бот Расход молоко 500"
+    
+    # Mocking Gemini response
+    mock_agent_response = {
+        "response_text": "Расход сохранен.",
+        "actions": [{"action": "create_expense", "amount": 500, "description": "Молоко"}],
+        "_model_used": "mock-gemini"
+    }
+    mock_execute_actions.return_value = ("Расход сохранен.", ["Расход: Молоко (500₸)"])
+
+    payload = {
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {
+            "chatId": "120363000000000000@g.us"
+        },
+        "messageData": {
+            "typeMessage": "audioMessage",
+            "audioMessageData": {
+                "downloadUrl": "https://api.green-api.com/download/some_voice.ogg",
+                "fileName": "voice.ogg"
+            }
+        }
+    }
+
+    with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
+        response = app_client.post(
+            '/api/whatsapp/webhook',
+            json=payload
+        )
+        
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'OK'
+        
+        # Verify media download was called
+        from unittest.mock import ANY
+        mock_download.assert_called_once_with("https://api.green-api.com/download/some_voice.ogg", ANY)
+        
+        # Verify Whisper transcription was called
+        mock_transcribe.assert_called_once_with(str(dummy_file), TEST_USER_ID)
+        
+        # Verify Gemini agent was called with transcribed command (prefix stripped)
+        mock_call_gemini.assert_called_once()
+        assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
+        
+        # Verify WhatsApp message sent
+        mock_send_whatsapp.assert_called_once()
+        assert "Расход: Молоко" in mock_send_whatsapp.call_args[0][1]
+
+
 
 
