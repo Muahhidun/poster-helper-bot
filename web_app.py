@@ -9002,6 +9002,7 @@ def whatsapp_webhook():
             
             response_text = agent_response.get('response_text', '')
             actions = agent_response.get('actions', [])
+            logger.info(f"🤖 [Gemini Assistant] Response text: '{response_text}', actions: {actions}")
             
             # Execute assistant actions
             response_text, created_drafts = execute_assistant_actions(user_id, actions, date_str, response_text, is_webhook=True)
@@ -9023,18 +9024,15 @@ def whatsapp_webhook():
             db.add_assistant_chat_message(user_id, 'user', message_text, saved_media_urls)
             db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=agent_response.get('_model_used', 'gemini-3.5-flash'))
             
-            # Send reply to WhatsApp group if explicitly addressed, if drafts were created, or if any assistant actions were executed
-            if is_addressed or created_drafts or actions:
-                reply_parts = ["🤖 *Ассистент PizzBurg*"]
-                if response_text:
-                    reply_parts.append(response_text)
-                if created_drafts:
-                    drafts_str = "\n".join(f"✅ {d}" for d in created_drafts)
-                    reply_parts.append(drafts_str)
-                reply_msg = "\n\n".join(reply_parts)
-                send_whatsapp_message(chat_id, reply_msg)
-            else:
-                logger.info(f"Silent processing completed for WhatsApp group. Chat history saved. Drafts created: {len(created_drafts)}")
+            # Send reply to WhatsApp group since it was classified as a valid business message or addressed
+            reply_parts = ["🤖 *Ассистент PizzBurg*"]
+            if response_text:
+                reply_parts.append(response_text)
+            if created_drafts:
+                drafts_str = "\n".join(f"✅ {d}" for d in created_drafts)
+                reply_parts.append(drafts_str)
+            reply_msg = "\n\n".join(reply_parts)
+            send_whatsapp_message(chat_id, reply_msg)
             
             for local_path in media_paths:
                 try:
