@@ -475,5 +475,72 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
             mock_send_whatsapp.assert_called_once()
 
 
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_text_no_prefix_business(mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config):
+    """Text message without prefix but with business intent is classified as business and processed"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    
+    mock_agent_response = {
+        "response_text": "Расход сохранен.",
+        "actions": [{"action": "create_expense", "amount": 500, "description": "Молоко"}],
+        "_model_used": "mock-gemini"
+    }
+    mock_execute_actions.return_value = ("Расход сохранен.", ["Расход: Молоко (500₸)"])
+
+    payload = {
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {"chatId": "120363000000000000@g.us"},
+        "messageData": {
+            "typeMessage": "textMessage",
+            "textMessageData": {
+                "textMessage": "Расход молоко 500"
+            }
+        }
+    }
+
+    with patch("parser_service.ParserService.check_message_intent", new_callable=AsyncMock, return_value=True) as mock_check_intent, \
+         patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
+        
+        response = app_client.post('/api/whatsapp/webhook', json=payload)
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'OK'
+        
+        mock_check_intent.assert_called_once()
+        mock_call_gemini.assert_called_once()
+        mock_execute_actions.assert_called_once()
+        mock_send_whatsapp.assert_called_once()
+
+
+@patch("web_app.send_whatsapp_message")
+@patch("web_app.execute_assistant_actions")
+def test_whatsapp_webhook_text_no_prefix_banter(mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config):
+    """Text message without prefix and without business intent (banter) is classified as non-business and ignored"""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+
+    payload = {
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {"chatId": "120363000000000000@g.us"},
+        "messageData": {
+            "typeMessage": "textMessage",
+            "textMessageData": {
+                "textMessage": "спасибо, хорошего дня"
+            }
+        }
+    }
+
+    with patch("parser_service.ParserService.check_message_intent", new_callable=AsyncMock, return_value=False) as mock_check_intent, \
+         patch("parser_service.ParserService.call_gemini_assistant_agent") as mock_call_gemini:
+        
+        response = app_client.post('/api/whatsapp/webhook', json=payload)
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'OK'
+        
+        mock_check_intent.assert_called_once()
+        mock_call_gemini.assert_not_called()
+        mock_execute_actions.assert_not_called()
+        mock_send_whatsapp.assert_not_called()
+
+
 
 

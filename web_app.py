@@ -8878,9 +8878,6 @@ def whatsapp_webhook():
 
         # Check if the user explicitly addressed the bot
         is_addressed = False
-        if not media_paths:
-            is_addressed = True
-
         if message_text:
             cleaned_lower = message_text.strip().lower()
             # Check prefixes
@@ -8892,11 +8889,6 @@ def whatsapp_webhook():
                     if message_text.startswith(',') or message_text.startswith(':'):
                         message_text = message_text[1:].strip()
                     break
-
-        # If text-only (no media), we ignore it if it is not explicitly addressed to the bot
-        if not media_paths and not is_addressed:
-            logger.info(f"Ignored text-only WhatsApp message without bot prefix: '{message_text[:50]}'")
-            return 'Ignored non-bot text message', 200
             
         logger.info(f"Processing WhatsApp message from group {chat_id} for user {user_id} (is_addressed: {is_addressed}). Text: '{message_text[:100]}', media_count: {len(media_paths)}")
         
