@@ -8878,6 +8878,9 @@ def whatsapp_webhook():
 
         # Check if the user explicitly addressed the bot
         is_addressed = False
+        if not media_paths:
+            is_addressed = True
+
         if message_text:
             cleaned_lower = message_text.strip().lower()
             # Check prefixes
@@ -8956,8 +8959,7 @@ def whatsapp_webhook():
                 active_drafts=active_drafts,
                 supplier_profiles=supplier_profiles,
                 media_files=media_files,
-                assistant_memory=assistant_memory,
-                is_whatsapp=True
+                assistant_memory=assistant_memory
             ))
             
             response_text = agent_response.get('response_text', '')
@@ -8985,10 +8987,13 @@ def whatsapp_webhook():
             
             # Send reply to WhatsApp group if explicitly addressed, if drafts were created, or if any assistant actions were executed
             if is_addressed or created_drafts or actions:
+                reply_parts = ["🤖 *Ассистент PizzBurg*"]
+                if response_text:
+                    reply_parts.append(response_text)
                 if created_drafts:
-                    reply_msg = "🤖 *Ассистент PizzBurg*\n" + "\n".join(f"✅ {d}" for d in created_drafts)
-                else:
-                    reply_msg = f"🤖 *Ассистент PizzBurg*\n\n{response_text}"
+                    drafts_str = "\n".join(f"✅ {d}" for d in created_drafts)
+                    reply_parts.append(drafts_str)
+                reply_msg = "\n\n".join(reply_parts)
                 send_whatsapp_message(chat_id, reply_msg)
             else:
                 logger.info(f"Silent processing completed for WhatsApp group. Chat history saved. Drafts created: {len(created_drafts)}")

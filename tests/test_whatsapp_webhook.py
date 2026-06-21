@@ -140,7 +140,6 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         # Verify Gemini agent was called with correct message text
         mock_call_gemini.assert_called_once()
         assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
-        assert mock_call_gemini.call_args.kwargs.get('is_whatsapp') is True
         
         # Verify actions executed
         mock_execute_actions.assert_called_once()
@@ -195,7 +194,6 @@ def test_whatsapp_webhook_success_outgoing_text(mock_execute_actions, mock_send_
         
         mock_call_gemini.assert_called_once()
         assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
-        assert mock_call_gemini.call_args.kwargs.get('is_whatsapp') is True
         mock_execute_actions.assert_called_once()
         mock_send_whatsapp.assert_called_once()
 
