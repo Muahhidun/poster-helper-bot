@@ -1122,7 +1122,7 @@ class ParserService:
 
     def _extract_json(self, text: str) -> str:
         """Extract JSON from Claude response text"""
-        json_text = text
+        json_text = text.strip()
 
         # Remove markdown code blocks
         if "```json" in json_text:
@@ -1131,11 +1131,10 @@ class ParserService:
             json_text = json_text.split("```")[1].split("```")[0].strip()
 
         # Find JSON object in text
-        if not json_text.startswith("{"):
-            start_idx = json_text.find("{")
-            end_idx = json_text.rfind("}")
-            if start_idx >= 0 and end_idx > start_idx:
-                json_text = json_text[start_idx:end_idx+1]
+        start_idx = json_text.find("{")
+        end_idx = json_text.rfind("}")
+        if start_idx >= 0 and end_idx > start_idx:
+            json_text = json_text[start_idx:end_idx+1]
 
         logger.debug(f"Extracted JSON: {json_text}")
         return json_text
