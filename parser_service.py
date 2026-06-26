@@ -586,11 +586,12 @@ class ParserService:
         }
 
         import asyncio
+        import re
         max_attempts = 10
-        delay_seconds = 60
 
         for attempt in range(1, max_attempts + 1):
             logger.info(f"🤖 [Gemini API] Request attempt {attempt}/{max_attempts} using model {GEMINI_MODEL}...")
+            delay_seconds = 10  # default fallback delay for this attempt
             try:
                 timeout = aiohttp.ClientTimeout(total=timeout_seconds)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -602,6 +603,15 @@ class ParserService:
                         elif resp.status == 429 or resp.status >= 500:
                             error_text = await resp.text()
                             logger.warning(f"Gemini API returned retryable status {resp.status} (attempt {attempt}/{max_attempts}): {error_text[:500]}")
+                            if resp.status == 429:
+                                match = re.search(r"Please retry in (\d+(?:\.\d+)?)s", error_text)
+                                if match:
+                                    try:
+                                        delay_seconds = max(1.0, min(float(match.group(1)) + 1.0, 60.0))
+                                    except Exception:
+                                        pass
+                            else:
+                                delay_seconds = 15  # wait 15s for 5xx errors
                         else:
                             error_text = await resp.text()
                             logger.error(f"Gemini API returned non-retryable status {resp.status}: {error_text[:500]}")
@@ -610,9 +620,10 @@ class ParserService:
                 if "Gemini API error status" in str(e):
                     raise e
                 logger.warning(f"Gemini API call failed on attempt {attempt}/{max_attempts} ({type(e).__name__}): {e}")
+                delay_seconds = 5
             
             if attempt < max_attempts:
-                logger.info(f"Waiting {delay_seconds} seconds before next Gemini API attempt...")
+                logger.info(f"Waiting {delay_seconds:.2f} seconds before next Gemini API attempt...")
                 await asyncio.sleep(delay_seconds)
 
         raise Exception(f"Не удалось выполнить запрос к ИИ. Попробовали {max_attempts} раз с моделью {GEMINI_MODEL}, но ИИ временно недоступен.")

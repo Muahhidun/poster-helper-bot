@@ -2143,11 +2143,32 @@ def _api_assistant_message_impl():
     db.add_assistant_chat_message(user_id, 'user', message, saved_media_paths)
 
     # Fetch context
-    chat_history = db.get_assistant_chat_history(user_id, limit=30)
+    chat_history = db.get_assistant_chat_history(user_id, limit=6)
     all_drafts = db.get_expense_drafts(user_id, status="all")
     active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
 
-    supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+    # Smart supplier profile filtering
+    raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+    has_files = len(file_bundles) > 0
+    msg_lower = (message or "").lower()
+    supply_keywords = {"постав", "накладн", "привез", "инвойс", "счет", "счёт", "чек", "продукт", "сырь", "ингредиент", "по, ", " по ", " кг", " шт", " литр"}
+    has_supply_keywords = any(kw in msg_lower for kw in supply_keywords)
+    
+    is_supply_related = has_files or has_supply_keywords
+    
+    if not is_supply_related and raw_supplier_profiles:
+        for supplier, ingredients in raw_supplier_profiles.items():
+            if supplier.lower() in msg_lower:
+                is_supply_related = True
+                break
+            for ing in ingredients:
+                if len(ing) >= 3 and ing in msg_lower:
+                    is_supply_related = True
+                    break
+            if is_supply_related:
+                break
+                
+    supplier_profiles = raw_supplier_profiles if is_supply_related else {}
     assistant_memory = db.get_assistant_memory(user_id)
 
     from parser_service import get_parser_service
@@ -8948,7 +8969,7 @@ def whatsapp_webhook():
             now_kz = _kz_now() - timedelta(hours=2)
             date_str = now_kz.strftime('%Y-%m-%d')
             
-            chat_history = db.get_assistant_chat_history(user_id, limit=30)
+            chat_history = db.get_assistant_chat_history(user_id, limit=6)
             
             all_drafts = db.get_expense_drafts(user_id, status="all")
             active_drafts = [d for d in all_drafts if d.get('created_at') and get_date_in_kz_tz(d['created_at'], KZ_TZ) == date_str]
@@ -8965,7 +8986,28 @@ def whatsapp_webhook():
                         'items': sd_with_items.get('items', [])
                     })
                     
-            supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+            # Smart supplier profile filtering
+            raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+            has_files = len(media_paths) > 0
+            msg_lower = (message_text or "").lower()
+            supply_keywords = {"постав", "накладн", "привез", "инвойс", "счет", "счёт", "чек", "продукт", "сырь", "ингредиент", "по, ", " по ", " кг", " шт", " литр"}
+            has_supply_keywords = any(kw in msg_lower for kw in supply_keywords)
+            
+            is_supply_related = has_files or has_supply_keywords
+            
+            if not is_supply_related and raw_supplier_profiles:
+                for supplier, ingredients in raw_supplier_profiles.items():
+                    if supplier.lower() in msg_lower:
+                        is_supply_related = True
+                        break
+                    for ing in ingredients:
+                        if len(ing) >= 3 and ing in msg_lower:
+                            is_supply_related = True
+                            break
+                    if is_supply_related:
+                        break
+                        
+            supplier_profiles = raw_supplier_profiles if is_supply_related else {}
             assistant_memory = db.get_assistant_memory(user_id)
             
             # Prepare files in format expected by agent
