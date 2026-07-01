@@ -8,7 +8,7 @@ import { Loading } from '../components/Loading'
 import { formatMoney, parseInputValue, getKzToday, formatDate, toPosterDate } from '../utils/format'
 import type { CafeSalaryEntry, CafeCalculations } from '../types'
 
-const CAFE_ROLES = ['Кассир', 'Сушист', 'Повар Сандей'] as const
+const CAFE_ROLES = ['Кассир', 'Сушист', 'Помощник сушиста', 'Повар Сандей'] as const
 
 interface SalaryState {
   entries: CafeSalaryEntry[]
@@ -233,12 +233,11 @@ export const CafeShiftClosing: React.FC = () => {
     })
   }, [])
 
-  // Create salaries
   const handleCreateSalaries = useCallback(async () => {
-    const emptyNames = salary.entries.some(e => !e.name.trim())
+    const invalidEntries = salary.entries.filter(e => e.amount > 0 && !e.name.trim())
     const zeroAmounts = salary.entries.every(e => e.amount === 0)
-    if (emptyNames) {
-      setError('Заполните все имена')
+    if (invalidEntries.length > 0) {
+      setError(`Заполните имя для: ${invalidEntries.map(e => e.role).join(', ')}`)
       return
     }
     if (zeroAmounts) {

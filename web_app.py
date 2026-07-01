@@ -7194,11 +7194,11 @@ def api_cafe_employees_last():
             import json
             try:
                 salaries = json.loads(row[0])
-                return jsonify({'success': True, 'salaries': salaries})
+                return jsonify({'success': True, 'salaries': salaries, 'employees': salaries})
             except Exception:
                 pass
 
-        return jsonify({'success': True, 'salaries': None})
+        return jsonify({'success': True, 'salaries': None, 'employees': None})
 
     except Exception as e:
         import traceback
@@ -7239,6 +7239,7 @@ def api_cafe_salaries_create():
         CAFE_SALARY_CATEGORIES = {
             'Кассир': 16,
             'Сушист': 17,
+            'Помощник сушиста': 17,
             'Повар Сандей': None,  # Auto-detect from API
         }
         CAFE_ACCOUNT_FROM = 5  # Оставил в кассе (на закупы)
