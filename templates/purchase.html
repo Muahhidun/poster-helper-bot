@@ -457,14 +457,18 @@
         // Fetch if not loaded
         if (allPosterIngredients.length === 0) {
             fetch('/api/purchase/poster-ingredients')
-                .then(res => res.json())
+                .then(res => {
+                    if (!res.ok) throw new Error('Не удалось загрузить список ингредиентов');
+                    return res.json();
+                })
                 .then(data => {
+                    if (data.error) throw new Error(data.error);
                     allPosterIngredients = data.ingredients || [];
                     renderPosterSelect(currentPosterId);
                 })
                 .catch(err => {
                     console.error(err);
-                    select.innerHTML = '<option value="">Ошибка загрузки списка</option>';
+                    select.innerHTML = `<option value="">Ошибка: ${err.message}</option>`;
                 });
         } else {
             renderPosterSelect(currentPosterId);

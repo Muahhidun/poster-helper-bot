@@ -2856,28 +2856,29 @@ def api_purchase_submit():
 
 @app.route('/api/purchase/poster-ingredients', methods=['GET'])
 def api_purchase_poster_ingredients():
-    """Fetch all ingredients from Poster for linking UI"""
+    """Fetch all ingredients from local IngredientMatcher cache for linking UI"""
     telegram_user_id = g.user_id
-    from poster_client import get_poster_client
     try:
-        poster = get_poster_client(telegram_user_id)
-        all_ings = run_async(poster.get_ingredients())
+        from matchers import get_ingredient_matcher
+        matcher = get_ingredient_matcher(telegram_user_id)
         ingredients = []
-        for ing in all_ings:
-            ing_id = int(ing.get('ingredient_id', 0) or ing.get('id', 0))
-            name = ing.get('ingredient_name') or ing.get('name', '')
-            unit = ing.get('unit', '')
-            if ing_id and name:
-                ingredients.append({
-                    'id': ing_id,
-                    'name': name,
-                    'unit': unit
-                })
+        seen_ids = set()
+        for (ing_id, acc_name), info in matcher.ingredients.items():
+            if ing_id not in seen_ids:
+                seen_ids.add(ing_id)
+                name = info.get('name') or info.get('ingredient_name') or ''
+                unit = info.get('unit') or ''
+                if name:
+                    ingredients.append({
+                        'id': ing_id,
+                        'name': name,
+                        'unit': unit
+                    })
         # Sort by name
         ingredients.sort(key=lambda x: x['name'].lower())
         return jsonify({'ingredients': ingredients})
     except Exception as e:
-        logger.error(f"Failed to fetch Poster ingredients for linking: {e}")
+        logger.error(f"Failed to load cached ingredients for linking: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -2898,20 +2899,28 @@ def api_purchase_link_ingredient():
         db.update_purchase_ingredient_poster_id(telegram_user_id, ing_id, None)
         return jsonify({'success': True, 'name': None})
         
-    # Get ingredient name from Poster
-    from poster_client import get_poster_client
+    # Get ingredient name from local IngredientMatcher
+    from matchers import get_ingredient_matcher
     try:
-        poster = get_poster_client(telegram_user_id)
-        all_ings = run_async(poster.get_ingredients())
+        matcher = get_ingredient_matcher(telegram_user_id)
+        info = matcher.get_ingredient_info(poster_ingredient_id)
         poster_name = None
-        for ing in all_ings:
-            item_id = int(ing.get('ingredient_id', 0) or ing.get('id', 0))
-            if item_id == poster_ingredient_id:
-                poster_name = ing.get('ingredient_name') or ing.get('name', '')
-                break
-                
+        if info:
+            poster_name = info.get('name') or info.get('ingredient_name')
+            
         if not poster_name:
-            return jsonify({'error': 'Ингредиент не найден в Poster'}), 404
+            # Fallback to Poster API
+            from poster_client import get_poster_client
+            poster = get_poster_client(telegram_user_id)
+            all_ings = run_async(poster.get_ingredients())
+            for ing in all_ings:
+                item_id = int(ing.get('ingredient_id', 0) or ing.get('id', 0))
+                if item_id == poster_ingredient_id:
+                    poster_name = ing.get('ingredient_name') or ing.get('name', '')
+                    break
+                    
+        if not poster_name:
+            return jsonify({'error': 'Ингредиент не найден'}), 404
             
         # Update both poster ID and name in DB
         db.update_purchase_ingredient_poster_id(telegram_user_id, ing_id, poster_ingredient_id)
@@ -2922,7 +2931,7 @@ def api_purchase_link_ingredient():
             'name': poster_name
         })
     except Exception as e:
-        logger.error(f"Failed to link ingredient to Poster ID: {e}")
+        logger.error(f"Failed to link ingredient: {e}")
         return jsonify({'error': str(e)}), 500
 
 

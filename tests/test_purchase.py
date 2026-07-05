@@ -179,20 +179,22 @@ def test_api_purchase_linking(
     resp = client.get('/api/purchase/poster-ingredients')
     assert resp.status_code == 200
     data = json.loads(resp.data)
-    assert len(data['ingredients']) == 1
-    assert data['ingredients'][0]['id'] == 198
-    assert data['ingredients'][0]['name'] == 'Булка большая'
+    assert len(data['ingredients']) > 0
+    # Check that 'Булочка Бриош (24шт)' (ID 164) is in the list
+    brio_ing = next((ing for ing in data['ingredients'] if ing['id'] == 164), None)
+    assert brio_ing is not None
+    assert brio_ing['name'] == 'Булочка Бриош (24шт)'
     
     # POST link ingredient
     link_data = {
         'ingredient_id': 201,
-        'poster_ingredient_id': 198
+        'poster_ingredient_id': 164
     }
     resp_link = client.post('/api/purchase/link-ingredient', json=link_data)
     assert resp_link.status_code == 200
     res_data = json.loads(resp_link.data)
     assert res_data['success'] is True
-    assert res_data['name'] == 'Булка большая'
+    assert res_data['name'] == 'Булочка Бриош (24шт)'
     
-    mock_update_id.assert_called_once_with(user_id, 201, 198)
-    mock_update_name.assert_called_once_with(user_id, 201, 'Булка большая')
+    mock_update_id.assert_called_once_with(user_id, 201, 164)
+    mock_update_name.assert_called_once_with(user_id, 201, 'Булочка Бриош (24шт)')
