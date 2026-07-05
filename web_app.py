@@ -1842,6 +1842,12 @@ def list_expenses():
                           account_totals=account_totals)
 
 
+@app.route('/purchase')
+def view_purchase_page():
+    """Render the Purchase Sheet (Закуп) template page"""
+    return render_template('purchase.html')
+
+
 @app.route('/assistant')
 def view_assistant():
     """Render the interactive AI Bookkeeper Assistant page"""
