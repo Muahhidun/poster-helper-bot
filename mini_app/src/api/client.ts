@@ -45,6 +45,7 @@ import type {
   CafeShiftDatesResponse,
   CafeReportResponse,
   CafeTransfersResponse,
+  BlankResponse,
 } from '../types'
 
 // Get API base URL from environment or use relative path
@@ -407,6 +408,22 @@ class ApiClient {
     return this.request<CafeTransfersResponse>('/api/cafe/transfers', {
       method: 'POST',
       body: JSON.stringify({ date }),
+    })
+  }
+
+  // Purchase Sheet (Закуп)
+  async getPurchaseBlank(date?: string): Promise<BlankResponse> {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    const queryString = params.toString()
+    const endpoint = queryString ? `/api/purchase/blank?${queryString}` : '/api/purchase/blank'
+    return this.request<BlankResponse>(endpoint)
+  }
+
+  async submitPurchase(data: { date: string; supplier_id: number; items: any[] }): Promise<{ success: boolean }> {
+    return this.request('/api/purchase/submit', {
+      method: 'POST',
+      body: JSON.stringify(data),
     })
   }
 }

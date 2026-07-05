@@ -12,6 +12,7 @@ import { CreateSupply } from './pages/CreateSupply'
 import { Aliases } from './pages/Aliases'
 import { AliasForm } from './pages/AliasForm'
 import { Templates } from './pages/Templates'
+import { Purchase } from './pages/Purchase'
 import { ShiftClosing } from './pages/ShiftClosing'
 import { CashierShiftClosing } from './pages/CashierShiftClosing'
 import { CafeShiftClosing } from './pages/CafeShiftClosing'
@@ -63,6 +64,7 @@ function AppContent() {
         <Route path="/aliases/new" element={<AliasForm />} />
         <Route path="/aliases/:id/edit" element={<AliasForm />} />
         <Route path="/templates" element={<Templates />} />
+        <Route path="/purchase" element={<Purchase />} />
         <Route path="/shift-closing" element={<ShiftClosing />} />
         <Route path="/cashier/shift-closing" element={<CashierShiftClosing />} />
         <Route path="/cafe/shift-closing" element={<CafeShiftClosing />} />

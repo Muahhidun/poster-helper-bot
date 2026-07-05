@@ -8,6 +8,7 @@ import {
   Settings,
   User,
   Coffee,
+  ShoppingCart,
 } from 'lucide-react'
 
 interface AppLayoutProps {
@@ -17,6 +18,7 @@ interface AppLayoutProps {
 const navItems = [
   { path: '/', label: 'Расходы', icon: Receipt },
   { path: '/supplies', label: 'Поставки', icon: Package },
+  { path: '/purchase', label: 'Закуп', icon: ShoppingCart },
   { path: '/shift-closing', label: 'Смена', icon: Clock },
 ]
 

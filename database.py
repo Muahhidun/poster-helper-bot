@@ -856,6 +856,9 @@ class UserDatabase:
         # Run migration to add wedrink_sales column to shift_closings
         self._migrate_shift_closings_wedrink()
 
+        # Run migration for purchase sheet tables
+        self._migrate_purchase_sheet()
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 
@@ -2479,6 +2482,318 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to delete packaging rule: {e}")
             return False
+
+    # === Purchase Sheet Methods ===
+
+    def get_purchase_suppliers(self, telegram_user_id: int) -> list:
+        """Get all purchase suppliers for a user"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, name, schedule, created_at, updated_at
+                    FROM purchase_suppliers
+                    WHERE telegram_user_id = ?
+                    ORDER BY id
+                """, (telegram_user_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                res = [dict(zip(columns, row)) for row in rows]
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT id, name, schedule, created_at, updated_at
+                    FROM purchase_suppliers
+                    WHERE telegram_user_id = %s
+                    ORDER BY id
+                """, (telegram_user_id,))
+                res = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            
+            # Parse schedule JSON
+            import json
+            for supplier in res:
+                try:
+                    supplier['schedule'] = json.loads(supplier['schedule'])
+                except Exception:
+                    supplier['schedule'] = {}
+            return res
+        except Exception as e:
+            logger.error(f"Failed to get purchase suppliers: {e}")
+            return []
+
+    def add_purchase_supplier(self, telegram_user_id: int, name: str, schedule: dict) -> int:
+        """Add a new purchase supplier, returns supplier ID or -1 on failure"""
+        try:
+            import json
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            schedule_str = json.dumps(schedule)
+
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            supplier_id = -1
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT OR REPLACE INTO purchase_suppliers (
+                        telegram_user_id, name, schedule, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, (telegram_user_id, name, schedule_str, now_str, now_str))
+                supplier_id = cursor.lastrowid
+            else:
+                cursor.execute("""
+                    INSERT INTO purchase_suppliers (
+                        telegram_user_id, name, schedule, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (telegram_user_id, name)
+                    DO UPDATE SET
+                        schedule = EXCLUDED.schedule,
+                        updated_at = EXCLUDED.updated_at
+                    RETURNING id
+                """, (telegram_user_id, name, schedule_str, datetime.now(), datetime.now()))
+                row = cursor.fetchone()
+                if row:
+                    supplier_id = row[0]
+            conn.commit()
+            conn.close()
+            return supplier_id
+        except Exception as e:
+            logger.error(f"Failed to add purchase supplier: {e}")
+            return -1
+
+    def delete_purchase_supplier(self, telegram_user_id: int, supplier_id: int) -> bool:
+        """Delete a purchase supplier and all associated ingredients"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                # Explicitly delete ingredients first to avoid orphans when FK constraint is disabled
+                cursor.execute("DELETE FROM purchase_ingredients WHERE supplier_id = ? AND telegram_user_id = ?", (supplier_id, telegram_user_id))
+                cursor.execute("DELETE FROM purchase_suppliers WHERE id = ? AND telegram_user_id = ?", (supplier_id, telegram_user_id))
+            else:
+                cursor.execute("DELETE FROM purchase_ingredients WHERE supplier_id = %s AND telegram_user_id = %s", (supplier_id, telegram_user_id))
+                cursor.execute("DELETE FROM purchase_suppliers WHERE id = %s AND telegram_user_id = %s", (supplier_id, telegram_user_id))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete purchase supplier: {e}")
+            return False
+
+    def get_purchase_ingredients(self, telegram_user_id: int, supplier_id: Optional[int] = None) -> list:
+        """Get all purchase ingredients for a user, optionally filtered by supplier"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                if supplier_id is not None:
+                    cursor.execute("""
+                        SELECT id, supplier_id, name, poster_ingredient_id, default_target_stock, sort_order, created_at, updated_at
+                        FROM purchase_ingredients
+                        WHERE telegram_user_id = ? AND supplier_id = ?
+                        ORDER BY sort_order, id
+                    """, (telegram_user_id, supplier_id))
+                else:
+                    cursor.execute("""
+                        SELECT id, supplier_id, name, poster_ingredient_id, default_target_stock, sort_order, created_at, updated_at
+                        FROM purchase_ingredients
+                        WHERE telegram_user_id = ?
+                        ORDER BY supplier_id, sort_order, id
+                    """, (telegram_user_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                res = [dict(zip(columns, row)) for row in rows]
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                if supplier_id is not None:
+                    cursor.execute("""
+                        SELECT id, supplier_id, name, poster_ingredient_id, default_target_stock, sort_order, created_at, updated_at
+                        FROM purchase_ingredients
+                        WHERE telegram_user_id = %s AND supplier_id = %s
+                        ORDER BY sort_order, id
+                    """, (telegram_user_id, supplier_id))
+                else:
+                    cursor.execute("""
+                        SELECT id, supplier_id, name, poster_ingredient_id, default_target_stock, sort_order, created_at, updated_at
+                        FROM purchase_ingredients
+                        WHERE telegram_user_id = %s
+                        ORDER BY supplier_id, sort_order, id
+                    """, (telegram_user_id,))
+                res = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return res
+        except Exception as e:
+            logger.error(f"Failed to get purchase ingredients: {e}")
+            return []
+
+    def add_purchase_ingredient(
+        self,
+        telegram_user_id: int,
+        supplier_id: int,
+        name: str,
+        poster_ingredient_id: Optional[int] = None,
+        default_target_stock: Optional[float] = None,
+        sort_order: int = 0
+    ) -> bool:
+        """Add or update an ingredient in the purchase sheet template"""
+        try:
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Check if it already exists for this supplier
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    SELECT id FROM purchase_ingredients 
+                    WHERE telegram_user_id = ? AND supplier_id = ? AND name = ?
+                """, (telegram_user_id, supplier_id, name))
+                existing = cursor.fetchone()
+                if existing:
+                    cursor.execute("""
+                        UPDATE purchase_ingredients
+                        SET poster_ingredient_id = ?, default_target_stock = ?, sort_order = ?, updated_at = ?
+                        WHERE id = ?
+                    """, (poster_ingredient_id, default_target_stock, sort_order, now_str, existing[0]))
+                else:
+                    cursor.execute("""
+                        INSERT INTO purchase_ingredients (
+                            telegram_user_id, supplier_id, name, poster_ingredient_id,
+                            default_target_stock, sort_order, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (telegram_user_id, supplier_id, name, poster_ingredient_id, default_target_stock, sort_order, now_str, now_str))
+            else:
+                cursor.execute("""
+                    SELECT id FROM purchase_ingredients 
+                    WHERE telegram_user_id = %s AND supplier_id = %s AND name = %s
+                """, (telegram_user_id, supplier_id, name))
+                existing = cursor.fetchone()
+                if existing:
+                    cursor.execute("""
+                        UPDATE purchase_ingredients
+                        SET poster_ingredient_id = %s, default_target_stock = %s, sort_order = %s, updated_at = %s
+                        WHERE id = %s
+                    """, (poster_ingredient_id, default_target_stock, sort_order, datetime.now(), existing[0]))
+                else:
+                    cursor.execute("""
+                        INSERT INTO purchase_ingredients (
+                            telegram_user_id, supplier_id, name, poster_ingredient_id,
+                            default_target_stock, sort_order, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (telegram_user_id, supplier_id, name, poster_ingredient_id, default_target_stock, sort_order, datetime.now(), datetime.now()))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add purchase ingredient: {e}")
+            return False
+
+    def delete_purchase_ingredient(self, telegram_user_id: int, ingredient_id: int) -> bool:
+        """Delete an ingredient from the purchase sheet template"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("DELETE FROM purchase_ingredients WHERE id = ? AND telegram_user_id = ?", (ingredient_id, telegram_user_id))
+            else:
+                cursor.execute("DELETE FROM purchase_ingredients WHERE id = %s AND telegram_user_id = %s", (ingredient_id, telegram_user_id))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete purchase ingredient: {e}")
+            return False
+
+    def save_purchase_history(self, telegram_user_id: int, date: str, supplier_name: str, items: list) -> bool:
+        """Save purchase sheet record to archive history"""
+        try:
+            import json
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            items_str = json.dumps(items)
+
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO purchase_history (
+                        telegram_user_id, date, supplier_name, items_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, (telegram_user_id, date, supplier_name, items_str, now_str))
+            else:
+                cursor.execute("""
+                    INSERT INTO purchase_history (
+                        telegram_user_id, date, supplier_name, items_json, created_at
+                    ) VALUES (%s, %s, %s, %s, %s)
+                """, (telegram_user_id, date, supplier_name, items_str, datetime.now()))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save purchase history: {e}")
+            return False
+
+    def get_purchase_history(self, telegram_user_id: int, date: Optional[str] = None) -> list:
+        """Get archived purchase history"""
+        try:
+            conn = self._get_connection()
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                if date:
+                    cursor.execute("""
+                        SELECT id, date, supplier_name, items_json, created_at
+                        FROM purchase_history
+                        WHERE telegram_user_id = ? AND date = ?
+                        ORDER BY id DESC
+                    """, (telegram_user_id, date))
+                else:
+                    cursor.execute("""
+                        SELECT id, date, supplier_name, items_json, created_at
+                        FROM purchase_history
+                        WHERE telegram_user_id = ?
+                        ORDER BY id DESC
+                        LIMIT 100
+                    """, (telegram_user_id,))
+                rows = cursor.fetchall()
+                columns = [desc[0] for desc in cursor.description]
+                res = [dict(zip(columns, row)) for row in rows]
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                if date:
+                    cursor.execute("""
+                        SELECT id, date, supplier_name, items_json, created_at
+                        FROM purchase_history
+                        WHERE telegram_user_id = %s AND date = %s
+                        ORDER BY id DESC
+                    """, (telegram_user_id, date))
+                else:
+                    cursor.execute("""
+                        SELECT id, date, supplier_name, items_json, created_at
+                        FROM purchase_history
+                        WHERE telegram_user_id = %s
+                        ORDER BY id DESC
+                        LIMIT 100
+                    """, (telegram_user_id,))
+                res = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+
+            # Parse items JSON
+            import json
+            for record in res:
+                try:
+                    record['items'] = json.loads(record['items_json'])
+                except Exception:
+                    record['items'] = []
+            return res
+        except Exception as e:
+            logger.error(f"Failed to get purchase history: {e}")
+            return []
 
     def get_ingredient_habits(self, telegram_user_id: int) -> list:
         """Get all ingredient habits (typical prices) for a user"""
@@ -5817,6 +6132,95 @@ class UserDatabase:
             conn.close()
         except Exception as e:
             logger.error(f"WeDrink migration error: {e}")
+
+    def _migrate_purchase_sheet(self):
+        """Create purchase_suppliers, purchase_ingredients, and purchase_history tables"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                # Create purchase_suppliers
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS purchase_suppliers (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        schedule TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(telegram_user_id, name)
+                    )
+                """)
+                # Create purchase_ingredients
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS purchase_ingredients (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        supplier_id INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        poster_ingredient_id INTEGER,
+                        default_target_stock REAL,
+                        sort_order INTEGER DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (supplier_id) REFERENCES purchase_suppliers(id) ON DELETE CASCADE
+                    )
+                """)
+                # Create purchase_history
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS purchase_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        supplier_name TEXT NOT NULL,
+                        items_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+            else:
+                # PostgreSQL
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS purchase_suppliers (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        schedule TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, name)
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS purchase_ingredients (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        supplier_id INTEGER NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        poster_ingredient_id INTEGER,
+                        default_target_stock REAL,
+                        sort_order INTEGER DEFAULT 0,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (supplier_id) REFERENCES purchase_suppliers(id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS purchase_history (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        date VARCHAR(20) NOT NULL,
+                        supplier_name VARCHAR(255) NOT NULL,
+                        items_json TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Purchase Sheet migration: tables created successfully")
+        except Exception as e:
+            logger.error(f"Purchase Sheet migration error: {e}")
 
 
 # Singleton instance

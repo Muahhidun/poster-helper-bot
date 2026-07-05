@@ -726,3 +726,30 @@ export interface CafeTransfersResponse {
   transfers?: Array<{ name: string; amount: number }>
   error?: string
 }
+
+// Purchase Sheet (Закуп)
+export interface PurchaseIngredient {
+  id: number
+  name: string
+  poster_ingredient_id: number | null
+  default_target_stock: number
+  avg_daily_consumption: number
+  calculated_target: number
+  target_stock: number
+  actual_stock?: string
+  order_qty?: number
+}
+
+export interface PurchaseSupplier {
+  id: number
+  name: string
+  is_order_day: boolean
+  cover_days: number
+  ingredients: PurchaseIngredient[]
+}
+
+export interface BlankResponse {
+  date: string
+  weekday: number
+  suppliers: PurchaseSupplier[]
+}

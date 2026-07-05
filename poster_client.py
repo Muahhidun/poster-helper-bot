@@ -369,6 +369,23 @@ class PosterClient:
         result = await self._request('GET', 'storage.getSupplies', params=params)
         return result.get('response', [])
 
+    async def get_ingredient_movements(self, date_from: str, date_to: str) -> List[Dict]:
+        """
+        Get ingredient movements (Report Movement) for a date range
+
+        Args:
+            date_from: Start date in format "YYYYMMDD"
+            date_to: End date in format "YYYYMMDD"
+
+        Returns:
+            List of ingredient movement details
+        """
+        result = await self._request('GET', 'storage.getReportMovement', params={
+            'dateFrom': date_from,
+            'dateTo': date_to
+        })
+        return result.get('response', [])
+
     # === Menu Methods ===
 
     async def get_ingredients(self) -> List[Dict]:

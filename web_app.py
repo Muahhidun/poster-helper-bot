@@ -2418,6 +2418,201 @@ def api_assistant_transcribe():
         return jsonify({'error': f"Ошибка распознавания голоса: {str(e)}"}), 500
 
 
+# === Purchase Sheet Endpoints ===
+
+def send_telegram_message(chat_id: int, text: str):
+    import requests
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or config.TELEGRAM_BOT_TOKEN
+    if not token:
+        logger.error("No TELEGRAM_BOT_TOKEN configured, cannot send telegram message")
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        resp = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        })
+        if resp.status_code == 200:
+            logger.info(f"✅ Telegram message sent to {chat_id}")
+            return True
+        else:
+            logger.error(f"❌ Failed to send Telegram message: {resp.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Error sending Telegram message: {e}")
+        return False
+
+
+@app.route('/api/purchase/blank', methods=['GET'])
+def api_purchase_blank():
+    """Get the purchase sheet template populated with stock consumption data from Poster"""
+    db = get_database()
+    telegram_user_id = g.user_id
+    
+    # 1. Determine target date
+    date_str = request.args.get('date')
+    if not date_str:
+        # Default to business today
+        date_str = _kz_business_today().strftime("%Y-%m-%d")
+        
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({'error': 'Неверный формат даты. Используйте YYYY-MM-DD'}), 400
+        
+    weekday = target_date.weekday() # 0 = Monday, 6 = Sunday
+    
+    # 2. Get suppliers
+    suppliers = db.get_purchase_suppliers(telegram_user_id)
+    if not suppliers:
+        return jsonify({
+            'date': date_str,
+            'weekday': weekday,
+            'suppliers': []
+        })
+        
+    # 3. Load Poster client & fetch avg daily consumption
+    from poster_client import get_poster_client
+    avg_consumptions = {}
+    try:
+        poster = get_poster_client(telegram_user_id)
+        # Fetch movements for last 30 days
+        from datetime import timedelta
+        date_to_str = target_date.strftime("%Y%m%d")
+        date_from_str = (target_date - timedelta(days=30)).strftime("%Y%m%d")
+        
+        movements = run_async(poster.get_ingredient_movements(date_from_str, date_to_str))
+        for item in movements:
+            ing_id = int(item.get('ingredient_id', 0))
+            # absolute value of consumption (expense)
+            expense = abs(float(item.get('expense', 0.0)))
+            avg_consumptions[ing_id] = expense / 30.0
+    except Exception as e:
+        logger.warning(f"Failed to fetch Poster movements for purchase sheet: {e}")
+        # Proceed with empty consumptions, falling back to defaults
+        
+    # 4. Get ingredients
+    ingredients = db.get_purchase_ingredients(telegram_user_id)
+    
+    # Group ingredients by supplier_id
+    from collections import defaultdict
+    ingredients_by_supplier = defaultdict(list)
+    for ing in ingredients:
+        ingredients_by_supplier[ing['supplier_id']].append(ing)
+        
+    # 5. Populate template
+    result_suppliers = []
+    for supplier in suppliers:
+        supplier_id = supplier['id']
+        schedule = supplier.get('schedule', {})
+        
+        # Check if today is order day
+        # Keys in schedule json are strings: "0" through "6"
+        weekday_str = str(weekday)
+        is_order_day = weekday_str in schedule
+        cover_days = schedule.get(weekday_str, 0)
+        
+        supplier_ingredients = ingredients_by_supplier.get(supplier_id, [])
+        populated_ingredients = []
+        
+        for ing in supplier_ingredients:
+            poster_id = ing.get('poster_ingredient_id')
+            default_target = ing.get('default_target_stock') or 0.0
+            
+            avg_daily = 0.0
+            if poster_id and poster_id in avg_consumptions:
+                avg_daily = avg_consumptions[poster_id]
+                
+            # If we have Poster data and cover days > 0, calculate dynamic target:
+            # target = avg_daily * cover_days * 1.15
+            # Otherwise use default target stock from the template
+            calculated_target = 0.0
+            if avg_daily > 0.0 and cover_days > 0:
+                calculated_target = round(avg_daily * cover_days * 1.15, 2)
+                
+            target_stock = calculated_target if calculated_target > 0.0 else default_target
+            
+            populated_ingredients.append({
+                'id': ing['id'],
+                'name': ing['name'],
+                'poster_ingredient_id': poster_id,
+                'default_target_stock': default_target,
+                'avg_daily_consumption': round(avg_daily, 2),
+                'calculated_target': calculated_target,
+                'target_stock': target_stock,
+                'sort_order': ing['sort_order']
+            })
+            
+        result_suppliers.append({
+            'id': supplier_id,
+            'name': supplier['name'],
+            'is_order_day': is_order_day,
+            'cover_days': cover_days,
+            'ingredients': populated_ingredients
+        })
+        
+    return jsonify({
+        'date': date_str,
+        'weekday': weekday,
+        'suppliers': result_suppliers
+    })
+
+
+@app.route('/api/purchase/submit', methods=['POST'])
+def api_purchase_submit():
+    """Submit purchase sheet and send formatted WhatsApp message via Telegram bot"""
+    db = get_database()
+    telegram_user_id = g.user_id
+    
+    data = request.get_json() or {}
+    date_str = data.get('date')
+    supplier_id = data.get('supplier_id')
+    items = data.get('items', []) # [{"name": "...", "target_stock": X, "actual_stock": Y, "order_qty": Z}]
+    
+    if not date_str or not supplier_id or not items:
+        return jsonify({'error': 'Некорректные параметры запроса'}), 400
+        
+    # Get supplier name
+    suppliers = db.get_purchase_suppliers(telegram_user_id)
+    supplier = next((s for s in suppliers if s['id'] == supplier_id), None)
+    if not supplier:
+        return jsonify({'error': 'Поставщик не найден'}), 404
+        
+    supplier_name = supplier['name']
+    
+    # Save to history
+    success = db.save_purchase_history(telegram_user_id, date_str, supplier_name, items)
+    if not success:
+        return jsonify({'error': 'Не удалось сохранить историю закупа'}), 500
+        
+    # Filter items that actually need ordering (order_qty > 0)
+    order_items = [item for item in items if float(item.get('order_qty', 0)) > 0]
+    
+    # Format message for this supplier
+    if order_items:
+        msg_lines = [f"🛒 <b>Заказ для {supplier_name} на {date_str}:</b>"]
+        for item in order_items:
+            qty = item['order_qty']
+            # Format quantity: print integer if whole number
+            try:
+                val = float(qty)
+                if val.is_integer():
+                    qty = int(val)
+            except (ValueError, TypeError):
+                pass
+            msg_lines.append(f"• {item['name']}: {qty}")
+            
+        formatted_message = "\n".join(msg_lines)
+        
+        # Send Telegram message to the user
+        send_telegram_message(telegram_user_id, formatted_message)
+    else:
+        send_telegram_message(telegram_user_id, f"🛒 <b>Заказ для {supplier_name} на {date_str}:</b>\n<i>Ничего закупать не требуется (остатки в норме).</i>")
+        
+    return jsonify({'success': True})
+
+
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
 def toggle_expense_type(draft_id):
     """Toggle expense type between transaction and supply.
