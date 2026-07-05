@@ -2664,9 +2664,10 @@ def api_purchase_blank():
             'suppliers': []
         })
         
-    # 3. Load Poster client & fetch avg daily consumption
+    # 3. Load Poster client & fetch avg daily consumption and current stock
     from poster_client import get_poster_client
     avg_consumptions = {}
+    current_stocks = {}
     try:
         poster = get_poster_client(telegram_user_id)
         # Fetch movements for last 30 days
@@ -2680,6 +2681,13 @@ def api_purchase_blank():
             # absolute value of consumption (expense)
             expense = abs(float(item.get('expense', 0.0)))
             avg_consumptions[ing_id] = expense / 30.0
+            
+            # ending balance is the current stock balance
+            try:
+                end_bal = float(item.get('end', 0.0))
+                current_stocks[ing_id] = round(end_bal, 3)
+            except (ValueError, TypeError):
+                current_stocks[ing_id] = 0.0
     except Exception as e:
         logger.warning(f"Failed to fetch Poster movements for purchase sheet: {e}")
         # Proceed with empty consumptions, falling back to defaults
@@ -2725,6 +2733,10 @@ def api_purchase_blank():
                 
             target_stock = calculated_target if calculated_target > 0.0 else default_target
             
+            current_stock = 0.0
+            if poster_id and poster_id in current_stocks:
+                current_stock = current_stocks[poster_id]
+            
             populated_ingredients.append({
                 'id': ing['id'],
                 'name': ing['name'],
@@ -2733,6 +2745,7 @@ def api_purchase_blank():
                 'avg_daily_consumption': round(avg_daily, 2),
                 'calculated_target': calculated_target,
                 'target_stock': target_stock,
+                'current_stock': current_stock,
                 'sort_order': ing['sort_order']
             })
             

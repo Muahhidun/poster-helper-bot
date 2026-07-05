@@ -736,6 +736,7 @@ export interface PurchaseIngredient {
   avg_daily_consumption: number
   calculated_target: number
   target_stock: number
+  current_stock: number
   actual_stock?: string
   order_qty?: number
 }

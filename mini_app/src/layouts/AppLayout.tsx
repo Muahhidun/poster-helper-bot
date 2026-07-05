@@ -2,6 +2,7 @@ import { ReactNode } from 'react'
 import { useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import {
+  MessageSquare,
   Receipt,
   Package,
   Clock,
@@ -14,6 +15,7 @@ interface AppLayoutProps {
 }
 
 const navItems = [
+  { url: '/assistant', label: 'Ассистент', icon: MessageSquare },
   { url: '/', label: 'Расходы', icon: Receipt },
   { url: '/supplies', label: 'Поставки', icon: Package },
   { url: '/mini-app/purchase', label: 'Закуп', icon: ShoppingCart },
