@@ -149,3 +149,50 @@ def test_api_purchase_endpoints(
     assert args[0] == user_id
     assert "Заказ для Инарин (Аст) на 2026-07-05" in args[1]
     assert "Булч бол: 2" in args[1]
+
+
+@patch('poster_client.PosterClient.get_ingredients')
+@patch('database.UserDatabase.update_purchase_ingredient_poster_id')
+@patch('database.UserDatabase.update_purchase_ingredient_name')
+def test_api_purchase_linking(
+    mock_update_name,
+    mock_update_id,
+    mock_get_ingredients,
+    client
+):
+    user_id = 999999
+    
+    mock_get_ingredients.return_value = [
+        {
+            'ingredient_id': '198',
+            'ingredient_name': 'Булка большая',
+            'unit': 'шт'
+        }
+    ]
+    
+    with client.session_transaction() as sess:
+        sess['telegram_user_id'] = user_id
+        sess['web_user_id'] = user_id
+        sess['role'] = 'owner'
+        
+    # GET Poster ingredients list
+    resp = client.get('/api/purchase/poster-ingredients')
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data['ingredients']) == 1
+    assert data['ingredients'][0]['id'] == 198
+    assert data['ingredients'][0]['name'] == 'Булка большая'
+    
+    # POST link ingredient
+    link_data = {
+        'ingredient_id': 201,
+        'poster_ingredient_id': 198
+    }
+    resp_link = client.post('/api/purchase/link-ingredient', json=link_data)
+    assert resp_link.status_code == 200
+    res_data = json.loads(resp_link.data)
+    assert res_data['success'] is True
+    assert res_data['name'] == 'Булка большая'
+    
+    mock_update_id.assert_called_once_with(user_id, 201, 198)
+    mock_update_name.assert_called_once_with(user_id, 201, 'Булка большая')

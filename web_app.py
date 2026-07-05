@@ -2674,7 +2674,6 @@ def api_purchase_blank():
     from poster_client import get_poster_client
     avg_consumptions = {}
     current_stocks = {}
-    poster_names = {}
     try:
         poster = get_poster_client(telegram_user_id)
         # Fetch movements for last 30 days
@@ -2695,17 +2694,6 @@ def api_purchase_blank():
                 current_stocks[ing_id] = round(end_bal, 3)
             except (ValueError, TypeError):
                 current_stocks[ing_id] = 0.0
-
-        # Fetch names for precise matching/display
-        try:
-            all_ings = run_async(poster.get_ingredients())
-            for ing_item in all_ings:
-                ing_id = int(ing_item.get('ingredient_id', 0) or ing_item.get('id', 0))
-                name = ing_item.get('ingredient_name') or ing_item.get('name')
-                if ing_id and name:
-                    poster_names[ing_id] = name
-        except Exception as ne:
-            logger.warning(f"Failed to fetch Poster ingredients names: {ne}")
     except Exception as e:
         logger.warning(f"Failed to fetch Poster movements for purchase sheet: {e}")
         # Proceed with empty consumptions, falling back to defaults
@@ -2715,32 +2703,33 @@ def api_purchase_blank():
     
     # Auto-match ingredients by name if poster_ingredient_id is missing
     matcher = None
+    try:
+        from matchers import get_ingredient_matcher
+        matcher = get_ingredient_matcher(telegram_user_id)
+    except Exception as e:
+        logger.error(f"Failed to load ingredient matcher for auto-match: {e}")
+        
     for ing in ingredients:
         if not ing.get('poster_ingredient_id'):
-            if not matcher:
-                try:
-                    from matchers import get_ingredient_matcher
-                    matcher = get_ingredient_matcher(telegram_user_id)
-                except Exception as e:
-                    logger.error(f"Failed to load ingredient matcher for auto-match: {e}")
-                    break
-            
-            # Match ingredient name to Poster items
-            match_res = matcher.match(ing['name'], score_cutoff=55)
-            if match_res:
-                ing_id, ing_name, unit, poster_account_id, poster_account_name = match_res
-                # Update in DB
-                db.update_purchase_ingredient_poster_id(telegram_user_id, ing['id'], ing_id)
-                ing['poster_ingredient_id'] = ing_id
-                logger.info(f"✅ Auto-matched ingredient '{ing['name']}' to Poster ID {ing_id} ({ing_name})")
+            if matcher:
+                # Match ingredient name to Poster items
+                match_res = matcher.match(ing['name'], score_cutoff=55)
+                if match_res:
+                    ing_id, ing_name, unit, poster_account_id, poster_account_name = match_res
+                    # Update in DB
+                    db.update_purchase_ingredient_poster_id(telegram_user_id, ing['id'], ing_id)
+                    ing['poster_ingredient_id'] = ing_id
+                    logger.info(f"✅ Auto-matched ingredient '{ing['name']}' to Poster ID {ing_id} ({ing_name})")
         
         # Overwrite database and display name if it differs from Poster name
         poster_id = ing.get('poster_ingredient_id')
-        if poster_id and poster_id in poster_names:
-            poster_name = poster_names[poster_id]
-            if ing['name'] != poster_name:
-                db.update_purchase_ingredient_name(telegram_user_id, ing['id'], poster_name)
-                ing['name'] = poster_name
+        if poster_id and matcher:
+            info = matcher.get_ingredient_info(poster_id)
+            if info:
+                poster_name = info.get('name') or info.get('ingredient_name')
+                if poster_name and ing['name'] != poster_name:
+                    db.update_purchase_ingredient_name(telegram_user_id, ing['id'], poster_name)
+                    ing['name'] = poster_name
     
     # Group ingredients by supplier_id
     from collections import defaultdict
@@ -2863,6 +2852,78 @@ def api_purchase_submit():
         send_telegram_message(telegram_user_id, f"🛒 <b>Заказ для {supplier_name} на {date_str}:</b>\n<i>Ничего закупать не требуется (остатки в норме).</i>")
         
     return jsonify({'success': True})
+
+
+@app.route('/api/purchase/poster-ingredients', methods=['GET'])
+def api_purchase_poster_ingredients():
+    """Fetch all ingredients from Poster for linking UI"""
+    telegram_user_id = g.user_id
+    from poster_client import get_poster_client
+    try:
+        poster = get_poster_client(telegram_user_id)
+        all_ings = run_async(poster.get_ingredients())
+        ingredients = []
+        for ing in all_ings:
+            ing_id = int(ing.get('ingredient_id', 0) or ing.get('id', 0))
+            name = ing.get('ingredient_name') or ing.get('name', '')
+            unit = ing.get('unit', '')
+            if ing_id and name:
+                ingredients.append({
+                    'id': ing_id,
+                    'name': name,
+                    'unit': unit
+                })
+        # Sort by name
+        ingredients.sort(key=lambda x: x['name'].lower())
+        return jsonify({'ingredients': ingredients})
+    except Exception as e:
+        logger.error(f"Failed to fetch Poster ingredients for linking: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/purchase/link-ingredient', methods=['POST'])
+def api_purchase_link_ingredient():
+    """Link a purchase ingredient row to a Poster ingredient ID and rename it to match Poster"""
+    db = get_database()
+    telegram_user_id = g.user_id
+    data = request.get_json() or {}
+    ing_id = data.get('ingredient_id')
+    poster_ingredient_id = data.get('poster_ingredient_id')
+    
+    if not ing_id or poster_ingredient_id is None:
+        return jsonify({'error': 'Некорректные параметры'}), 400
+        
+    # If poster_ingredient_id is 0, it means "Unlink"
+    if poster_ingredient_id == 0:
+        db.update_purchase_ingredient_poster_id(telegram_user_id, ing_id, None)
+        return jsonify({'success': True, 'name': None})
+        
+    # Get ingredient name from Poster
+    from poster_client import get_poster_client
+    try:
+        poster = get_poster_client(telegram_user_id)
+        all_ings = run_async(poster.get_ingredients())
+        poster_name = None
+        for ing in all_ings:
+            item_id = int(ing.get('ingredient_id', 0) or ing.get('id', 0))
+            if item_id == poster_ingredient_id:
+                poster_name = ing.get('ingredient_name') or ing.get('name', '')
+                break
+                
+        if not poster_name:
+            return jsonify({'error': 'Ингредиент не найден в Poster'}), 404
+            
+        # Update both poster ID and name in DB
+        db.update_purchase_ingredient_poster_id(telegram_user_id, ing_id, poster_ingredient_id)
+        db.update_purchase_ingredient_name(telegram_user_id, ing_id, poster_name)
+        
+        return jsonify({
+            'success': True,
+            'name': poster_name
+        })
+    except Exception as e:
+        logger.error(f"Failed to link ingredient to Poster ID: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])

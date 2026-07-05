@@ -260,7 +260,12 @@
                 row.innerHTML = `
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
-                            <h6 class="m-0 font-semibold" style="font-size: 14px;">${ing.name}</h6>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                <h6 class="m-0 font-semibold" style="font-size: 14px;">${ing.name}</h6>
+                                <button class="btn btn-link p-0 text-decoration-none text-muted" style="font-size: 11px; line-height: 1;" onclick="openLinkModal(${ing.id}, '${ing.name.replace(/'/g, "\\'")}', ${ing.poster_ingredient_id || 0})">
+                                    ${ing.poster_ingredient_id ? '✏️' : '<span class="text-danger" style="font-size: 10px; font-weight:600;">🔗 Связать</span>'}
+                                </button>
+                            </div>
                             <span class="text-muted small mt-0.5 d-block" style="font-size: 11px;">
                                 ${detailsText}
                             </span>
@@ -399,6 +404,153 @@
             submitBtn.disabled = false;
             submitBtn.innerHTML = originalHtml;
             showToast(err.message || 'Не удалось отправить закуп', 'error');
+        });
+    }
+</script>
+
+<!-- Modal for Linking Ingredients -->
+<div class="modal fade" id="linkModal" tabindex="-1" aria-labelledby="linkModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: var(--radius-xl);">
+      <div class="modal-header border-bottom border-light">
+        <h5 class="modal-title font-bold text-lg" id="linkModalLabel">Связать с ингредиентом Poster</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3">Выберите соответствующий ингредиент из базы Poster для товара: <strong id="modal-ing-name" class="text-primary"></strong></p>
+        
+        <div class="mb-3">
+          <label for="poster-search" class="form-label font-semibold small text-muted">Поиск по ингредиентам</label>
+          <input type="text" id="poster-search" class="form-control mb-2 rounded-lg" placeholder="Начните вводить название..." oninput="filterPosterIngredients(this.value)">
+          <select id="poster-select" class="form-select rounded-lg" size="8" style="font-size: 13px;">
+            <option value="0">-- Не связывать (отвязать) --</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer border-top border-light">
+        <button type="button" class="btn btn-light rounded-lg font-semibold" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary rounded-lg font-semibold" id="btn-save-link" onclick="saveIngredientLink()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+    let activeIngId = null;
+    let allPosterIngredients = [];
+    let linkModalInstance = null;
+
+    function openLinkModal(ingId, ingName, currentPosterId) {
+        activeIngId = ingId;
+        document.getElementById('modal-ing-name').textContent = ingName;
+        document.getElementById('poster-search').value = '';
+        
+        const select = document.getElementById('poster-select');
+        select.innerHTML = '<option value="">Загрузка ингредиентов из Poster...</option>';
+        
+        // Show modal first
+        if (!linkModalInstance) {
+            linkModalInstance = new bootstrap.Modal(document.getElementById('linkModal'));
+        }
+        linkModalInstance.show();
+        
+        // Fetch if not loaded
+        if (allPosterIngredients.length === 0) {
+            fetch('/api/purchase/poster-ingredients')
+                .then(res => res.json())
+                .then(data => {
+                    allPosterIngredients = data.ingredients || [];
+                    renderPosterSelect(currentPosterId);
+                })
+                .catch(err => {
+                    console.error(err);
+                    select.innerHTML = '<option value="">Ошибка загрузки списка</option>';
+                });
+        } else {
+            renderPosterSelect(currentPosterId);
+        }
+    }
+
+    function renderPosterSelect(selectedId, query = '') {
+        const select = document.getElementById('poster-select');
+        select.innerHTML = '';
+        
+        // Add "Unlink" option
+        const unlinkOpt = document.createElement('option');
+        unlinkOpt.value = '0';
+        unlinkOpt.textContent = '-- Не связывать (отвязать) --';
+        unlinkOpt.className = 'py-1.5 px-2 font-medium';
+        if (selectedId === 0 || !selectedId) {
+            unlinkOpt.selected = true;
+        }
+        select.appendChild(unlinkOpt);
+        
+        const filtered = allPosterIngredients.filter(ing => 
+            ing.name.toLowerCase().includes(query.toLowerCase())
+        );
+        
+        filtered.forEach(ing => {
+            const opt = document.createElement('option');
+            opt.value = ing.id;
+            opt.textContent = `${ing.name} (${ing.unit})`;
+            opt.className = 'py-1.5 px-2';
+            if (ing.id === selectedId) {
+                opt.selected = true;
+            }
+            select.appendChild(opt);
+        });
+    }
+
+    function filterPosterIngredients(query) {
+        const select = document.getElementById('poster-select');
+        const selectedId = parseInt(select.value) || 0;
+        renderPosterSelect(selectedId, query);
+    }
+
+    function saveIngredientLink() {
+        const select = document.getElementById('poster-select');
+        const selectedId = parseInt(select.value);
+        if (isNaN(selectedId)) {
+            showToast('Выберите ингредиент', 'error');
+            return;
+        }
+        
+        const saveBtn = document.getElementById('btn-save-link');
+        const originalText = saveBtn.textContent;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Сохранение...';
+        
+        fetch('/api/purchase/link-ingredient', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                ingredient_id: activeIngId,
+                poster_ingredient_id: selectedId
+            })
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('Ошибка при сохранении связи');
+            return res.json();
+        })
+        .then(data => {
+            saveBtn.disabled = false;
+            saveBtn.textContent = originalText;
+            if (linkModalInstance) {
+                linkModalInstance.hide();
+            }
+            showToast('Связь успешно обновлена!', 'success');
+            
+            // Reload the purchase sheet to reflect updated name and stocks
+            const dateStr = document.getElementById('purchase-date').value;
+            loadBlank(dateStr);
+        })
+        .catch(err => {
+            console.error(err);
+            saveBtn.disabled = false;
+            saveBtn.textContent = originalText;
+            showToast(err.message || 'Ошибка сохранения', 'error');
         });
     }
 </script>
