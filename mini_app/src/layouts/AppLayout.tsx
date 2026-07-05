@@ -1,13 +1,11 @@
 import { ReactNode } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import {
   Receipt,
   Package,
   Clock,
   Settings,
-  User,
-  Coffee,
   ShoppingCart,
 } from 'lucide-react'
 
@@ -16,19 +14,21 @@ interface AppLayoutProps {
 }
 
 const navItems = [
-  { path: '/', label: 'Расходы', icon: Receipt },
-  { path: '/supplies', label: 'Поставки', icon: Package },
-  { path: '/purchase', label: 'Закуп', icon: ShoppingCart },
-  { path: '/shift-closing', label: 'Смена', icon: Clock },
-]
-
-const shiftSubItems = [
-  { path: '/cashier/shift-closing', label: 'Кассир', icon: User },
-  { path: '/cafe/shift-closing', label: 'Кафе', icon: Coffee },
+  { url: '/', label: 'Расходы', icon: Receipt },
+  { url: '/supplies', label: 'Поставки', icon: Package },
+  { url: '/mini-app/purchase', label: 'Закуп', icon: ShoppingCart },
+  { url: '/shift-closing', label: 'Смена', icon: Clock },
 ]
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation()
+
+  const isActiveTab = (url: string) => {
+    if (url === '/mini-app/purchase') {
+      return location.pathname.startsWith('/purchase')
+    }
+    return false
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -46,16 +46,12 @@ export function AppLayout({ children }: AppLayoutProps) {
         <nav className="flex-1 p-4 space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon
-            const isShiftClosing = item.path === '/shift-closing'
-            const isActive = location.pathname === item.path ||
-              (item.path !== '/' && location.pathname.startsWith(item.path)) ||
-              (item.path === '/' && location.pathname === '/expenses') ||
-              (isShiftClosing && (location.pathname.includes('shift-closing')))
+            const isActive = isActiveTab(item.url)
 
             return (
-              <div key={item.path}>
-                <NavLink
-                  to={item.path}
+              <div key={item.url}>
+                <a
+                  href={item.url}
                   className={cn(
                     "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
                     isActive
@@ -65,31 +61,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                 >
                   <Icon className="h-5 w-5" />
                   {item.label}
-                </NavLink>
-                {/* Sub-items for Shift Closing */}
-                {isShiftClosing && isActive && (
-                  <div className="ml-8 mt-1 space-y-1">
-                    {shiftSubItems.map((sub) => {
-                      const SubIcon = sub.icon
-                      const subActive = location.pathname === sub.path
-                      return (
-                        <NavLink
-                          key={sub.path}
-                          to={sub.path}
-                          className={cn(
-                            "flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all",
-                            subActive
-                              ? "bg-primary/10 text-primary"
-                              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                          )}
-                        >
-                          <SubIcon className="h-4 w-4" />
-                          {sub.label}
-                        </NavLink>
-                      )
-                    })}
-                  </div>
-                )}
+                </a>
               </div>
             )
           })}
@@ -97,18 +69,13 @@ export function AppLayout({ children }: AppLayoutProps) {
 
         {/* Bottom section */}
         <div className="p-4 border-t border-border">
-          <NavLink
-            to="/settings"
-            className={cn(
-              "flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all",
-              location.pathname === '/settings'
-                ? "bg-primary/10 text-primary"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
-            )}
+          <a
+            href="/logout"
+            className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <Settings className="h-5 w-5" />
-            Настройки
-          </NavLink>
+            Выйти
+          </a>
         </div>
       </aside>
 
@@ -124,14 +91,12 @@ export function AppLayout({ children }: AppLayoutProps) {
         <div className="flex items-center justify-around h-16">
           {navItems.map((item) => {
             const Icon = item.icon
-            const isActive = location.pathname === item.path ||
-              (item.path !== '/' && location.pathname.startsWith(item.path)) ||
-              (item.path === '/' && location.pathname === '/expenses')
+            const isActive = isActiveTab(item.url)
 
             return (
-              <NavLink
-                key={item.path}
-                to={item.path}
+              <a
+                key={item.url}
+                href={item.url}
                 className={cn(
                   "flex flex-col items-center justify-center gap-1 w-16 py-1 rounded-xl transition-all",
                   isActive
@@ -141,7 +106,7 @@ export function AppLayout({ children }: AppLayoutProps) {
               >
                 <Icon className={cn("h-6 w-6", isActive && "scale-110")} />
                 <span className="text-[10px] font-medium">{item.label}</span>
-              </NavLink>
+              </a>
             )
           })}
         </div>
