@@ -8481,14 +8481,41 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
 
                 if supply:
                     sd_with_items = db.get_supply_draft_with_items(supply['id'])
-                    has_items = sd_with_items and len(sd_with_items.get('items', [])) > 0
+                    existing_items = sd_with_items.get('items', []) if sd_with_items else []
+                    has_items = len(existing_items) > 0
+
                     if is_webhook and has_items:
-                        logger.info(f"Skipping add_supply_items from webhook to prevent overwriting manual edits/existing items for '{supply.get('supplier_name')}'")
-                        response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{supply.get('supplier_name')}» на {supply.get('total_sum', 0):,.0f}₸ уже существует — пропускаю импорт позиций из WhatsApp."
+                        from matchers import normalize_text_for_matching
+                        existing_names_normalized = {
+                            normalize_text_for_matching(item.get('item_name') or '')
+                            for item in existing_items
+                        }
+
+                        new_items = []
+                        for item in items:
+                            name_norm = normalize_text_for_matching(item.get('name') or '')
+                            if name_norm not in existing_names_normalized:
+                                new_items.append(item)
+
+                        if new_items:
+                            _add_items_to_supply_draft(db, user_id, supply['id'], new_items)
+                            created_drafts.append(f"Добавлено {len(new_items)} новых поз. в поставку {supply.get('supplier_name')}")
+
+                            # Sync supply draft total_sum with the updated expense draft amount
+                            expense = db.get_expense_draft(expense_draft_id)
+                            if expense:
+                                db.update_supply_draft(supply['id'], total_sum=expense.get('amount', 0.0))
+                        else:
+                            logger.info(f"No new items to add to supply '{supply.get('supplier_name')}'; all incoming items already exist.")
                     else:
                         db.clear_supply_draft_items(supply['id'])
                         _add_items_to_supply_draft(db, user_id, supply['id'], items)
                         created_drafts.append(f"Обновлено {len(items)} поз. в поставке {supply.get('supplier_name')}")
+
+                        # Sync supply draft total_sum with the updated expense draft amount
+                        expense = db.get_expense_draft(expense_draft_id)
+                        if expense:
+                            db.update_supply_draft(supply['id'], total_sum=expense.get('amount', 0.0))
                 else:
                     logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
                     
