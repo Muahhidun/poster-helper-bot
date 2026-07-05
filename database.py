@@ -2582,6 +2582,28 @@ class UserDatabase:
             logger.error(f"Failed to delete purchase supplier: {e}")
             return False
 
+    def update_purchase_ingredient_poster_id(self, telegram_user_id: int, ing_row_id: int, poster_ingredient_id: int) -> bool:
+        """Update the Poster ingredient ID for a purchase ingredient"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute(
+                    "UPDATE purchase_ingredients SET poster_ingredient_id = ? WHERE id = ? AND telegram_user_id = ?",
+                    (poster_ingredient_id, ing_row_id, telegram_user_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE purchase_ingredients SET poster_ingredient_id = %s WHERE id = %s AND telegram_user_id = %s",
+                    (poster_ingredient_id, ing_row_id, telegram_user_id)
+                )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update purchase ingredient poster ID: {e}")
+            return False
+
     def get_purchase_ingredients(self, telegram_user_id: int, supplier_id: Optional[int] = None) -> list:
         """Get all purchase ingredients for a user, optionally filtered by supplier"""
         try:

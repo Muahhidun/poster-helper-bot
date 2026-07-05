@@ -2695,6 +2695,27 @@ def api_purchase_blank():
     # 4. Get ingredients
     ingredients = db.get_purchase_ingredients(telegram_user_id)
     
+    # Auto-match ingredients by name if poster_ingredient_id is missing
+    matcher = None
+    for ing in ingredients:
+        if not ing.get('poster_ingredient_id'):
+            if not matcher:
+                try:
+                    from matchers import get_ingredient_matcher
+                    matcher = get_ingredient_matcher(telegram_user_id)
+                except Exception as e:
+                    logger.error(f"Failed to load ingredient matcher for auto-match: {e}")
+                    break
+            
+            # Match ingredient name to Poster items
+            match_res = matcher.match(ing['name'], score_cutoff=55)
+            if match_res:
+                ing_id, ing_name, unit, poster_account_id, poster_account_name = match_res
+                # Update in DB
+                db.update_purchase_ingredient_poster_id(telegram_user_id, ing['id'], ing_id)
+                ing['poster_ingredient_id'] = ing_id
+                logger.info(f"✅ Auto-matched ingredient '{ing['name']}' to Poster ID {ing_id} ({ing_name})")
+    
     # Group ingredients by supplier_id
     from collections import defaultdict
     ingredients_by_supplier = defaultdict(list)
