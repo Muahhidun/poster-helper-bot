@@ -2674,6 +2674,7 @@ def api_purchase_blank():
     from poster_client import get_poster_client
     avg_consumptions = {}
     current_stocks = {}
+    poster_names = {}
     try:
         poster = get_poster_client(telegram_user_id)
         # Fetch movements for last 30 days
@@ -2694,6 +2695,17 @@ def api_purchase_blank():
                 current_stocks[ing_id] = round(end_bal, 3)
             except (ValueError, TypeError):
                 current_stocks[ing_id] = 0.0
+
+        # Fetch names for precise matching/display
+        try:
+            all_ings = run_async(poster.get_ingredients())
+            for ing_item in all_ings:
+                ing_id = int(ing_item.get('ingredient_id', 0) or ing_item.get('id', 0))
+                name = ing_item.get('ingredient_name') or ing_item.get('name')
+                if ing_id and name:
+                    poster_names[ing_id] = name
+        except Exception as ne:
+            logger.warning(f"Failed to fetch Poster ingredients names: {ne}")
     except Exception as e:
         logger.warning(f"Failed to fetch Poster movements for purchase sheet: {e}")
         # Proceed with empty consumptions, falling back to defaults
@@ -2721,6 +2733,14 @@ def api_purchase_blank():
                 db.update_purchase_ingredient_poster_id(telegram_user_id, ing['id'], ing_id)
                 ing['poster_ingredient_id'] = ing_id
                 logger.info(f"✅ Auto-matched ingredient '{ing['name']}' to Poster ID {ing_id} ({ing_name})")
+        
+        # Overwrite database and display name if it differs from Poster name
+        poster_id = ing.get('poster_ingredient_id')
+        if poster_id and poster_id in poster_names:
+            poster_name = poster_names[poster_id]
+            if ing['name'] != poster_name:
+                db.update_purchase_ingredient_name(telegram_user_id, ing['id'], poster_name)
+                ing['name'] = poster_name
     
     # Group ingredients by supplier_id
     from collections import defaultdict

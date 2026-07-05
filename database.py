@@ -2604,6 +2604,28 @@ class UserDatabase:
             logger.error(f"Failed to update purchase ingredient poster ID: {e}")
             return False
 
+    def update_purchase_ingredient_name(self, telegram_user_id: int, ing_row_id: int, name: str) -> bool:
+        """Update the display name for a purchase ingredient"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute(
+                    "UPDATE purchase_ingredients SET name = ? WHERE id = ? AND telegram_user_id = ?",
+                    (name, ing_row_id, telegram_user_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE purchase_ingredients SET name = %s WHERE id = %s AND telegram_user_id = %s",
+                    (name, ing_row_id, telegram_user_id)
+                )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update purchase ingredient name: {e}")
+            return False
+
     def get_purchase_ingredients(self, telegram_user_id: int, supplier_id: Optional[int] = None) -> list:
         """Get all purchase ingredients for a user, optionally filtered by supplier"""
         try:
