@@ -128,14 +128,14 @@ def check_role_access(path, role):
     if role == 'admin':
         if path.startswith('/cafe/') or path.startswith('/api/cafe/'):
             return True
-        if path == '/logout':
+        if path in ('/logout', '/shift-closing'):
             return True
         return False
 
     if role == 'cashier':
         if path.startswith('/cashier/') or path.startswith('/api/cashier/'):
             return True
-        if path == '/logout':
+        if path in ('/logout', '/shift-closing'):
             return True
         return False
 
@@ -2933,6 +2933,177 @@ def api_purchase_link_ingredient():
     except Exception as e:
         logger.error(f"Failed to link ingredient: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+# ========================================
+# Access & Roles Management Routes
+# ========================================
+
+@app.route('/settings/access', methods=['GET'])
+def view_access_settings():
+    """Page for managing web users, passwords, and roles (Owner only)"""
+    if session.get('role') != 'owner':
+        flash('Доступ к управлению ролями разрешен только владельцу', 'error')
+        return redirect('/')
+    return render_template('access_settings.html')
+
+
+@app.route('/api/web-users', methods=['GET'])
+def api_list_web_users():
+    """Get all web users and poster accounts for the logged-in owner"""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    db = get_database()
+    telegram_user_id = g.user_id
+    users = db.list_web_users(telegram_user_id)
+    accounts = db.get_accounts(telegram_user_id)
+
+    poster_accounts = [{'id': acc['id'], 'account_name': acc['account_name']} for acc in accounts]
+
+    return jsonify({
+        'users': users,
+        'poster_accounts': poster_accounts,
+        'current_web_user_id': session.get('web_user_id')
+    })
+
+
+@app.route('/api/web-users/create', methods=['POST'])
+def api_create_web_user():
+    """Create a new web user (Owner only)"""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    db = get_database()
+    telegram_user_id = g.user_id
+    data = request.get_json() or {}
+
+    username = (data.get('username') or '').strip().lower()
+    password = data.get('password') or ''
+    role = data.get('role') or 'cashier'
+    label = (data.get('label') or '').strip()
+    poster_account_id = data.get('poster_account_id')
+
+    if not username:
+        return jsonify({'error': 'Укажите логин'}), 400
+    if len(username) < 3:
+        return jsonify({'error': 'Логин должен содержать минимум 3 символа'}), 400
+    if not password or len(password) < 4:
+        return jsonify({'error': 'Пароль должен содержать минимум 4 символа'}), 400
+    if role not in ('owner', 'admin', 'cashier'):
+        return jsonify({'error': 'Недопустимая роль'}), 400
+
+    if poster_account_id in (0, '0', '', None):
+        poster_account_id = None
+    else:
+        try:
+            poster_account_id = int(poster_account_id)
+        except ValueError:
+            poster_account_id = None
+
+    user_id = db.create_web_user(
+        telegram_user_id=telegram_user_id,
+        username=username,
+        password=password,
+        role=role,
+        label=label or username,
+        poster_account_id=poster_account_id
+    )
+
+    if not user_id:
+        return jsonify({'error': 'Не удалось создать пользователя. Возможно, логин уже занят.'}), 400
+
+    return jsonify({'success': True, 'user_id': user_id, 'message': f'Пользователь {username} успешно создан'})
+
+
+@app.route('/api/web-users/<int:user_id>/reset-password', methods=['POST'])
+def api_reset_web_user_password(user_id):
+    """Reset password for a web user (Owner only)"""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    db = get_database()
+    telegram_user_id = g.user_id
+    data = request.get_json() or {}
+    new_password = data.get('password') or ''
+
+    if not new_password or len(new_password) < 4:
+        return jsonify({'error': 'Пароль должен быть не менее 4 символов'}), 400
+
+    success = db.reset_web_user_password(user_id, telegram_user_id, new_password)
+    if not success:
+        return jsonify({'error': 'Не удалось обновить пароль'}), 400
+
+    return jsonify({'success': True, 'message': 'Пароль успешно изменен'})
+
+
+@app.route('/api/web-users/<int:user_id>/update', methods=['POST'])
+def api_update_web_user(user_id):
+    """Update a web user (Owner only)"""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    db = get_database()
+    telegram_user_id = g.user_id
+    data = request.get_json() or {}
+
+    username = data.get('username')
+    role = data.get('role')
+    label = data.get('label')
+    is_active = data.get('is_active')
+    poster_account_id = data.get('poster_account_id')
+    if 'poster_account_id' in data:
+        if poster_account_id in (0, '0', '', None):
+            poster_account_id = 0
+        else:
+            try:
+                poster_account_id = int(poster_account_id)
+            except (ValueError, TypeError):
+                poster_account_id = 0
+
+    if role and role not in ('owner', 'admin', 'cashier'):
+        return jsonify({'error': 'Недопустимая роль'}), 400
+
+    # Prevent owner from disabling or demoting their own current user account
+    if user_id == session.get('web_user_id'):
+        if is_active is False or is_active == 0:
+            return jsonify({'error': 'Вы не можете заблокировать свой собственный аккаунт'}), 400
+        if role and role != 'owner':
+            return jsonify({'error': 'Вы не можете изменить свою роль владельца'}), 400
+
+    success = db.update_web_user(
+        user_id=user_id,
+        telegram_user_id=telegram_user_id,
+        username=username,
+        role=role,
+        label=label,
+        is_active=is_active,
+        poster_account_id=poster_account_id
+    )
+
+    if not success:
+        return jsonify({'error': 'Не удалось обновить данные пользователя'}), 400
+
+    return jsonify({'success': True, 'message': 'Данные пользователя обновлены'})
+
+
+@app.route('/api/web-users/<int:user_id>/delete', methods=['POST'])
+def api_delete_web_user(user_id):
+    """Delete a web user (Owner only)"""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    if user_id == session.get('web_user_id'):
+        return jsonify({'error': 'Вы не можете удалить свой собственный аккаунт'}), 400
+
+    db = get_database()
+    telegram_user_id = g.user_id
+    success = db.delete_web_user(user_id, telegram_user_id)
+
+    if not success:
+        return jsonify({'error': 'Не удалось удалить пользователя'}), 400
+
+    return jsonify({'success': True, 'message': 'Пользователь удален'})
 
 
 @app.route('/expenses/toggle-type/<int:draft_id>', methods=['POST'])
@@ -6611,6 +6782,11 @@ def api_daily_transactions_poster_data():
 @app.route('/shift-closing')
 def shift_closing():
     """Show shift closing page"""
+    role = session.get('role')
+    if role == 'admin':
+        return redirect('/cafe/shift-closing')
+    elif role == 'cashier':
+        return redirect('/cashier/shift-closing')
     return render_template('shift_closing.html', default_cash_to_leave=config.DEFAULT_CASH_TO_LEAVE)
 
 
@@ -7178,8 +7354,27 @@ def resolve_cafe_info():
         poster_account_id = session.get('poster_account_id')
         if poster_account_id:
             info = db.get_web_user_poster_info(session['web_user_id'])
-            if info:
+            if info and info.get('poster_token'):
                 return info
+
+        # Fallback: if poster_account_id is missing or has no token, select cafe account for owner
+        telegram_user_id = session.get('telegram_user_id')
+        if telegram_user_id:
+            accounts = db.get_accounts(telegram_user_id)
+            cafe_account = next(
+                (a for a in accounts if not a.get('is_primary') and
+                 any(kw in (a.get('account_name') or '').lower() for kw in ('cafe', 'кафе'))),
+                next((a for a in accounts if not a.get('is_primary')), accounts[0] if accounts else None)
+            )
+            if cafe_account:
+                return {
+                    'telegram_user_id': telegram_user_id,
+                    'poster_account_id': cafe_account['id'],
+                    'account_name': cafe_account.get('account_name', 'Cafe'),
+                    'poster_token': cafe_account.get('poster_token'),
+                    'poster_user_id': cafe_account.get('poster_user_id'),
+                    'poster_base_url': cafe_account.get('poster_base_url'),
+                }
     elif role == 'owner':
         telegram_user_id = session.get('telegram_user_id')
         accounts = db.get_accounts(telegram_user_id)
@@ -8243,8 +8438,23 @@ def resolve_cashier_info():
         poster_account_id = session.get('poster_account_id')
         if poster_account_id:
             info = db.get_web_user_poster_info(session['web_user_id'])
-            if info:
+            if info and info.get('poster_token'):
                 return info
+
+        # Fallback: if poster_account_id is missing or has no token, select primary account for owner
+        telegram_user_id = session.get('telegram_user_id')
+        if telegram_user_id:
+            accounts = db.get_accounts(telegram_user_id)
+            primary_account = next((a for a in accounts if a.get('is_primary')), accounts[0] if accounts else None)
+            if primary_account:
+                return {
+                    'telegram_user_id': telegram_user_id,
+                    'poster_account_id': primary_account['id'],
+                    'account_name': primary_account.get('account_name', 'Основной отдел'),
+                    'poster_token': primary_account.get('poster_token'),
+                    'poster_user_id': primary_account.get('poster_user_id'),
+                    'poster_base_url': primary_account.get('poster_base_url'),
+                }
     elif role == 'owner':
         telegram_user_id = session.get('telegram_user_id')
         accounts = db.get_accounts(telegram_user_id)

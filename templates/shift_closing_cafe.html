@@ -167,8 +167,15 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
 </div>
 {% endif %}
 <div class="sc">
-    <div class="sc-title">{{ account_name }}</div>
-    <div class="sc-title-sub">Закрытие смены</div>
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0 8px;">
+        <div>
+            <div class="sc-title" style="text-align: left; padding: 0;">{{ account_name }}</div>
+            <div class="sc-title-sub" style="text-align: left; margin-bottom: 0;">Закрытие смены — Кафе {% if session.get('label') %}({{ session.get('label') }}){% endif %}</div>
+        </div>
+        {% if user_role != 'owner' %}
+        <a href="/logout" style="padding: 6px 12px; font-size: 13px; font-weight: 600; background: #e5e5ea; color: #1c1c1e; text-decoration: none; border-radius: 8px;">Выйти</a>
+        {% endif %}
+    </div>
 
     <!-- Step indicator -->
     <div class="sc-step-indicator">

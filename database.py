@@ -34,6 +34,29 @@ else:
     logger.info(f"Using SQLite database at {DATABASE_PATH}")
 
 
+def _hash_web_password(password: str) -> str:
+    """Hash password with bcrypt if available, otherwise fallback to werkzeug.security."""
+    try:
+        import bcrypt
+        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    except ImportError:
+        from werkzeug.security import generate_password_hash
+        return generate_password_hash(password)
+
+
+def _check_web_password(password: str, password_hash: str) -> bool:
+    """Verify password using bcrypt or werkzeug.security."""
+    try:
+        if password_hash.startswith('pbkdf2:') or password_hash.startswith('scrypt:'):
+            from werkzeug.security import check_password_hash
+            return check_password_hash(password_hash, password)
+        import bcrypt
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except (ImportError, Exception):
+        from werkzeug.security import check_password_hash
+        return check_password_hash(password_hash, password)
+
+
 class _ManagedConnection:
     """Connection wrapper that ensures cleanup even if conn.close() is forgotten.
 
@@ -5029,9 +5052,8 @@ class UserDatabase:
 
     def create_web_user(self, telegram_user_id: int, username: str, password: str, role: str,
                         label: str = None, poster_account_id: int = None) -> Optional[int]:
-        """Create a new web user with bcrypt-hashed password. Returns user id."""
-        import bcrypt
-        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        """Create a new web user with hashed password. Returns user id."""
+        password_hash = _hash_web_password(password)
 
         try:
             conn = self._get_connection()
@@ -5061,7 +5083,6 @@ class UserDatabase:
 
     def verify_web_user(self, username: str, password: str) -> Optional[Dict]:
         """Verify username/password and return user dict if valid, None otherwise."""
-        import bcrypt
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -5090,7 +5111,7 @@ class UserDatabase:
                 return None
 
             # Verify password
-            if not bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+            if not _check_web_password(password, user['password_hash']):
                 conn.close()
                 return None
 
@@ -5143,10 +5164,12 @@ class UserDatabase:
 
             placeholder = "?" if DB_TYPE == "sqlite" else "%s"
             cursor.execute(f"""
-                SELECT id, username, role, label, poster_account_id, is_active, created_at, last_login
-                FROM web_users
-                WHERE telegram_user_id = {placeholder}
-                ORDER BY role, username
+                SELECT u.id, u.username, u.role, u.label, u.poster_account_id, u.is_active,
+                       u.created_at, u.last_login, a.account_name
+                FROM web_users u
+                LEFT JOIN poster_accounts a ON a.id = u.poster_account_id
+                WHERE u.telegram_user_id = {placeholder}
+                ORDER BY u.role, u.username
             """, (telegram_user_id,))
 
             columns = [desc[0] for desc in cursor.description]
@@ -5181,8 +5204,7 @@ class UserDatabase:
 
     def reset_web_user_password(self, user_id: int, telegram_user_id: int, new_password: str) -> bool:
         """Reset password for a web user. Only the telegram owner can reset."""
-        import bcrypt
-        password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        password_hash = _hash_web_password(new_password)
 
         try:
             conn = self._get_connection()
@@ -5201,6 +5223,57 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Failed to reset web user password: {e}")
+            return False
+
+    def update_web_user(self, user_id: int, telegram_user_id: int, username: str = None,
+                        role: str = None, label: str = None, is_active: int = None,
+                        poster_account_id: int = None) -> bool:
+        """Update web user details. Only the telegram owner can update."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            updates = []
+            params = []
+
+            if username is not None:
+                updates.append(f"username = {placeholder}")
+                params.append(username.strip())
+            if role is not None:
+                updates.append(f"role = {placeholder}")
+                params.append(role)
+            if label is not None:
+                updates.append(f"label = {placeholder}")
+                params.append(label.strip())
+            if is_active is not None:
+                updates.append(f"is_active = {placeholder}")
+                params.append(1 if is_active else 0)
+            if poster_account_id is not None:
+                if poster_account_id == 0 or poster_account_id == -1:
+                    updates.append("poster_account_id = NULL")
+                else:
+                    updates.append(f"poster_account_id = {placeholder}")
+                    params.append(poster_account_id)
+
+            if not updates:
+                conn.close()
+                return True
+
+            params.extend([user_id, telegram_user_id])
+            sql = f"""
+                UPDATE web_users
+                SET {', '.join(updates)}
+                WHERE id = {placeholder} AND telegram_user_id = {placeholder}
+            """
+            cursor.execute(sql, tuple(params))
+            conn.commit()
+            affected = cursor.rowcount
+            conn.close()
+            return affected > 0
+
+        except Exception as e:
+            logger.error(f"Failed to update web user: {e}")
             return False
 
     def get_web_user_poster_info(self, web_user_id: int) -> Optional[Dict]:

@@ -168,6 +168,33 @@
                 PizzBurg
             </a>
             <ul class="nav-pills-custom">
+                {% if session.get('role') == 'admin' %}
+                <li>
+                    <a href="/cafe/shift-closing" class="active">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                        Кафе
+                    </a>
+                </li>
+                <li>
+                    <a href="/logout">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Выйти
+                    </a>
+                </li>
+                {% elif session.get('role') == 'cashier' %}
+                <li>
+                    <a href="/cashier/shift-closing" class="active">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                        Кассир
+                    </a>
+                </li>
+                <li>
+                    <a href="/logout">
+                        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Выйти
+                    </a>
+                </li>
+                {% else %}
                 <li>
                     <a href="{{ url_for('view_assistant') }}" {% if request.endpoint == 'view_assistant' %}class="active"{% endif %}>
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
@@ -199,17 +226,22 @@
                     </a>
                 </li>
                 <li class="nav-desktop-only dropdown">
-                    <a href="#" data-bs-toggle="dropdown" aria-expanded="false" {% if request.endpoint in ['daily_transactions_page', 'list_aliases'] %}class="active"{% endif %}>
+                    <a href="#" data-bs-toggle="dropdown" aria-expanded="false" {% if request.endpoint in ['daily_transactions_page', 'list_aliases', 'view_access_settings'] %}class="active"{% endif %}>
                         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
                         Настройки
                     </a>
                     <ul class="dropdown-menu dropdown-menu-end">
+                        {% if session.get('role') == 'owner' or not session.get('role') %}
+                        <li><a class="dropdown-item d-flex align-items-center gap-2" href="/settings/access"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>Доступ и роли</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        {% endif %}
                         <li><a class="dropdown-item" href="{{ url_for('daily_transactions_page') }}">Авто-транзакции</a></li>
                         <li><a class="dropdown-item" href="{{ url_for('list_aliases') }}">Алиасы</a></li>
                         <li><hr class="dropdown-divider"></li>
                         <li><a class="dropdown-item" href="/logout">Выйти</a></li>
                     </ul>
                 </li>
+                {% endif %}
             </ul>
         </div>
     </nav>
