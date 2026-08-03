@@ -3146,7 +3146,7 @@ def api_accounts_summary():
 
 @app.route('/api/accounts/history', methods=['GET'])
 def api_accounts_history():
-    """Get 15-day balance trend history and day-over-day changes for chart & list"""
+    """Get 15-day real balance trend history directly from Poster API transactions"""
     if session.get('role') != 'owner':
         return jsonify({'error': 'Forbidden'}), 403
 
@@ -3154,43 +3154,126 @@ def api_accounts_history():
     db = get_database()
     telegram_user_id = g.user_id
 
-    snapshots = db.get_account_balance_history(telegram_user_id, account_key, days=15)
-
     from datetime import datetime, timedelta
     kz_now = datetime.now(KZ_TZ)
+    date_to = kz_now.strftime("%Y-%m-%d")
+    date_from = (kz_now - timedelta(days=16)).strftime("%Y-%m-%d")
     dates_15 = [(kz_now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14, -1, -1)]
 
-    existing_by_date = {s['date']: s for s in snapshots}
+    accounts = db.get_accounts(telegram_user_id)
 
-    # Reference balance
-    last_balance = float(snapshots[-1]['balance']) if snapshots else 3128741.80
+    async def fetch_poster_history_data():
+        from poster_client import PosterClient
+        all_raw_accounts = []
+        all_transactions = []
 
-    history_items = []
-    prev_bal = None
+        for acc in accounts:
+            token = acc.get('poster_token')
+            user_id_str = acc.get('poster_user_id')
+            base_url = acc.get('poster_base_url')
+            if not token:
+                continue
 
-    import random
-    random.seed(hash(account_key) % 100000)
+            client = PosterClient(poster_token=token, poster_user_id=user_id_str, poster_base_url=base_url)
+            try:
+                fin_accs = await client.get_accounts()
+                for fa in fin_accs:
+                    raw_bal = float(fa.get('balance') or fa.get('amount') or 0)
+                    all_raw_accounts.append({
+                        'id': str(fa.get('account_id') or fa.get('id')),
+                        'name': (fa.get('name') or fa.get('account_name') or '').strip(),
+                        'balance': raw_bal / 100.0,
+                    })
 
-    for d_str in dates_15:
-        if d_str in existing_by_date:
-            bal = float(existing_by_date[d_str]['balance'])
-        else:
-            day_idx = dates_15.index(d_str)
-            delta = (14 - day_idx) * 28000.0 + random.randint(-18000, 18000)
-            bal = max(5000.0, round(last_balance - delta, 2))
+                txs = await client.get_transactions(date_from=date_from, date_to=date_to)
+                all_transactions.extend(txs)
+            except Exception as e:
+                logger.error(f"Error fetching Poster history data: {e}")
+            finally:
+                await client.close()
 
-        net_change = round(bal - prev_bal, 2) if prev_bal is not None else 0.0
-        prev_bal = bal
+        return all_raw_accounts, all_transactions
 
-        date_obj = datetime.strptime(d_str, "%Y-%m-%d")
-        formatted_date = date_obj.strftime("%d.%m")
+    try:
+        raw_accounts, raw_txs = run_async(fetch_poster_history_data())
+    except Exception as e:
+        logger.error(f"Failed to fetch Poster history: {e}")
+        raw_accounts, raw_txs = [], []
 
-        history_items.append({
+    EXCLUDED_KEYWORDS = ('денежный ящик', 'инкассация', 'форте банк', 'прибыль', 'на налоги')
+
+    # Get current live balance for requested account_key
+    wolt_gross = sum(a['balance'] for a in raw_accounts if 'wolt' in a['name'].lower() or 'вольт' in a['name'].lower())
+    kaspi_live = sum(a['balance'] for a in raw_accounts if ('kaspi' in a['name'].lower() or 'каспий' in a['name'].lower()) and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
+    halyk_live = sum(a['balance'] for a in raw_accounts if ('halyk' in a['name'].lower() or 'халык' in a['name'].lower()) and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
+    cash_live = sum(a['balance'] for a in raw_accounts if ('касс' in a['name'].lower() or 'оставил' in a['name'].lower()) and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
+    money_home_live = sum(a['balance'] for a in raw_accounts if 'дом' in a['name'].lower() and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
+    wolt_net_live = round(wolt_gross * 0.70, 2)
+    total_live = round(cash_live + kaspi_live + halyk_live + money_home_live + wolt_net_live, 2)
+
+    current_balance = total_live
+    if account_key == 'wolt':
+        current_balance = wolt_net_live
+    elif account_key == 'kaspi':
+        current_balance = kaspi_live
+    elif account_key == 'halyk':
+        current_balance = halyk_live
+    elif account_key == 'cash':
+        current_balance = cash_live
+    elif 'money_home' in account_key:
+        current_balance = money_home_live
+
+    # Aggregate daily transaction deltas from Poster API transactions
+    daily_deltas = {d: 0.0 for d in dates_15}
+
+    for tx in raw_txs:
+        tx_date = str(tx.get('date') or tx.get('created_at') or '')[:10]
+        if tx_date not in daily_deltas:
+            continue
+
+        raw_amt = float(tx.get('amount') or tx.get('sum') or 0) / 100.0
+        acc_name = (tx.get('account_name') or tx.get('name') or '').lower()
+        comment = (tx.get('comment') or tx.get('description') or '').lower()
+
+        if any(k in acc_name for k in EXCLUDED_KEYWORDS):
+            continue
+
+        tx_type = str(tx.get('type') or '')
+        net_tx = raw_amt if tx_type == '1' else (-raw_amt if tx_type == '2' else 0.0)
+
+        if account_key == 'total':
+            if 'wolt' in acc_name or 'вольт' in acc_name:
+                net_tx = net_tx * 0.70
+            daily_deltas[tx_date] += net_tx
+        elif account_key == 'wolt' and ('wolt' in acc_name or 'вольт' in acc_name):
+            daily_deltas[tx_date] += net_tx * 0.70
+        elif account_key == 'kaspi' and ('kaspi' in acc_name or 'каспий' in acc_name):
+            daily_deltas[tx_date] += net_tx
+        elif account_key == 'halyk' and ('halyk' in acc_name or 'халык' in acc_name):
+            daily_deltas[tx_date] += net_tx
+        elif account_key == 'cash' and ('касс' in acc_name or 'оставил' in acc_name):
+            daily_deltas[tx_date] += net_tx
+        elif 'money_home' in account_key and ('дом' in acc_name or 'дом' in comment):
+            daily_deltas[tx_date] += net_tx
+
+    # Reconstruct exact daily end-of-day balances walking backward from today
+    running_bal = current_balance
+    history_reversed = []
+
+    for d_str in reversed(dates_15):
+        delta_day = daily_deltas.get(d_str, 0.0)
+        history_reversed.append({
             'date': d_str,
-            'formatted_date': formatted_date,
-            'balance': bal,
-            'net_change': net_change
+            'formatted_date': datetime.strptime(d_str, "%Y-%m-%d").strftime("%d.%m"),
+            'balance': round(running_bal, 2),
+            'net_change': round(delta_day, 2)
         })
+        running_bal -= delta_day
+
+    history_items = list(reversed(history_reversed))
+
+    for h in history_items:
+        db.save_account_balance_snapshot(telegram_user_id, h['date'], account_key, h['balance'], account_key, h['net_change'])
 
     return jsonify({
         'success': True,
