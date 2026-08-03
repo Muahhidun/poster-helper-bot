@@ -79,16 +79,16 @@ def test_api_accounts_summary_aggregation(client, monkeypatch):
         sess['role'] = 'owner'
 
     mock_fin_accs = [
-        {'account_id': 1, 'name': 'Оставил в кассе на закупы', 'balance': 10000},
-        {'account_id': 2, 'name': 'Kaspi Pay', 'balance': 100000},
-        {'account_id': 3, 'name': 'Halyk Bank', 'balance': 50000},
-        {'account_id': 4, 'name': 'Деньги дом (Жандос)', 'balance': 40000},
-        {'account_id': 5, 'name': 'Деньги дом (Руслан)', 'balance': 30000},
-        {'account_id': 6, 'name': 'Wolt', 'balance': 100000},  # Gross 100,000 -> Net 70,000 (-30%)
-        {'account_id': 7, 'name': 'Денежный ящик (Кассира)', 'balance': 999999},  # EXCLUDED
-        {'account_id': 8, 'name': 'Инкассация (вечером)', 'balance': 888888},      # EXCLUDED
-        {'account_id': 9, 'name': 'Форте банк', 'balance': 777777},                # EXCLUDED
-        {'account_id': 10, 'name': 'Прибыль', 'balance': 666666}                   # EXCLUDED
+        {'account_id': 1, 'name': 'Оставил в кассе на закупы', 'balance': 1000000},    # 10,000 Tenge
+        {'account_id': 2, 'name': 'Kaspi Pay', 'balance': 10000000},                   # 100,000 Tenge
+        {'account_id': 3, 'name': 'Halyk Bank', 'balance': 5000000},                   # 50,000 Tenge
+        {'account_id': 4, 'name': 'Деньги дом (Жандос)', 'balance': 4000000},          # 40,000 Tenge
+        {'account_id': 5, 'name': 'Деньги дом (Руслан)', 'balance': 3000000},          # 30,000 Tenge
+        {'account_id': 6, 'name': 'Wolt', 'balance': 10000000},                        # Gross 100,000 Tenge -> Net 70,000 (-30%)
+        {'account_id': 7, 'name': 'Денежный ящик (Кассира)', 'balance': 99999900},     # EXCLUDED
+        {'account_id': 8, 'name': 'Инкассация (вечером)', 'balance': 88888800},         # EXCLUDED
+        {'account_id': 9, 'name': 'Форте банк', 'balance': 77777700},                   # EXCLUDED
+        {'account_id': 10, 'name': 'Прибыль', 'balance': 66666600}                      # EXCLUDED
     ]
 
     async def mock_get_accounts(self):

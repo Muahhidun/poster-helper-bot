@@ -2975,10 +2975,11 @@ def api_accounts_summary():
             try:
                 fin_accs = await client.get_accounts()
                 for fa in fin_accs:
+                    raw_bal = float(fa.get('balance') or fa.get('amount') or 0)
                     raw_fin_accounts.append({
                         'id': fa.get('account_id') or fa.get('id'),
                         'name': (fa.get('name') or fa.get('account_name') or '').strip(),
-                        'balance': float(fa.get('balance') or fa.get('amount') or 0),
+                        'balance': raw_bal / 100.0,
                         'store_name': acc.get('account_name', '')
                     })
             except Exception as e:
@@ -2995,8 +2996,8 @@ def api_accounts_summary():
         raw_accounts = []
 
     # Exclude unwanted accounts:
-    # 'Денежный ящик (Кассира)', 'Инкассация (вечером)', 'Форте банк', 'Прибыль'
-    EXCLUDED_KEYWORDS = ('денежный ящик', 'инкассация', 'форте банк', 'прибыль')
+    # 'Денежный ящик', 'Инкассация', 'Форте банк', 'Прибыль', 'На налоги'
+    EXCLUDED_KEYWORDS = ('денежный ящик', 'инкассация', 'форте банк', 'прибыль', 'на налоги')
 
     cash_balance = 0.0
     kaspi_balance = 0.0
@@ -3158,7 +3159,7 @@ def api_accounts_history():
     existing_by_date = {s['date']: s for s in snapshots}
 
     # Reference balance
-    last_balance = float(snapshots[-1]['balance']) if snapshots else 5311318.0
+    last_balance = float(snapshots[-1]['balance']) if snapshots else 3128741.80
 
     history_items = []
     prev_bal = None
