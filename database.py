@@ -854,6 +854,10 @@ class UserDatabase:
         # Run migration for account balance snapshots (15 days history)
         self._migrate_account_snapshots()
 
+        # Reliable 02:00 capital snapshots. Kept separate from the legacy table
+        # because legacy rows were produced by an incorrect transaction formula.
+        self._migrate_capital_balance_snapshots()
+
         # Run migration to fix shift_closings UNIQUE constraint (cafe + main same date)
         self._migrate_shift_closings_fix_unique()
 
@@ -1324,6 +1328,61 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Account balance snapshots migration error: {e}")
+
+    def _migrate_capital_balance_snapshots(self):
+        """Create the verified, completed-day capital snapshot table."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS capital_balance_snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        account_key TEXT NOT NULL,
+                        account_name TEXT,
+                        balance REAL NOT NULL,
+                        net_change REAL NOT NULL DEFAULT 0,
+                        cutoff_at TEXT NOT NULL,
+                        metadata_json TEXT,
+                        captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date, account_key),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_capital_snapshots_user_date
+                    ON capital_balance_snapshots(telegram_user_id, date)
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS capital_balance_snapshots (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        date DATE NOT NULL,
+                        account_key TEXT NOT NULL,
+                        account_name TEXT,
+                        balance DECIMAL(14,2) NOT NULL,
+                        net_change DECIMAL(14,2) NOT NULL DEFAULT 0,
+                        cutoff_at TIMESTAMPTZ NOT NULL,
+                        metadata_json TEXT,
+                        captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date, account_key),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_capital_snapshots_user_date
+                    ON capital_balance_snapshots(telegram_user_id, date)
+                """)
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Capital balance snapshots migration: completed")
+        except Exception as e:
+            logger.error(f"Capital balance snapshots migration error: {e}")
 
     def _migrate_to_multi_account(self):
         """
@@ -5343,6 +5402,110 @@ class UserDatabase:
             return result
         except Exception as e:
             logger.error(f"Failed to get account balance history: {e}")
+            return []
+
+    # ==================== Verified Capital Snapshots ====================
+
+    def save_capital_balance_snapshots(self, telegram_user_id: int, rows: list) -> bool:
+        """Insert missing completed-day snapshots without rewriting history."""
+        if not rows:
+            return True
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                sql = """
+                    INSERT OR IGNORE INTO capital_balance_snapshots
+                    (telegram_user_id, date, account_key, account_name, balance,
+                     net_change, cutoff_at, metadata_json, captured_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """
+            else:
+                sql = """
+                    INSERT INTO capital_balance_snapshots
+                    (telegram_user_id, date, account_key, account_name, balance,
+                     net_change, cutoff_at, metadata_json, captured_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date, account_key) DO NOTHING
+                """
+            for row in rows:
+                cursor.execute(sql, (
+                    telegram_user_id,
+                    row['date'],
+                    row['account_key'],
+                    row.get('account_name'),
+                    row['balance'],
+                    row.get('net_change', 0),
+                    row['cutoff_at'],
+                    row.get('metadata_json'),
+                ))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save capital balance snapshots: {e}")
+            return False
+
+    def get_capital_balance_history(self, telegram_user_id: int, account_key: str, days: int = 15) -> list:
+        """Return verified completed-day snapshots, oldest first."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT date, account_key, account_name, balance, net_change,
+                       cutoff_at, metadata_json, captured_at
+                FROM capital_balance_snapshots
+                WHERE telegram_user_id = {placeholder} AND account_key = {placeholder}
+                ORDER BY date DESC
+                LIMIT {int(days)}
+            """, (telegram_user_id, account_key))
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            result = [dict(zip(columns, row)) for row in rows]
+            result.reverse()
+            for item in result:
+                item['date'] = str(item['date'])
+                item['balance'] = float(item['balance'])
+                item['net_change'] = float(item['net_change'])
+                item['cutoff_at'] = str(item['cutoff_at'])
+                item['captured_at'] = str(item['captured_at'])
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get capital balance history: {e}")
+            return []
+
+    def get_latest_capital_snapshot_set(self, telegram_user_id: int) -> list:
+        """Return every physical account from the latest complete snapshot date."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT date, account_key, account_name, balance, net_change,
+                       cutoff_at, metadata_json, captured_at
+                FROM capital_balance_snapshots
+                WHERE telegram_user_id = {placeholder}
+                  AND date = (
+                      SELECT MAX(date) FROM capital_balance_snapshots
+                      WHERE telegram_user_id = {placeholder} AND account_key = 'total'
+                  )
+                ORDER BY account_key
+            """, (telegram_user_id, telegram_user_id))
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            result = [dict(zip(columns, row)) for row in rows]
+            for item in result:
+                item['date'] = str(item['date'])
+                item['balance'] = float(item['balance'])
+                item['net_change'] = float(item['net_change'])
+                item['cutoff_at'] = str(item['cutoff_at'])
+                item['captured_at'] = str(item['captured_at'])
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get latest capital snapshot set: {e}")
             return []
 
     def update_web_user(self, user_id: int, telegram_user_id: int, username: str = None,

@@ -53,6 +53,23 @@
         box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
     }
 
+    .status-badge-online.is-error .status-dot {
+        background-color: #DC2626;
+        box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+    }
+
+    .data-notice {
+        display: none;
+        margin: 0 0 18px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: #FFF7ED;
+        border: 1px solid #FED7AA;
+        color: #9A3412;
+        font-size: 13px;
+        line-height: 1.45;
+    }
+
     .top-actions-bar {
         display: flex;
         align-items: center;
@@ -75,6 +92,21 @@
         cursor: pointer;
         transition: all 0.2s ease;
         box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .total-sum-copy {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        line-height: 1.1;
+    }
+
+    .total-updated-at {
+        margin-top: 4px;
+        color: #6B7280;
+        font-size: 11px;
+        font-weight: 550;
+        letter-spacing: 0;
     }
 
     .total-sum-btn:hover {
@@ -123,6 +155,10 @@
         cursor: pointer;
         transition: all 0.2s ease;
         box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        color: inherit;
     }
 
     .account-card:hover {
@@ -201,6 +237,20 @@
 
     .account-balance.negative {
         color: #DC2626;
+    }
+
+    .account-components {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        margin-top: 10px;
+        font-size: 11px;
+        color: #6B7280;
+    }
+
+    .account-components strong {
+        color: #374151;
+        font-weight: 700;
     }
 
     .wolt-badge {
@@ -290,32 +340,257 @@
         color: #6B7280;
         background-color: #F3F4F6;
     }
+
+    .analytics-status {
+        display: none;
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #FFF7ED;
+        color: #9A3412;
+        font-size: 12px;
+    }
+
+    .account-breakdown {
+        display: none;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .breakdown-item, .stat-item {
+        background: #F9FAFB;
+        border: 1px solid #E5E7EB;
+        border-radius: 12px;
+        padding: 10px 12px;
+    }
+
+    .breakdown-label, .stat-label {
+        display: block;
+        color: #6B7280;
+        font-size: 11px;
+        margin-bottom: 3px;
+    }
+
+    .breakdown-value, .stat-value {
+        color: #111827;
+        font-size: 14px;
+        font-weight: 750;
+    }
+
+    .history-stats {
+        display: none;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+    }
+
+    .stat-value.positive { color: #059669; }
+    .stat-value.negative { color: #DC2626; }
+
+    @media (max-width: 576px) {
+        .accounts-page {
+            padding: 14px 12px 40px;
+        }
+
+        .accounts-header {
+            margin-bottom: 12px;
+        }
+
+        .accounts-title {
+            font-size: 27px;
+        }
+
+        .status-badge-online {
+            padding: 5px 10px;
+            font-size: 11px;
+        }
+
+        .top-actions-bar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: stretch;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .total-sum-btn {
+            width: 100%;
+            min-width: 0;
+            justify-content: space-between;
+            font-size: 21px;
+            padding: 9px 12px;
+            white-space: nowrap;
+        }
+
+        .account-actions {
+            gap: 6px !important;
+        }
+
+        .account-actions .settings-btn {
+            width: 44px;
+            min-width: 44px;
+            height: 44px;
+            justify-content: center;
+            padding: 0;
+        }
+
+        .account-actions .button-label {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            white-space: nowrap;
+        }
+
+        .accounts-grid {
+            gap: 11px;
+        }
+
+        .account-card {
+            border-radius: 16px;
+            padding: 15px 16px 14px;
+        }
+
+        .account-card:hover {
+            transform: none;
+        }
+
+        .account-card-header {
+            gap: 11px;
+            margin-bottom: 9px;
+        }
+
+        .account-icon-wrapper {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            font-size: 19px;
+        }
+
+        .account-subtitle {
+            font-size: 11px;
+        }
+
+        .account-name {
+            font-size: 15px;
+        }
+
+        .account-balance {
+            font-size: 23px;
+        }
+
+        .account-components {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 3px 8px;
+            margin-top: 7px;
+            font-size: 10px;
+        }
+
+        .account-components span {
+            min-width: 0;
+            white-space: nowrap;
+        }
+
+        .account-components span:nth-child(even) {
+            text-align: right;
+        }
+
+        .wolt-badge {
+            margin-top: 6px;
+            padding: 3px 7px;
+            font-size: 10px;
+        }
+
+        .modal-dialog {
+            margin: 8px;
+        }
+
+        .modal-content-custom {
+            border-radius: 20px;
+            max-height: calc(100vh - 16px);
+        }
+
+        .modal-header-custom {
+            padding: 18px 18px 8px;
+        }
+
+        .modal-title-custom {
+            font-size: 20px;
+        }
+
+        .modal-body-custom {
+            padding: 8px 18px 18px;
+            overflow-y: auto;
+        }
+
+        .account-breakdown { grid-template-columns: 1fr 1fr; }
+
+        .breakdown-item, .stat-item {
+            padding: 8px 10px;
+        }
+
+        .chart-container {
+            height: 180px;
+            margin-bottom: 16px;
+        }
+
+        .history-table th {
+            padding: 8px 6px;
+            font-size: 9px;
+        }
+
+        .history-table td {
+            padding: 9px 6px;
+            font-size: 12px;
+        }
+
+        .history-table th:nth-child(2),
+        .history-table td:nth-child(2),
+        .history-table th:nth-child(3),
+        .history-table td:nth-child(3),
+        .delta-badge {
+            white-space: nowrap;
+        }
+
+        .delta-badge {
+            padding: 3px 6px;
+            font-size: 11px;
+        }
+    }
 </style>
 
 <div class="accounts-page">
     <!-- Header -->
     <div class="accounts-header">
         <h1 class="accounts-title">Счета</h1>
-        <div class="status-badge-online">
+        <div class="status-badge-online" id="posterStatusBadge">
             <span class="status-dot"></span>
-            Касса онлайн
+            <span id="posterStatusText">Проверка Poster...</span>
         </div>
     </div>
 
+    <div class="data-notice" id="dataNotice"></div>
+
     <!-- Top Action Bar -->
     <div class="top-actions-bar">
-        <button id="totalSumBtn" class="total-sum-btn" onclick="openHistoryModal('total', 'Общий баланс')">
-            <span id="totalSumText">Загрузка...</span>
+        <button id="totalSumBtn" class="total-sum-btn" onclick="openHistoryModal('total', 'Общий баланс')" aria-label="Открыть аналитику общего баланса">
+            <span class="total-sum-copy">
+                <span id="totalSumText">Загрузка...</span>
+                <span id="updatedAtText" class="total-updated-at">Получаем данные…</span>
+            </span>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         </button>
-        <div class="d-flex align-items-center gap-2">
+        <div class="account-actions d-flex align-items-center gap-2">
             <button id="refreshBtn" class="settings-btn" onclick="loadAccountsSummary()" title="Обновить балансы из Poster">
                 <svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.13 15.57a10 10 0 10.57-8.38l5.67-5.67"/></svg>
-                Обновить
+                <span class="button-label">Обновить</span>
             </button>
-            <button class="settings-btn" onclick="location.href='/settings/access'">
+            <button class="settings-btn" onclick="location.href='/settings/access'" title="Настройки доступа">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-                Настройки
+                <span class="button-label">Настройки</span>
             </button>
         </div>
     </div>
@@ -340,6 +615,9 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body modal-body-custom">
+                <div class="analytics-status" id="analyticsStatus"></div>
+                <div class="account-breakdown" id="accountBreakdown"></div>
+                <div class="history-stats" id="historyStats"></div>
                 <!-- Chart Container -->
                 <div class="chart-container" id="chartWrapper">
                     <canvas id="balanceChart"></canvas>
@@ -368,6 +646,16 @@
 <script>
 let accountsData = [];
 let balanceChartInstance = null;
+let summaryIsHistorical = false;
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
 
 function formatTenge(amount) {
     if (amount === undefined || amount === null || isNaN(amount)) return '0 ₸';
@@ -377,78 +665,181 @@ function formatTenge(amount) {
     return (rounded < 0 ? '-' : '') + formatted + ' ₸';
 }
 
+function setPosterStatus(ok, statuses = []) {
+    const badge = document.getElementById('posterStatusBadge');
+    const text = document.getElementById('posterStatusText');
+    const ready = statuses.filter(s => s.success).length;
+    badge.classList.toggle('is-error', !ok);
+    text.textContent = statuses.length
+        ? `Poster: ${ready} из ${statuses.length}`
+        : (ok ? 'Poster онлайн' : 'Poster недоступен');
+}
+
+function renderAccounts(accounts, historical = false) {
+    accountsData = accounts || [];
+    summaryIsHistorical = historical;
+    const grid = document.getElementById('accountsGrid');
+    grid.innerHTML = '';
+
+    accountsData.forEach(acc => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'account-card';
+        card.setAttribute('aria-label', `Открыть аналитику счета ${acc.name}, баланс ${formatTenge(acc.balance)}`);
+        card.onclick = () => openHistoryModal(acc.key, acc.name);
+
+        let iconHtml = '';
+        if (acc.icon === 'cash') {
+            iconHtml = `<div class="account-icon-wrapper account-icon-cash">💵</div>`;
+        } else if (acc.icon === 'kaspi') {
+            iconHtml = `<div class="account-icon-wrapper account-icon-kaspi">K<br><span style="font-size:8px;">PAY</span></div>`;
+        } else if (acc.icon === 'halyk') {
+            iconHtml = `<div class="account-icon-wrapper account-icon-halyk">🏛️</div>`;
+        } else if (acc.icon === 'wolt') {
+            iconHtml = `<div class="account-icon-wrapper account-icon-wolt">W</div>`;
+        } else {
+            iconHtml = `<div class="account-icon-wrapper account-icon-bank">🏠</div>`;
+        }
+
+        const balanceClass = acc.balance < 0 ? 'account-balance negative' : 'account-balance';
+        const components = (acc.components || []).map(component => `
+            <span>${escapeHtml(component.store_name)}: <strong>${formatTenge(component.balance)}</strong></span>
+        `).join('');
+        const componentsHtml = components
+            ? `<div class="account-components">${components}</div>`
+            : '';
+
+        let badgeHtml = '';
+        if (acc.key === 'wolt') {
+            const gross = acc.gross_balance !== undefined
+                ? ` · до комиссии ${formatTenge(acc.gross_balance)}`
+                : '';
+            badgeHtml = `<div class="wolt-badge">После комиссии 30%${gross}</div>`;
+        }
+
+        card.innerHTML = `
+            <div class="account-card-header">
+                ${iconHtml}
+                <div>
+                    <span class="account-subtitle">${escapeHtml(acc.subtitle || acc.name)}</span>
+                    <span class="account-name">${escapeHtml(acc.name)}</span>
+                </div>
+            </div>
+            <div class="${balanceClass}">${formatTenge(acc.balance)}</div>
+            ${componentsHtml}
+            ${badgeHtml}
+        `;
+        grid.appendChild(card);
+    });
+}
+
+function sourceFailureMessage(statuses) {
+    const failed = (statuses || []).filter(status => !status.success);
+    if (!failed.length) return 'Не удалось получить полные данные Poster.';
+    return failed.map(status =>
+        `${escapeHtml(status.store_name)}: ${escapeHtml(status.error || 'нет ответа')}`
+    ).join('<br>');
+}
+
 async function loadAccountsSummary() {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const notice = document.getElementById('dataNotice');
+    refreshBtn.disabled = true;
+    notice.style.display = 'none';
     try {
         const response = await fetch('/api/accounts/summary');
         const data = await response.json();
 
         if (!data.success) {
-            document.getElementById('accountsGrid').innerHTML = `
-                <div class="account-card" style="grid-column: span 2; text-align: center; color: #DC2626; padding: 40px;">
-                    Не удалось загрузить данные из Poster API.
-                </div>
-            `;
+            setPosterStatus(false, data.source_status || []);
+            if (data.last_complete) {
+                document.getElementById('totalSumText').innerText = formatTenge(data.last_complete.total_sum);
+                document.getElementById('updatedAtText').innerText = `Снимок за ${data.last_complete.date} · 02:00`;
+                renderAccounts(data.last_complete.accounts, true);
+                notice.innerHTML = `Показаны последние полные данные за <strong>${escapeHtml(data.last_complete.date)}</strong>.
+                    Текущий итог не рассчитан, потому что один из источников недоступен.<br>${sourceFailureMessage(data.source_status)}`;
+            } else {
+                document.getElementById('totalSumText').innerText = 'Нет данных';
+                document.getElementById('updatedAtText').innerText = 'Нет полного ответа';
+                document.getElementById('accountsGrid').innerHTML = `
+                    <div class="account-card" style="grid-column: span 2; text-align: center; color: #DC2626; padding: 40px;">
+                        ${sourceFailureMessage(data.source_status)}
+                    </div>`;
+                notice.innerHTML = 'Общий баланс не рассчитан: нет полного ответа обоих заведений.';
+            }
+            notice.style.display = 'block';
             return;
         }
 
-        accountsData = data.accounts;
+        setPosterStatus(true, data.source_status || []);
         document.getElementById('totalSumText').innerText = formatTenge(data.total_sum);
-
-        const grid = document.getElementById('accountsGrid');
-        grid.innerHTML = '';
-
-        data.accounts.forEach(acc => {
-            const card = document.createElement('div');
-            card.className = 'account-card';
-            card.onclick = () => openHistoryModal(acc.key, acc.name);
-
-            let iconHtml = '';
-            if (acc.icon === 'cash') {
-                iconHtml = `<div class="account-icon-wrapper account-icon-cash">💵</div>`;
-            } else if (acc.icon === 'kaspi') {
-                iconHtml = `<div class="account-icon-wrapper account-icon-kaspi">K<br><span style="font-size:8px;">PAY</span></div>`;
-            } else if (acc.icon === 'halyk') {
-                iconHtml = `<div class="account-icon-wrapper account-icon-halyk">🏛️</div>`;
-            } else if (acc.icon === 'wolt') {
-                iconHtml = `<div class="account-icon-wrapper account-icon-wolt">🏛️</div>`;
-            } else {
-                iconHtml = `<div class="account-icon-wrapper account-icon-bank">🏛️</div>`;
-            }
-
-            const isNegative = acc.balance < 0;
-            const balanceClass = isNegative ? 'account-balance negative' : 'account-balance';
-
-            let woltBadgeHtml = '';
-            if (acc.key === 'wolt') {
-                woltBadgeHtml = `<div class="wolt-badge">За вычетом 30% комиссии</div>`;
-            }
-
-            card.innerHTML = `
-                <div class="account-card-header">
-                    ${iconHtml}
-                    <div>
-                        <span class="account-subtitle">${acc.subtitle || acc.name}</span>
-                        <span class="account-name">${acc.name}</span>
-                    </div>
-                </div>
-                <div class="${balanceClass}">${formatTenge(acc.balance)}</div>
-                ${woltBadgeHtml}
-            `;
-
-            grid.appendChild(card);
-        });
-
+        document.getElementById('updatedAtText').innerText = `Обновлено ${data.updated_at}`;
+        renderAccounts(data.accounts, false);
+        if ((data.warnings || []).length) {
+            notice.innerHTML = data.warnings.map(escapeHtml).join('<br>');
+            notice.style.display = 'block';
+        }
     } catch (e) {
         console.error('Failed to load accounts summary:', e);
+        setPosterStatus(false, []);
+        document.getElementById('updatedAtText').innerText = 'Ошибка обновления';
+        notice.textContent = 'Не удалось связаться с сервером. Текущий баланс не изменён.';
+        notice.style.display = 'block';
+    } finally {
+        refreshBtn.disabled = false;
     }
+}
+
+function renderAccountBreakdown(accountKey) {
+    const panel = document.getElementById('accountBreakdown');
+    let items = [];
+    if (accountKey === 'total') {
+        items = accountsData.map(acc => ({ label: acc.name, value: acc.balance }));
+    } else {
+        const account = accountsData.find(acc => acc.key === accountKey);
+        if (!account) {
+            panel.style.display = 'none';
+            return;
+        }
+        items = (account.components || []).map(component => ({
+            label: component.store_name,
+            value: component.balance,
+        }));
+        if (accountKey === 'money_home' && account.owners) {
+            if (account.owners.available) {
+                items.push(
+                    { label: 'Жандос', value: account.owners.zhandos },
+                    { label: 'Руслан', value: account.owners.ruslan },
+                    { label: 'Не распределено', value: account.owners.unassigned },
+                );
+            } else {
+                items.push({ label: 'Разбивка по владельцам', text: 'Данные недоступны' });
+            }
+        }
+    }
+
+    if (!items.length) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.innerHTML = items.map(item => `
+        <div class="breakdown-item">
+            <span class="breakdown-label">${escapeHtml(item.label)}</span>
+            <span class="breakdown-value">${item.text ? escapeHtml(item.text) : formatTenge(item.value)}</span>
+        </div>
+    `).join('');
+    panel.style.display = 'grid';
 }
 
 async function openHistoryModal(accountKey, accountName) {
     document.getElementById('modalAccountTitle').innerText = accountName;
     document.getElementById('historyTableBody').innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">Загрузка истории...</td></tr>';
+    document.getElementById('historyStats').style.display = 'none';
+    document.getElementById('analyticsStatus').style.display = 'none';
+    renderAccountBreakdown(accountKey);
 
     const modalEl = document.getElementById('historyModal');
-    const modal = new bootstrap.Modal(modalEl);
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     modal.show();
 
     try {
@@ -456,17 +847,42 @@ async function openHistoryModal(accountKey, accountName) {
         const data = await response.json();
 
         if (!data.success) {
-            document.getElementById('historyTableBody').innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Не удалось загрузить историю</td></tr>';
+            document.getElementById('historyTableBody').innerHTML = `<tr><td colspan="3" class="text-center text-danger py-3">${escapeHtml(data.error || 'Не удалось загрузить историю')}</td></tr>`;
             return;
         }
 
         renderHistoryTable(data.history);
         renderChartSafe(data.history);
+        renderHistoryStats(data.stats);
+        if (data.stale || summaryIsHistorical) {
+            const status = document.getElementById('analyticsStatus');
+            status.textContent = data.warning || 'Показаны последние сохранённые полные данные.';
+            status.style.display = 'block';
+        }
 
     } catch (e) {
         console.error('Failed to load accounts history:', e);
         document.getElementById('historyTableBody').innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Ошибка загрузки истории</td></tr>';
     }
+}
+
+function renderHistoryStats(stats) {
+    const panel = document.getElementById('historyStats');
+    if (!stats) {
+        panel.style.display = 'none';
+        return;
+    }
+    const changeClass = stats.period_change > 0 ? 'positive' : (stats.period_change < 0 ? 'negative' : '');
+    panel.innerHTML = `
+        <div class="stat-item">
+            <span class="stat-label">Изменение за период</span>
+            <span class="stat-value ${changeClass}">${stats.period_change > 0 ? '+' : ''}${formatTenge(stats.period_change)}</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Среднее изменение в день</span>
+            <span class="stat-value">${stats.average_daily_change > 0 ? '+' : ''}${formatTenge(stats.average_daily_change)}</span>
+        </div>`;
+    panel.style.display = 'grid';
 }
 
 function renderChartSafe(history) {
@@ -562,7 +978,7 @@ function renderHistoryTable(history) {
         }
 
         tr.innerHTML = `
-            <td style="font-weight: 600;">${item.formatted_date} (${item.date})</td>
+            <td style="font-weight: 600;">${escapeHtml(item.formatted_date)}</td>
             <td style="font-weight: 700;">${formatTenge(item.balance)}</td>
             <td class="text-end">${deltaHtml}</td>
         `;

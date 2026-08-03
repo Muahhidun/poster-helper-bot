@@ -155,7 +155,12 @@ class PosterClient:
             logger.warning(f"Failed to get expense categories from Poster: {e}")
             return []
 
-    async def get_transactions(self, date_from: str, date_to: str) -> List[Dict]:
+    async def get_transactions(
+        self,
+        date_from: str,
+        date_to: str,
+        account_id: Optional[str] = None,
+    ) -> List[Dict]:
         """
         Get list of transactions for a date range
 
@@ -168,10 +173,13 @@ class PosterClient:
         """
         df = str(date_from).replace('-', '')
         dt = str(date_to).replace('-', '')
-        result = await self._request('GET', 'finance.getTransactions', params={
+        params = {
             'dateFrom': df,
             'dateTo': dt
-        })
+        }
+        if account_id is not None:
+            params['account_id'] = str(account_id)
+        result = await self._request('GET', 'finance.getTransactions', params=params)
         return result.get('response', [])
 
     async def get_cash_shifts(self, date_from: str, date_to: str) -> List[Dict]:

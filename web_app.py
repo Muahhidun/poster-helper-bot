@@ -2950,339 +2950,183 @@ def view_accounts():
 
 @app.route('/api/accounts/summary', methods=['GET'])
 def api_accounts_summary():
-    """Get aggregated account balances from Poster API across all accounts for the owner"""
+    """Get current capital only when every configured Poster source responds."""
     if session.get('role') != 'owner':
         return jsonify({'error': 'Forbidden'}), 403
 
     db = get_database()
     telegram_user_id = g.user_id
-    accounts = db.get_accounts(telegram_user_id)
+    poster_accounts = db.get_accounts(telegram_user_id)
 
-    if not accounts:
+    if not poster_accounts:
         return jsonify({'error': 'No Poster accounts connected'}), 400
 
-    from datetime import datetime, timedelta
+    from account_analytics import build_summary, fetch_capital_data
+
     kz_now = datetime.now(KZ_TZ)
-    date_to = kz_now.strftime("%Y-%m-%d")
-    date_from = (kz_now - timedelta(days=30)).strftime("%Y-%m-%d")
+    dataset = run_async(fetch_capital_data(
+        poster_accounts,
+        date_to=kz_now.strftime('%Y%m%d'),
+        include_money_history=True,
+    ))
 
-    async def fetch_poster_accounts_data():
-        from poster_client import PosterClient
-        raw_fin_accounts = []
-        raw_transactions = []
-        for acc in accounts:
-            token = acc.get('poster_token')
-            user_id_str = acc.get('poster_user_id')
-            base_url = acc.get('poster_base_url')
-            if not token:
-                continue
+    if not dataset['complete']:
+        latest = _latest_capital_snapshot_payload(db, telegram_user_id)
+        return jsonify({
+            'success': False,
+            'error': 'Не удалось получить данные всех заведений Poster',
+            'source_status': dataset['source_status'],
+            'last_complete': latest,
+        }), 503
 
-            client = PosterClient(poster_token=token, poster_user_id=user_id_str, poster_base_url=base_url)
-            try:
-                fin_accs = await client.get_accounts()
-                for fa in fin_accs:
-                    raw_bal = float(fa.get('balance') or fa.get('amount') or 0)
-                    raw_fin_accounts.append({
-                        'id': str(fa.get('account_id') or fa.get('id')),
-                        'name': (fa.get('name') or fa.get('account_name') or '').strip(),
-                        'balance': raw_bal / 100.0,
-                        'store_name': acc.get('account_name', '')
-                    })
-                txs = await client.get_transactions(date_from=date_from, date_to=date_to)
-                raw_transactions.extend(txs)
-            except Exception as e:
-                logger.error(f"Error fetching Poster fin accounts for {acc.get('account_name')}: {e}")
-            finally:
-                await client.close()
-
-        return raw_fin_accounts, raw_transactions
-
-    try:
-        raw_accounts, raw_txs = run_async(fetch_poster_accounts_data())
-    except Exception as e:
-        logger.error(f"Failed to fetch Poster financial accounts: {e}")
-        raw_accounts, raw_txs = [], []
-
-    EXCLUDED_KEYWORDS = ('денежный ящик', 'инкассация', 'форте банк', 'прибыль', 'на налоги')
-
-    cash_balance = 0.0
-    kaspi_balance = 0.0
-    halyk_balance = 0.0
-    money_home_total = 0.0
-    wolt_gross_balance = 0.0
-
-    for item in raw_accounts:
-        name_lower = item['name'].lower()
-        balance = item['balance']
-
-        if any(kw in name_lower for kw in EXCLUDED_KEYWORDS):
-            continue
-
-        if 'kaspi' in name_lower or 'каспий' in name_lower:
-            kaspi_balance += balance
-        elif 'halyk' in name_lower or 'халык' in name_lower:
-            halyk_balance += balance
-        elif 'wolt' in name_lower or 'вольт' in name_lower:
-            wolt_gross_balance += balance
-        elif 'касс' in name_lower or 'оставил' in name_lower:
-            cash_balance += balance
-        elif 'дом' in name_lower:
-            money_home_total += balance
-        else:
-            cash_balance += balance
-
-    # Allocate money_home_total (live balance from Poster API, e.g. 100 002 ₸)
-    # We inspect recent transactions working backward from today to find active unspent withdrawals per person
-    zhandos_bal = 0.0
-    ruslan_bal = 0.0
-
-    desc_txs = sorted(raw_txs, key=lambda t: str(t.get('date') or t.get('created_at') or ''), reverse=True)
-    rem_to_allocate = money_home_total
-
-    for tx in desc_txs:
-        if rem_to_allocate <= 0:
-            break
-
-        acc_name = (tx.get('account_name') or tx.get('name') or '').lower()
-        comment = (tx.get('comment') or tx.get('description') or '').lower()
-
-        if 'дом' in acc_name or 'дом' in comment:
-            raw_amt = float(tx.get('amount') or tx.get('sum') or 0) / 100.0
-            tx_type = str(tx.get('type') or '')
-
-            is_zhandos = any(k in comment for k in ('жандос', 'жан', 'zhandos'))
-            is_ruslan = any(k in comment for k in ('руслан', 'русик', 'ruslan'))
-
-            if tx_type == '1' or 'кассе' in comment or 'халык' in comment or 'деньги дома' in acc_name:
-                alloc_amt = min(raw_amt, rem_to_allocate)
-                if is_zhandos and zhandos_bal == 0:
-                    zhandos_bal = alloc_amt
-                    rem_to_allocate -= alloc_amt
-                elif is_ruslan and ruslan_bal == 0:
-                    ruslan_bal = alloc_amt
-                    rem_to_allocate -= alloc_amt
-
-    unassigned_money_home = max(0.0, round(money_home_total - zhandos_bal - ruslan_bal, 2))
-    wolt_net_balance = round(wolt_gross_balance * 0.70, 2)
-
-    accounts_list = [
-        {
-            'key': 'cash',
-            'name': 'Касса',
-            'subtitle': 'Оставил в кассе на закупы',
-            'balance': round(cash_balance, 2),
-            'icon': 'cash',
-            'color': 'green'
-        },
-        {
-            'key': 'kaspi',
-            'name': 'Kaspi Pay',
-            'subtitle': 'Каспий (Основной + Кафе)',
-            'balance': round(kaspi_balance, 2),
-            'icon': 'kaspi',
-            'color': 'red'
-        },
-        {
-            'key': 'halyk',
-            'name': 'Halyk Bank',
-            'subtitle': 'Халык Банк',
-            'balance': round(halyk_balance, 2),
-            'icon': 'halyk',
-            'color': 'teal'
-        }
+    money_errors = [
+        status.get('money_error')
+        for status in dataset['source_status']
+        if status.get('money_error')
     ]
-
-    if zhandos_bal > 0:
-        accounts_list.append({
-            'key': 'money_home_zhandos',
-            'name': 'Деньги дом (Жандос)',
-            'subtitle': 'Жандос',
-            'balance': round(zhandos_bal, 2),
-            'icon': 'bank',
-            'color': 'blue'
-        })
-
-    if ruslan_bal > 0:
-        accounts_list.append({
-            'key': 'money_home_ruslan',
-            'name': 'Деньги дом (Руслан)',
-            'subtitle': 'Руслан',
-            'balance': round(ruslan_bal, 2),
-            'icon': 'bank',
-            'color': 'blue'
-        })
-
-    if unassigned_money_home > 10.0 or (zhandos_bal == 0 and ruslan_bal == 0):
-        accounts_list.append({
-            'key': 'money_home_general',
-            'name': 'Деньги дом (Без имени)',
-            'subtitle': 'Не указан получатель',
-            'balance': round(unassigned_money_home if (zhandos_bal > 0 or ruslan_bal > 0) else money_home_total, 2),
-            'icon': 'bank',
-            'color': 'amber'
-        })
-
-    accounts_list.append({
-        'key': 'wolt',
-        'name': 'Wolt',
-        'subtitle': 'За вычетом 30% комиссии',
-        'balance': round(wolt_net_balance, 2),
-        'gross_balance': round(wolt_gross_balance, 2),
-        'icon': 'wolt',
-        'color': 'blue'
-    })
-
-    total_sum = round(sum(acc['balance'] for acc in accounts_list), 2)
-
-    today_str = datetime.now(KZ_TZ).strftime("%Y-%m-%d")
-    db.save_account_balance_snapshot(telegram_user_id, today_str, 'total', total_sum, 'Общий баланс')
-    for acc in accounts_list:
-        db.save_account_balance_snapshot(telegram_user_id, today_str, acc['key'], acc['balance'], acc['name'])
-
+    summary = build_summary(
+        dataset['accounts'],
+        dataset['money_transactions'],
+        money_error='; '.join(money_errors) if money_errors else None,
+    )
+    warnings = []
+    money_account = next(item for item in summary['accounts'] if item['key'] == 'money_home')
+    owners = money_account.get('owners', {})
+    if not owners.get('available'):
+        warnings.append('Общий баланс получен, но разбивка «Денег дома» по владельцам недоступна.')
+    elif owners.get('unnamed_transactions') or owners.get('ambiguous_transactions'):
+        warnings.append(
+            'В операциях «Денег дома» найдены комментарии без однозначного имени. '
+            'Такие суммы показаны как нераспределённые.'
+        )
     return jsonify({
         'success': True,
-        'total_sum': total_sum,
-        'accounts': accounts_list,
-        'updated_at': datetime.now(KZ_TZ).strftime("%d.%m.%Y %H:%M")
+        **summary,
+        'source_status': dataset['source_status'],
+        'warnings': warnings,
+        'updated_at': kz_now.strftime('%d.%m.%Y %H:%M'),
     })
 
 
 @app.route('/api/accounts/history', methods=['GET'])
 def api_accounts_history():
-    """Get 15-day real balance trend history directly from Poster API transactions"""
+    """Get 15 verified completed days, with a daily cutoff at 02:00 Almaty."""
     if session.get('role') != 'owner':
         return jsonify({'error': 'Forbidden'}), 403
 
     account_key = request.args.get('account_key', 'total')
+    from account_analytics import VALID_ACCOUNT_KEYS, history_stats
+    if account_key not in VALID_ACCOUNT_KEYS:
+        return jsonify({'success': False, 'error': 'Неизвестный счет'}), 400
+
     db = get_database()
     telegram_user_id = g.user_id
+    refresh = _refresh_capital_history_for_user(telegram_user_id, db=db)
+    history_items = db.get_capital_balance_history(telegram_user_id, account_key, days=15)
 
-    from datetime import datetime, timedelta
-    kz_now = datetime.now(KZ_TZ)
-    date_to = kz_now.strftime("%Y-%m-%d")
-    date_from = (kz_now - timedelta(days=16)).strftime("%Y-%m-%d")
-    dates_15 = [(kz_now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(14, -1, -1)]
+    for item in history_items:
+        item['formatted_date'] = datetime.strptime(item['date'], '%Y-%m-%d').strftime('%d.%m')
 
-    accounts = db.get_accounts(telegram_user_id)
-
-    async def fetch_poster_history_data():
-        from poster_client import PosterClient
-        all_raw_accounts = []
-        all_transactions = []
-
-        for acc in accounts:
-            token = acc.get('poster_token')
-            user_id_str = acc.get('poster_user_id')
-            base_url = acc.get('poster_base_url')
-            if not token:
-                continue
-
-            client = PosterClient(poster_token=token, poster_user_id=user_id_str, poster_base_url=base_url)
-            try:
-                fin_accs = await client.get_accounts()
-                for fa in fin_accs:
-                    raw_bal = float(fa.get('balance') or fa.get('amount') or 0)
-                    all_raw_accounts.append({
-                        'id': str(fa.get('account_id') or fa.get('id')),
-                        'name': (fa.get('name') or fa.get('account_name') or '').strip(),
-                        'balance': raw_bal / 100.0,
-                    })
-
-                txs = await client.get_transactions(date_from=date_from, date_to=date_to)
-                all_transactions.extend(txs)
-            except Exception as e:
-                logger.error(f"Error fetching Poster history data: {e}")
-            finally:
-                await client.close()
-
-        return all_raw_accounts, all_transactions
-
-    try:
-        raw_accounts, raw_txs = run_async(fetch_poster_history_data())
-    except Exception as e:
-        logger.error(f"Failed to fetch Poster history: {e}")
-        raw_accounts, raw_txs = [], []
-
-    EXCLUDED_KEYWORDS = ('денежный ящик', 'инкассация', 'форте банк', 'прибыль', 'на налоги')
-
-    # Get current live balance for requested account_key
-    wolt_gross = sum(a['balance'] for a in raw_accounts if 'wolt' in a['name'].lower() or 'вольт' in a['name'].lower())
-    kaspi_live = sum(a['balance'] for a in raw_accounts if ('kaspi' in a['name'].lower() or 'каспий' in a['name'].lower()) and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
-    halyk_live = sum(a['balance'] for a in raw_accounts if ('halyk' in a['name'].lower() or 'халык' in a['name'].lower()) and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
-    cash_live = sum(a['balance'] for a in raw_accounts if ('касс' in a['name'].lower() or 'оставил' in a['name'].lower()) and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
-    money_home_live = sum(a['balance'] for a in raw_accounts if 'дом' in a['name'].lower() and not any(k in a['name'].lower() for k in EXCLUDED_KEYWORDS))
-    wolt_net_live = round(wolt_gross * 0.70, 2)
-    total_live = round(cash_live + kaspi_live + halyk_live + money_home_live + wolt_net_live, 2)
-
-    current_balance = total_live
-    if account_key == 'wolt':
-        current_balance = wolt_net_live
-    elif account_key == 'kaspi':
-        current_balance = kaspi_live
-    elif account_key == 'halyk':
-        current_balance = halyk_live
-    elif account_key == 'cash':
-        current_balance = cash_live
-    elif 'money_home' in account_key:
-        current_balance = money_home_live
-
-    # Aggregate daily transaction deltas from Poster API transactions
-    daily_deltas = {d: 0.0 for d in dates_15}
-
-    for tx in raw_txs:
-        tx_date = str(tx.get('date') or tx.get('created_at') or '')[:10]
-        if tx_date not in daily_deltas:
-            continue
-
-        raw_amt = float(tx.get('amount') or tx.get('sum') or 0) / 100.0
-        acc_name = (tx.get('account_name') or tx.get('name') or '').lower()
-        comment = (tx.get('comment') or tx.get('description') or '').lower()
-
-        if any(k in acc_name for k in EXCLUDED_KEYWORDS):
-            continue
-
-        tx_type = str(tx.get('type') or '')
-        net_tx = raw_amt if tx_type == '1' else (-raw_amt if tx_type == '2' else 0.0)
-
-        if account_key == 'total':
-            if 'wolt' in acc_name or 'вольт' in acc_name:
-                net_tx = net_tx * 0.70
-            daily_deltas[tx_date] += net_tx
-        elif account_key == 'wolt' and ('wolt' in acc_name or 'вольт' in acc_name):
-            daily_deltas[tx_date] += net_tx * 0.70
-        elif account_key == 'kaspi' and ('kaspi' in acc_name or 'каспий' in acc_name):
-            daily_deltas[tx_date] += net_tx
-        elif account_key == 'halyk' and ('halyk' in acc_name or 'халык' in acc_name):
-            daily_deltas[tx_date] += net_tx
-        elif account_key == 'cash' and ('касс' in acc_name or 'оставил' in acc_name):
-            daily_deltas[tx_date] += net_tx
-        elif 'money_home' in account_key and ('дом' in acc_name or 'дом' in comment):
-            daily_deltas[tx_date] += net_tx
-
-    # Reconstruct exact daily end-of-day balances walking backward from today
-    running_bal = current_balance
-    history_reversed = []
-
-    for d_str in reversed(dates_15):
-        delta_day = daily_deltas.get(d_str, 0.0)
-        history_reversed.append({
-            'date': d_str,
-            'formatted_date': datetime.strptime(d_str, "%Y-%m-%d").strftime("%d.%m"),
-            'balance': round(running_bal, 2),
-            'net_change': round(delta_day, 2)
-        })
-        running_bal -= delta_day
-
-    history_items = list(reversed(history_reversed))
-
-    for h in history_items:
-        db.save_account_balance_snapshot(telegram_user_id, h['date'], account_key, h['balance'], account_key, h['net_change'])
+    if not history_items:
+        return jsonify({
+            'success': False,
+            'error': 'Нет полной истории по обоим заведениям',
+            'source_status': refresh.get('source_status', []),
+        }), 503
 
     return jsonify({
         'success': True,
         'account_key': account_key,
-        'history': history_items
+        'history': history_items,
+        'stats': history_stats(history_items),
+        'completed_through': history_items[-1]['date'],
+        'stale': not refresh.get('success', False),
+        'warning': refresh.get('error'),
+        'source_status': refresh.get('source_status', []),
     })
+
+
+def _latest_capital_snapshot_payload(db, telegram_user_id):
+    """Build a safe last-complete fallback without using partial live values."""
+    from account_analytics import ACCOUNT_DEFINITIONS
+
+    rows = db.get_latest_capital_snapshot_set(telegram_user_id)
+    if not rows:
+        return None
+    by_key = {row['account_key']: row for row in rows}
+    total_row = by_key.get('total')
+    if not total_row:
+        return None
+    accounts = []
+    for key, definition in ACCOUNT_DEFINITIONS.items():
+        row = by_key.get(key)
+        if not row:
+            continue
+        accounts.append({
+            'key': key,
+            **definition,
+            'balance': row['balance'],
+            'components': [],
+            'historical': True,
+        })
+    return {
+        'date': total_row['date'],
+        'cutoff_at': total_row['cutoff_at'],
+        'total_sum': total_row['balance'],
+        'accounts': accounts,
+    }
+
+
+def _refresh_capital_history_for_user(telegram_user_id, db=None, now=None):
+    """Backfill missing verified snapshots; never overwrite completed history."""
+    from account_analytics import (
+        ACCOUNT_DEFINITIONS,
+        build_completed_history,
+        completed_dates,
+        fetch_capital_data,
+    )
+
+    db = db or get_database()
+    poster_accounts = db.get_accounts(telegram_user_id)
+    if not poster_accounts:
+        return {'success': False, 'error': 'Нет подключенных аккаунтов Poster', 'source_status': []}
+
+    kz_now = now or datetime.now(KZ_TZ)
+    anchor_and_days = completed_dates(kz_now, days=15, include_anchor=True)
+    dataset = run_async(fetch_capital_data(
+        poster_accounts,
+        date_from=anchor_and_days[0].strftime('%Y%m%d'),
+        date_to=kz_now.strftime('%Y%m%d'),
+    ))
+    if not dataset['complete']:
+        return {
+            'success': False,
+            'error': 'Не удалось получить полные данные двух заведений',
+            'source_status': dataset['source_status'],
+        }
+
+    history_by_key = build_completed_history(
+        dataset['accounts'],
+        dataset['transactions'],
+        now=kz_now,
+        days=15,
+    )
+    rows = []
+    for key, history in history_by_key.items():
+        account_name = 'Общий баланс' if key == 'total' else ACCOUNT_DEFINITIONS[key]['name']
+        for item in history:
+            rows.append({
+                **item,
+                'account_key': key,
+                'account_name': account_name,
+            })
+    if not db.save_capital_balance_snapshots(telegram_user_id, rows):
+        return {
+            'success': False,
+            'error': 'Не удалось сохранить контрольные снимки',
+            'source_status': dataset['source_status'],
+        }
+    return {'success': True, 'source_status': dataset['source_status']}
 
 
 # ========================================
@@ -9354,6 +9198,23 @@ def _sync_expenses_for_user(db, sync_user_id):
         logger.error(f"[BG SYNC] Expense sync error for user {sync_user_id}: {e}")
 
 
+def _background_capital_snapshot_sync():
+    """Capture the previous completed day for every configured owner."""
+    try:
+        db = get_database()
+        for telegram_user_id in db.get_all_user_ids_with_accounts():
+            result = _refresh_capital_history_for_user(telegram_user_id, db=db)
+            if result.get('success'):
+                logger.info(f"[CAPITAL] Verified snapshots refreshed for user {telegram_user_id}")
+            else:
+                logger.warning(
+                    f"[CAPITAL] Snapshot refresh postponed for user {telegram_user_id}: "
+                    f"{result.get('error')}"
+                )
+    except Exception as e:
+        logger.error(f"[CAPITAL] Background snapshot error: {e}")
+
+
 def start_background_sync():
     """Start background expense sync scheduler"""
     try:
@@ -9367,8 +9228,21 @@ def start_background_sync():
             name='Background expense sync from Poster',
             replace_existing=True
         )
+        # The 02:05 run captures the previous calendar day after reconciliation.
+        # Additional attempts never overwrite an existing snapshot and cover a
+        # temporary Poster outage around the cutoff.
+        bg_scheduler.add_job(
+            _background_capital_snapshot_sync,
+            'cron',
+            hour=2,
+            minute='5,20,35,50',
+            timezone='Asia/Almaty',
+            id='capital_balance_snapshots',
+            name='Verified capital snapshots at 02:00 Almaty',
+            replace_existing=True,
+        )
         bg_scheduler.start()
-        logger.info("✅ Background expense sync started (every 15 min)")
+        logger.info("✅ Background sync started (expenses + 02:00 capital snapshots)")
     except Exception as e:
         logger.error(f"Failed to start background sync: {e}")
 

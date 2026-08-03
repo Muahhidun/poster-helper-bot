@@ -82,8 +82,7 @@ def test_api_accounts_summary_aggregation(client, monkeypatch):
         {'account_id': 1, 'name': 'Оставил в кассе на закупы', 'balance': 1000000},    # 10,000 Tenge
         {'account_id': 2, 'name': 'Kaspi Pay', 'balance': 10000000},                   # 100,000 Tenge
         {'account_id': 3, 'name': 'Halyk Bank', 'balance': 5000000},                   # 50,000 Tenge
-        {'account_id': 4, 'name': 'Деньги дом (Жандос)', 'balance': 4000000},          # 40,000 Tenge
-        {'account_id': 5, 'name': 'Деньги дом (Руслан)', 'balance': 3000000},          # 30,000 Tenge
+        {'account_id': 4, 'name': 'Деньги дома (отложенные)', 'balance': 7000000},     # 70,000 Tenge pooled
         {'account_id': 6, 'name': 'Wolt', 'balance': 10000000},                        # Gross 100,000 Tenge -> Net 70,000 (-30%)
         {'account_id': 7, 'name': 'Денежный ящик (Кассира)', 'balance': 99999900},     # EXCLUDED
         {'account_id': 8, 'name': 'Инкассация (вечером)', 'balance': 88888800},         # EXCLUDED
@@ -94,7 +93,11 @@ def test_api_accounts_summary_aggregation(client, monkeypatch):
     async def mock_get_accounts(self):
         return mock_fin_accs
 
+    async def mock_get_transactions(self, date_from, date_to, account_id=None):
+        return []
+
     monkeypatch.setattr("poster_client.PosterClient.get_accounts", mock_get_accounts)
+    monkeypatch.setattr("poster_client.PosterClient.get_transactions", mock_get_transactions)
 
     res = client.get('/api/accounts/summary')
     assert res.status_code == 200
