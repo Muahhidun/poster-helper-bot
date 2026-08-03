@@ -851,6 +851,9 @@ class UserDatabase:
         # Run migration for web_users (auth system)
         self._migrate_web_users()
 
+        # Run migration for account balance snapshots (15 days history)
+        self._migrate_account_snapshots()
+
         # Run migration to fix shift_closings UNIQUE constraint (cafe + main same date)
         self._migrate_shift_closings_fix_unique()
 
@@ -1269,6 +1272,58 @@ class UserDatabase:
 
         except Exception as e:
             logger.error(f"Web users migration error: {e}")
+
+    def _migrate_account_snapshots(self):
+        """Create account_balance_snapshots table for 15-day account history and analytics"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS account_balance_snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        account_key TEXT NOT NULL,
+                        account_name TEXT,
+                        balance REAL NOT NULL DEFAULT 0,
+                        net_change REAL DEFAULT 0,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date, account_key),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_acc_snapshots_user_date
+                    ON account_balance_snapshots(telegram_user_id, date)
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS account_balance_snapshots (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        date DATE NOT NULL,
+                        account_key TEXT NOT NULL,
+                        account_name TEXT,
+                        balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+                        net_change DECIMAL(12,2) DEFAULT 0,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, date, account_key),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_acc_snapshots_user_date
+                    ON account_balance_snapshots(telegram_user_id, date)
+                """)
+
+            conn.commit()
+            conn.close()
+            logger.info("✅ Account balance snapshots migration: completed")
+
+        except Exception as e:
+            logger.error(f"Account balance snapshots migration error: {e}")
 
     def _migrate_to_multi_account(self):
         """
@@ -5224,6 +5279,71 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to reset web user password: {e}")
             return False
+
+    # ==================== Account Balance Snapshots (Analytics) ====================
+
+    def save_account_balance_snapshot(self, telegram_user_id: int, date_str: str, account_key: str,
+                                       balance: float, account_name: str = None, net_change: float = 0) -> bool:
+        """Upsert a daily balance snapshot for an account key."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            if DB_TYPE == "sqlite":
+                sql = """
+                    INSERT INTO account_balance_snapshots (telegram_user_id, date, account_key, account_name, balance, net_change, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date, account_key) DO UPDATE SET
+                        account_name = excluded.account_name,
+                        balance = excluded.balance,
+                        net_change = excluded.net_change,
+                        updated_at = CURRENT_TIMESTAMP
+                """
+                cursor.execute(sql, (telegram_user_id, date_str, account_key, account_name, balance, net_change))
+            else:
+                sql = """
+                    INSERT INTO account_balance_snapshots (telegram_user_id, date, account_key, account_name, balance, net_change, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, date, account_key) DO UPDATE SET
+                        account_name = EXCLUDED.account_name,
+                        balance = EXCLUDED.balance,
+                        net_change = EXCLUDED.net_change,
+                        updated_at = CURRENT_TIMESTAMP
+                """
+                cursor.execute(sql, (telegram_user_id, date_str, account_key, account_name, balance, net_change))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save account balance snapshot: {e}")
+            return False
+
+    def get_account_balance_history(self, telegram_user_id: int, account_key: str = 'total', days: int = 15) -> list:
+        """Get history of account balances and net changes for analytics."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT date, account_key, account_name, balance, net_change
+                FROM account_balance_snapshots
+                WHERE telegram_user_id = {placeholder} AND account_key = {placeholder}
+                ORDER BY date DESC
+                LIMIT {days}
+            """, (telegram_user_id, account_key))
+
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            result = [dict(zip(columns, row)) for row in rows]
+            result.reverse()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get account balance history: {e}")
+            return []
 
     def update_web_user(self, user_id: int, telegram_user_id: int, username: str = None,
                         role: str = None, label: str = None, is_active: int = None,

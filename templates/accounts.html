@@ -1,0 +1,571 @@
+{% extends "base.html" %}
+
+{% block title %}Счета — Poster Helper{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+    .accounts-page {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px 16px 60px;
+    }
+
+    .accounts-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 24px;
+    }
+
+    .accounts-title {
+        font-size: 28px;
+        font-weight: 800;
+        color: #111827;
+        margin: 0;
+    }
+
+    .status-badge-online {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #F3F4F6;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #374151;
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #10B981;
+        box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+    }
+
+    .top-actions-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 24px;
+    }
+
+    .total-sum-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: #F3F4F6;
+        border: 1px solid #E5E7EB;
+        border-radius: 12px;
+        padding: 10px 20px;
+        font-size: 20px;
+        font-weight: 800;
+        color: #111827;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .total-sum-btn:hover {
+        background: #E5E7EB;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+
+    .total-sum-btn svg {
+        color: #4F46E5;
+    }
+
+    .settings-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #F3F4F6;
+        border: 1px solid #E5E7EB;
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #374151;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .settings-btn:hover {
+        background: #E5E7EB;
+    }
+
+    /* Accounts Cards Grid */
+    .accounts-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 20px;
+    }
+
+    @media (max-width: 768px) {
+        .accounts-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .account-card {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 20px;
+        padding: 24px;
+        cursor: pointer;
+        transition: all 0.25s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .account-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 20px -4px rgba(0, 0, 0, 0.08);
+        border-color: #D1D5DB;
+    }
+
+    .account-card-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 16px;
+    }
+
+    .account-icon-wrapper {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        font-weight: 700;
+        flex-shrink: 0;
+    }
+
+    .account-icon-cash {
+        background-color: #D1FAE5;
+        color: #059669;
+    }
+
+    .account-icon-kaspi {
+        background-color: #E50019;
+        color: #FFFFFF;
+        font-size: 16px;
+        letter-spacing: -0.5px;
+    }
+
+    .account-icon-halyk {
+        background-color: #007A5A;
+        color: #FFFFFF;
+    }
+
+    .account-icon-bank {
+        background-color: #E0F2FE;
+        color: #0284C7;
+    }
+
+    .account-icon-wolt {
+        background-color: #00C2E8;
+        color: #FFFFFF;
+    }
+
+    .account-info {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .account-subtitle {
+        font-size: 13px;
+        font-weight: 500;
+        color: #6B7280;
+    }
+
+    .account-name {
+        font-size: 16px;
+        font-weight: 700;
+        color: #111827;
+        line-height: 1.3;
+    }
+
+    .account-balance {
+        font-size: 26px;
+        font-weight: 800;
+        color: #111827;
+        letter-spacing: -0.5px;
+    }
+
+    .account-balance.negative {
+        color: #DC2626;
+    }
+
+    .wolt-badge {
+        display: inline-block;
+        margin-top: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #0284C7;
+        background: #F0F9FF;
+        padding: 3px 8px;
+        border-radius: 6px;
+        border: 1px solid #BAE6FD;
+    }
+
+    /* Modal Custom Styling */
+    .modal-content-custom {
+        border-radius: 24px;
+        border: none;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    }
+
+    .modal-header-custom {
+        padding: 24px 28px 12px;
+        border-bottom: none;
+    }
+
+    .modal-title-custom {
+        font-size: 20px;
+        font-weight: 800;
+        color: #111827;
+    }
+
+    .modal-body-custom {
+        padding: 12px 28px 28px;
+    }
+
+    .chart-container {
+        position: relative;
+        height: 240px;
+        margin-bottom: 24px;
+    }
+
+    .history-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .history-table th {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: #9CA3AF;
+        padding: 10px 12px;
+        text-align: left;
+        border-bottom: 1px solid #E5E7EB;
+    }
+
+    .history-table td {
+        padding: 12px;
+        font-size: 14px;
+        border-bottom: 1px solid #F3F4F6;
+        color: #111827;
+    }
+
+    .history-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .delta-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 13px;
+    }
+
+    .delta-positive {
+        color: #059669;
+        background-color: #ECFDF5;
+    }
+
+    .delta-negative {
+        color: #DC2626;
+        background-color: #FEF2F2;
+    }
+
+    .delta-neutral {
+        color: #6B7280;
+        background-color: #F3F4F6;
+    }
+
+    .skeleton-loader {
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: loading 1.5s infinite;
+        border-radius: 8px;
+        height: 24px;
+    }
+
+    @keyframes loading {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="accounts-page">
+    <!-- Header -->
+    <div class="accounts-header">
+        <h1 class="accounts-title">Счета</h1>
+        <div class="status-badge-online">
+            <span class="status-dot"></span>
+            Касса онлайн
+        </div>
+    </div>
+
+    <!-- Top Action Bar -->
+    <div class="top-actions-bar">
+        <button id="totalSumBtn" class="total-sum-btn" onclick="openHistoryModal('total', 'Общий баланс')">
+            <span id="totalSumText"><div class="skeleton-loader" style="width: 140px;"></div></span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </button>
+        <button class="settings-btn" onclick="location.href='/settings/access'">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+            Настройки
+        </button>
+    </div>
+
+    <!-- Accounts Cards Grid -->
+    <div id="accountsGrid" class="accounts-grid">
+        <!-- Loaded dynamically via JS -->
+        <div class="account-card"><div class="skeleton-loader" style="width: 100%; height: 80px;"></div></div>
+        <div class="account-card"><div class="skeleton-loader" style="width: 100%; height: 80px;"></div></div>
+        <div class="account-card"><div class="skeleton-loader" style="width: 100%; height: 80px;"></div></div>
+        <div class="account-card"><div class="skeleton-loader" style="width: 100%; height: 80px;"></div></div>
+    </div>
+</div>
+
+<!-- History Modal -->
+<div class="modal fade" id="historyModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content modal-content-custom">
+            <div class="modal-header modal-header-custom d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="text-muted text-uppercase" style="font-size: 11px; font-weight: 700; letter-spacing: 0.5px;">Аналитика за 15 дней</span>
+                    <h5 class="modal-title modal-title-custom" id="modalAccountTitle">Общий баланс</h5>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body modal-body-custom">
+                <!-- Chart -->
+                <div class="chart-container">
+                    <canvas id="balanceChart"></canvas>
+                </div>
+
+                <!-- Daily History Table -->
+                <div class="table-responsive" style="max-height: 280px; overflow-y: auto;">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>Баланс на конец дня</th>
+                                <th class="text-end">Изменение</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <tr><td colspan="3" class="text-center text-muted py-3">Загрузка истории...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let accountsData = [];
+let balanceChartInstance = null;
+
+function formatTenge(amount) {
+    const formatted = Math.abs(amount).toLocaleString('ru-RU');
+    return (amount < 0 ? '-' : '') + formatted + ' ₸';
+}
+
+async function loadAccountsSummary() {
+    try {
+        const response = await fetch('/api/accounts/summary');
+        const data = await response.json();
+
+        if (!data.success) {
+            alert('Ошибка загрузки счетов: ' + (data.error || 'Неизвестная ошибка'));
+            return;
+        }
+
+        accountsData = data.accounts;
+
+        // Render total sum
+        document.getElementById('totalSumText').innerText = formatTenge(data.total_sum);
+
+        // Render Grid
+        const grid = document.getElementById('accountsGrid');
+        grid.innerHTML = '';
+
+        data.accounts.forEach(acc => {
+            const card = document.createElement('div');
+            card.className = 'account-card';
+            card.onclick = () => openHistoryModal(acc.key, acc.name);
+
+            let iconHtml = '';
+            if (acc.icon === 'cash') {
+                iconHtml = `<div class="account-icon-wrapper account-icon-cash">💵</div>`;
+            } else if (acc.icon === 'kaspi') {
+                iconHtml = `<div class="account-icon-wrapper account-icon-kaspi">K<br><span style="font-size:9px;">PAY</span></div>`;
+            } else if (acc.icon === 'halyk') {
+                iconHtml = `<div class="account-icon-wrapper account-icon-halyk">🏛️</div>`;
+            } else if (acc.icon === 'wolt') {
+                iconHtml = `<div class="account-icon-wrapper account-icon-wolt">🏛️</div>`;
+            } else {
+                iconHtml = `<div class="account-icon-wrapper account-icon-bank">🏛️</div>`;
+            }
+
+            const isNegative = acc.balance < 0;
+            const balanceClass = isNegative ? 'account-balance negative' : 'account-balance';
+
+            let woltBadgeHtml = '';
+            if (acc.key === 'wolt') {
+                woltBadgeHtml = `<div class="wolt-badge">За вычетом 30% комиссии</div>`;
+            }
+
+            card.innerHTML = `
+                <div class="account-card-header">
+                    ${iconHtml}
+                    <div class="account-info">
+                        <span class="account-subtitle">${acc.subtitle || acc.name}</span>
+                        <span class="account-name">${acc.name}</span>
+                    </div>
+                </div>
+                <div class="${balanceClass}">${formatTenge(acc.balance)}</div>
+                ${woltBadgeHtml}
+            `;
+
+            grid.appendChild(card);
+        });
+
+    } catch (e) {
+        console.error('Failed to load accounts summary:', e);
+    }
+}
+
+async function openHistoryModal(accountKey, accountName) {
+    document.getElementById('modalAccountTitle').innerText = accountName;
+
+    const modalEl = document.getElementById('historyModal');
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+
+    try {
+        const response = await fetch(`/api/accounts/history?account_key=${encodeURIComponent(accountKey)}`);
+        const data = await response.json();
+
+        if (!data.success) return;
+
+        renderChart(data.history);
+        renderHistoryTable(data.history);
+    } catch (e) {
+        console.error('Failed to load accounts history:', e);
+    }
+}
+
+function renderChart(history) {
+    const ctx = document.getElementById('balanceChart').getContext('2d');
+    
+    if (balanceChartInstance) {
+        balanceChartInstance.destroy();
+    }
+
+    const labels = history.map(h => h.formatted_date);
+    const dataPoints = history.map(h => h.balance);
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, 220);
+    gradient.addColorStop(0, 'rgba(79, 70, 229, 0.25)');
+    gradient.addColorStop(1, 'rgba(79, 70, 229, 0.0)');
+
+    balanceChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Баланс (₸)',
+                data: dataPoints,
+                borderColor: '#4F46E5',
+                borderWidth: 3,
+                fill: true,
+                backgroundColor: gradient,
+                tension: 0.35,
+                pointRadius: 4,
+                pointBackgroundColor: '#4F46E5',
+                pointHoverRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return 'Баланс: ' + formatTenge(context.raw);
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { font: { size: 12, weight: '600' }, color: '#6B7280' }
+                },
+                y: {
+                    grid: { color: '#F3F4F6' },
+                    ticks: {
+                        callback: function(val) {
+                            return (val / 1000).toFixed(0) + 'k ₸';
+                        },
+                        font: { size: 11 },
+                        color: '#9CA3AF'
+                    }
+                }
+            }
+        }
+    });
+}
+
+function renderHistoryTable(history) {
+    const tbody = document.getElementById('historyTableBody');
+    tbody.innerHTML = '';
+
+    // Show reverse order (newest date first)
+    const reversed = [...history].reverse();
+
+    reversed.forEach(item => {
+        const tr = document.createElement('tr');
+
+        let deltaHtml = '';
+        if (item.net_change > 0) {
+            deltaHtml = `<span class="delta-badge delta-positive">+${formatTenge(item.net_change)}</span>`;
+        } else if (item.net_change < 0) {
+            deltaHtml = `<span class="delta-badge delta-negative">${formatTenge(item.net_change)}</span>`;
+        } else {
+            deltaHtml = `<span class="delta-badge delta-neutral">0 ₸</span>`;
+        }
+
+        tr.innerHTML = `
+            <td style="font-weight: 600;">${item.formatted_date} (${item.date})</td>
+            <td style="font-weight: 700;">${formatTenge(item.balance)}</td>
+            <td class="text-end">${deltaHtml}</td>
+        `;
+
+        tbody.appendChild(tr);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', loadAccountsSummary);
+</script>
+{% endblock %}
