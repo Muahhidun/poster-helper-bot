@@ -166,9 +166,11 @@ class PosterClient:
         Returns:
             List of transactions with details (category, account, amount, date, comment)
         """
+        df = str(date_from).replace('-', '')
+        dt = str(date_to).replace('-', '')
         result = await self._request('GET', 'finance.getTransactions', params={
-            'dateFrom': date_from,
-            'dateTo': date_to
+            'dateFrom': df,
+            'dateTo': dt
         })
         return result.get('response', [])
 

@@ -2961,9 +2961,15 @@ def api_accounts_summary():
     if not accounts:
         return jsonify({'error': 'No Poster accounts connected'}), 400
 
+    from datetime import datetime, timedelta
+    kz_now = datetime.now(KZ_TZ)
+    date_to = kz_now.strftime("%Y-%m-%d")
+    date_from = (kz_now - timedelta(days=30)).strftime("%Y-%m-%d")
+
     async def fetch_poster_accounts_data():
         from poster_client import PosterClient
         raw_fin_accounts = []
+        raw_transactions = []
         for acc in accounts:
             token = acc.get('poster_token')
             user_id_str = acc.get('poster_user_id')
@@ -2977,37 +2983,33 @@ def api_accounts_summary():
                 for fa in fin_accs:
                     raw_bal = float(fa.get('balance') or fa.get('amount') or 0)
                     raw_fin_accounts.append({
-                        'id': fa.get('account_id') or fa.get('id'),
+                        'id': str(fa.get('account_id') or fa.get('id')),
                         'name': (fa.get('name') or fa.get('account_name') or '').strip(),
                         'balance': raw_bal / 100.0,
                         'store_name': acc.get('account_name', '')
                     })
+                txs = await client.get_transactions(date_from=date_from, date_to=date_to)
+                raw_transactions.extend(txs)
             except Exception as e:
                 logger.error(f"Error fetching Poster fin accounts for {acc.get('account_name')}: {e}")
             finally:
                 await client.close()
 
-        return raw_fin_accounts
+        return raw_fin_accounts, raw_transactions
 
     try:
-        raw_accounts = run_async(fetch_poster_accounts_data())
+        raw_accounts, raw_txs = run_async(fetch_poster_accounts_data())
     except Exception as e:
         logger.error(f"Failed to fetch Poster financial accounts: {e}")
-        raw_accounts = []
+        raw_accounts, raw_txs = [], []
 
-    # Exclude unwanted accounts:
-    # 'Денежный ящик', 'Инкассация', 'Форте банк', 'Прибыль', 'На налоги'
     EXCLUDED_KEYWORDS = ('денежный ящик', 'инкассация', 'форте банк', 'прибыль', 'на налоги')
 
     cash_balance = 0.0
     kaspi_balance = 0.0
     halyk_balance = 0.0
-    money_home_zhandos = 0.0
-    money_home_ruslan = 0.0
-    money_home_general = 0.0
+    money_home_total = 0.0
     wolt_gross_balance = 0.0
-
-    has_specific_money_home = False
 
     for item in raw_accounts:
         name_lower = item['name'].lower()
@@ -3025,41 +3027,44 @@ def api_accounts_summary():
         elif 'касс' in name_lower or 'оставил' in name_lower:
             cash_balance += balance
         elif 'дом' in name_lower:
-            if any(k in name_lower for k in ('жандос', 'жан', 'zhandos')):
-                money_home_zhandos += balance
-                has_specific_money_home = True
-            elif any(k in name_lower for k in ('руслан', 'русик', 'ruslan')):
-                money_home_ruslan += balance
-                has_specific_money_home = True
-            else:
-                money_home_general += balance
+            money_home_total += balance
         else:
             cash_balance += balance
 
-    # Parse expense drafts / transactions for comments if specific accounts not present
-    if not has_specific_money_home and money_home_general > 0:
-        drafts = db.get_expense_drafts(telegram_user_id, status="all")
-        zhandos_spent = 0.0
-        ruslan_spent = 0.0
-        for d in drafts:
-            desc = (d.get('description') or '').lower()
-            amt = float(d.get('amount') or 0)
-            if 'дом' in desc:
-                if any(k in desc for k in ('жандос', 'жан', 'zhandos')):
-                    zhandos_spent += amt
-                elif any(k in desc for k in ('руслан', 'русик', 'ruslan')):
-                    ruslan_spent += amt
+    # Parse real transactions for "Деньги дома" to attribute exact balances to Zhandos & Ruslan
+    zhandos_bal = 0.0
+    ruslan_bal = 0.0
 
-        if zhandos_spent > 0 or ruslan_spent > 0:
-            money_home_zhandos = zhandos_spent
-            money_home_ruslan = ruslan_spent
-            money_home_general = max(0.0, money_home_general - zhandos_spent - ruslan_spent)
-        else:
-            # Do NOT artificially split balance! Keep exact balance in General/Unassigned
-            money_home_zhandos = 0.0
-            money_home_ruslan = 0.0
+    sorted_txs = sorted(raw_txs, key=lambda t: str(t.get('date') or t.get('created_at') or ''))
 
-    # Wolt Net balance = Gross balance * 0.70 (-30% commission)
+    for tx in sorted_txs:
+        acc_name = (tx.get('account_name') or tx.get('name') or '').lower()
+        comment = (tx.get('comment') or tx.get('description') or '').lower()
+
+        if 'дом' in acc_name or 'дом' in comment:
+            raw_amt = float(tx.get('amount') or tx.get('sum') or 0) / 100.0
+            tx_type = str(tx.get('type') or '')
+
+            is_zhandos = any(k in comment for k in ('жандос', 'жан', 'zhandos'))
+            is_ruslan = any(k in comment for k in ('руслан', 'русик', 'ruslan'))
+
+            if tx_type == '1':
+                if is_zhandos:
+                    zhandos_bal += raw_amt
+                elif is_ruslan:
+                    ruslan_bal += raw_amt
+            elif tx_type == '2':
+                if is_zhandos:
+                    zhandos_bal = max(0.0, zhandos_bal - raw_amt)
+                elif is_ruslan:
+                    ruslan_bal = max(0.0, ruslan_bal - raw_amt)
+                else:
+                    if ruslan_bal >= raw_amt:
+                        ruslan_bal -= raw_amt
+                    elif zhandos_bal >= raw_amt:
+                        zhandos_bal -= raw_amt
+
+    unassigned_money_home = max(0.0, round(money_home_total - zhandos_bal - ruslan_bal, 2))
     wolt_net_balance = round(wolt_gross_balance * 0.70, 2)
 
     accounts_list = [
@@ -3089,32 +3094,32 @@ def api_accounts_summary():
         }
     ]
 
-    if money_home_zhandos > 0:
+    if zhandos_bal > 0:
         accounts_list.append({
             'key': 'money_home_zhandos',
             'name': 'Деньги дом (Жандос)',
             'subtitle': 'Жандос',
-            'balance': round(money_home_zhandos, 2),
+            'balance': round(zhandos_bal, 2),
             'icon': 'bank',
             'color': 'blue'
         })
 
-    if money_home_ruslan > 0:
+    if ruslan_bal > 0:
         accounts_list.append({
             'key': 'money_home_ruslan',
             'name': 'Деньги дом (Руслан)',
             'subtitle': 'Руслан',
-            'balance': round(money_home_ruslan, 2),
+            'balance': round(ruslan_bal, 2),
             'icon': 'bank',
             'color': 'blue'
         })
 
-    if money_home_general > 0 or (money_home_zhandos == 0 and money_home_ruslan == 0):
+    if unassigned_money_home > 0 or (zhandos_bal == 0 and ruslan_bal == 0):
         accounts_list.append({
             'key': 'money_home_general',
             'name': 'Деньги дом (Без имени)',
             'subtitle': 'Не указан получатель',
-            'balance': round(money_home_general, 2),
+            'balance': round(unassigned_money_home if (zhandos_bal > 0 or ruslan_bal > 0) else money_home_total, 2),
             'icon': 'bank',
             'color': 'amber'
         })
