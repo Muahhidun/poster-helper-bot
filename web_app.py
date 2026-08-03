@@ -3036,7 +3036,7 @@ def api_accounts_summary():
         else:
             cash_balance += balance
 
-    # If money_home is a single account, parse expense drafts / transactions for comments
+    # Parse expense drafts / transactions for comments if specific accounts not present
     if not has_specific_money_home and money_home_general > 0:
         drafts = db.get_expense_drafts(telegram_user_id, status="all")
         zhandos_spent = 0.0
@@ -3055,9 +3055,9 @@ def api_accounts_summary():
             money_home_ruslan = ruslan_spent
             money_home_general = max(0.0, money_home_general - zhandos_spent - ruslan_spent)
         else:
-            money_home_zhandos = round(money_home_general * 0.52, 2)
-            money_home_ruslan = round(money_home_general * 0.48, 2)
-            money_home_general = 0.0
+            # Do NOT artificially split balance! Keep exact balance in General/Unassigned
+            money_home_zhandos = 0.0
+            money_home_ruslan = 0.0
 
     # Wolt Net balance = Gross balance * 0.70 (-30% commission)
     wolt_net_balance = round(wolt_gross_balance * 0.70, 2)
@@ -3086,26 +3086,30 @@ def api_accounts_summary():
             'balance': round(halyk_balance, 2),
             'icon': 'halyk',
             'color': 'teal'
-        },
-        {
+        }
+    ]
+
+    if money_home_zhandos > 0:
+        accounts_list.append({
             'key': 'money_home_zhandos',
             'name': 'Деньги дом (Жандос)',
             'subtitle': 'Жандос',
             'balance': round(money_home_zhandos, 2),
             'icon': 'bank',
             'color': 'blue'
-        },
-        {
+        })
+
+    if money_home_ruslan > 0:
+        accounts_list.append({
             'key': 'money_home_ruslan',
             'name': 'Деньги дом (Руслан)',
             'subtitle': 'Руслан',
             'balance': round(money_home_ruslan, 2),
             'icon': 'bank',
             'color': 'blue'
-        }
-    ]
+        })
 
-    if money_home_general > 0:
+    if money_home_general > 0 or (money_home_zhandos == 0 and money_home_ruslan == 0):
         accounts_list.append({
             'key': 'money_home_general',
             'name': 'Деньги дом (Без имени)',
