@@ -3031,13 +3031,18 @@ def api_accounts_summary():
         else:
             cash_balance += balance
 
-    # Parse real transactions for "Деньги дома" to attribute exact balances to Zhandos & Ruslan
+    # Allocate money_home_total (live balance from Poster API, e.g. 100 002 ₸)
+    # We inspect recent transactions working backward from today to find active unspent withdrawals per person
     zhandos_bal = 0.0
     ruslan_bal = 0.0
 
-    sorted_txs = sorted(raw_txs, key=lambda t: str(t.get('date') or t.get('created_at') or ''))
+    desc_txs = sorted(raw_txs, key=lambda t: str(t.get('date') or t.get('created_at') or ''), reverse=True)
+    rem_to_allocate = money_home_total
 
-    for tx in sorted_txs:
+    for tx in desc_txs:
+        if rem_to_allocate <= 0:
+            break
+
         acc_name = (tx.get('account_name') or tx.get('name') or '').lower()
         comment = (tx.get('comment') or tx.get('description') or '').lower()
 
@@ -3048,21 +3053,14 @@ def api_accounts_summary():
             is_zhandos = any(k in comment for k in ('жандос', 'жан', 'zhandos'))
             is_ruslan = any(k in comment for k in ('руслан', 'русик', 'ruslan'))
 
-            if tx_type == '1':
-                if is_zhandos:
-                    zhandos_bal += raw_amt
-                elif is_ruslan:
-                    ruslan_bal += raw_amt
-            elif tx_type == '2':
-                if is_zhandos:
-                    zhandos_bal = max(0.0, zhandos_bal - raw_amt)
-                elif is_ruslan:
-                    ruslan_bal = max(0.0, ruslan_bal - raw_amt)
-                else:
-                    if ruslan_bal >= raw_amt:
-                        ruslan_bal -= raw_amt
-                    elif zhandos_bal >= raw_amt:
-                        zhandos_bal -= raw_amt
+            if tx_type == '1' or 'кассе' in comment or 'халык' in comment or 'деньги дома' in acc_name:
+                alloc_amt = min(raw_amt, rem_to_allocate)
+                if is_zhandos and zhandos_bal == 0:
+                    zhandos_bal = alloc_amt
+                    rem_to_allocate -= alloc_amt
+                elif is_ruslan and ruslan_bal == 0:
+                    ruslan_bal = alloc_amt
+                    rem_to_allocate -= alloc_amt
 
     unassigned_money_home = max(0.0, round(money_home_total - zhandos_bal - ruslan_bal, 2))
     wolt_net_balance = round(wolt_gross_balance * 0.70, 2)
@@ -3114,7 +3112,7 @@ def api_accounts_summary():
             'color': 'blue'
         })
 
-    if unassigned_money_home > 0 or (zhandos_bal == 0 and ruslan_bal == 0):
+    if unassigned_money_home > 10.0 or (zhandos_bal == 0 and ruslan_bal == 0):
         accounts_list.append({
             'key': 'money_home_general',
             'name': 'Деньги дом (Без имени)',
