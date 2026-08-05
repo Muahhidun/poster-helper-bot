@@ -32,6 +32,15 @@ LOGS_DIR.mkdir(exist_ok=True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_IDS = [int(uid.strip()) for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") if uid.strip()]
 ADMIN_USER_IDS = [int(uid.strip()) for uid in os.getenv("ADMIN_USER_IDS", "").split(",") if uid.strip()]
+# The business analyst starts with one personal recipient. It can be expanded
+# later without changing code by setting BUSINESS_ANALYTICS_USER_IDS.
+BUSINESS_ANALYTICS_USER_IDS = [
+    int(uid.strip())
+    for uid in os.getenv("BUSINESS_ANALYTICS_USER_IDS", "").split(",")
+    if uid.strip()
+]
+if not BUSINESS_ANALYTICS_USER_IDS:
+    BUSINESS_ANALYTICS_USER_IDS = (ADMIN_USER_IDS or ALLOWED_USER_IDS)[:1]
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://worker-production-85f0.up.railway.app/mini-app")
 
 # Webhook settings

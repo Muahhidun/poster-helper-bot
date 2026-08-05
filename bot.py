@@ -18,7 +18,8 @@ from telegram.ext import (
 from config import (
     TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, ADMIN_USER_IDS, TIMEZONE,
     DEFAULT_ACCOUNT_FROM_ID, CURRENCY, validate_config, DATA_DIR, WEBAPP_URL,
-    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH, LOG_LEVEL, MIN_MATCH_CONFIDENCE
+    USE_WEBHOOK, WEBHOOK_URL, WEBHOOK_PATH, LOG_LEVEL, MIN_MATCH_CONFIDENCE,
+    BUSINESS_ANALYTICS_USER_IDS,
 )
 from database import get_database
 from poster_client import get_poster_client
@@ -5882,6 +5883,25 @@ async def run_weekly_price_check_for_user(telegram_user_id: int, bot_application
         logger.error(f"❌ Ошибка проверки цен для пользователя {telegram_user_id}: {e}", exc_info=True)
 
 
+async def run_business_analytics_for_user(telegram_user_id: int, bot_application):
+    """Build a complete two-Poster report and deliver it personally at 09:00."""
+    try:
+        from business_analyst_service import generate_business_report_for_user
+        result = await generate_business_report_for_user(
+            telegram_user_id,
+            bot=bot_application.bot,
+            send_telegram=True,
+        )
+        if result.get('skipped'):
+            logger.info("Business report already sent to %s for this day", telegram_user_id)
+        elif result.get('success'):
+            logger.info("✅ Business analytics report sent to %s", telegram_user_id)
+        else:
+            logger.error("Business analytics report failed for %s: %s", telegram_user_id, result.get('error'))
+    except Exception as e:
+        logger.error(f"❌ Ошибка утреннего бизнес-отчёта для {telegram_user_id}: {e}", exc_info=True)
+
+
 async def check_and_notify_missed_transactions(app: Application):
     """
     Проверить, были ли созданы ежедневные транзакции сегодня
@@ -5947,6 +5967,25 @@ def setup_scheduler(app: Application):
 
     # Часовой пояс Астаны
     astana_tz = pytz.timezone('Asia/Almaty')
+
+    # Personal owner report for the previous completed business day.
+    for telegram_user_id in BUSINESS_ANALYTICS_USER_IDS:
+        analytics_trigger = CronTrigger(hour=9, minute=0, timezone=astana_tz)
+        scheduler.add_job(
+            run_business_analytics_for_user,
+            trigger=analytics_trigger,
+            args=[telegram_user_id, app],
+            id=f'business_analytics_{telegram_user_id}',
+            name=f'ИИ-управляющий для пользователя {telegram_user_id}',
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=1800,
+        )
+        logger.info(
+            "✅ Утренний бизнес-отчёт для %s запланирован на 09:00 (Asia/Almaty)",
+            telegram_user_id,
+        )
 
     # Для каждого пользователя с включенными авто-транзакциями
     for telegram_user_id in ALLOWED_USER_IDS:

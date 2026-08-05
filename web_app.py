@@ -2939,6 +2939,52 @@ def api_purchase_link_ingredient():
 # Accounts Dashboard (Счета) Routes
 # ========================================
 
+@app.route('/analytics', methods=['GET'])
+def view_business_analytics():
+    """Owner-only business analytics dashboard."""
+    if session.get('role') != 'owner':
+        flash('Доступ к аналитике разрешен только владельцу', 'error')
+        return redirect('/')
+    return render_template('analytics.html')
+
+
+@app.route('/api/analytics/summary', methods=['GET'])
+def api_business_analytics_summary():
+    """Return the latest complete report; build it on first use."""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    db = get_database()
+    report = db.get_latest_business_analytics_report(g.user_id)
+    refresh = request.args.get('refresh') == '1'
+    if report is None or refresh:
+        from business_analyst_service import generate_business_report_for_user
+        result = run_async(generate_business_report_for_user(g.user_id, force=refresh))
+        if not result.get('success'):
+            fallback = db.get_latest_business_analytics_report(g.user_id)
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Не удалось собрать аналитику'),
+                'source_status': (result.get('report') or {}).get('source_status', []),
+                'last_complete': fallback,
+            }), 503
+        report = db.get_latest_business_analytics_report(g.user_id) or result.get('report')
+
+    return jsonify({'success': True, 'report': report})
+
+
+@app.route('/api/analytics/refresh', methods=['POST'])
+def api_business_analytics_refresh():
+    """Explicitly refresh Poster-derived analytics without sending Telegram."""
+    if session.get('role') != 'owner':
+        return jsonify({'error': 'Forbidden'}), 403
+    from business_analyst_service import generate_business_report_for_user
+    result = run_async(generate_business_report_for_user(g.user_id, force=True))
+    status = 200 if result.get('success') else 503
+    if result.get('success'):
+        result['report'] = get_database().get_latest_business_analytics_report(g.user_id) or result.get('report')
+    return jsonify(result), status
+
 @app.route('/accounts', methods=['GET'])
 def view_accounts():
     """Page for viewing unified account balances across stores (Owner only)"""

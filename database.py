@@ -858,6 +858,9 @@ class UserDatabase:
         # because legacy rows were produced by an incorrect transaction formula.
         self._migrate_capital_balance_snapshots()
 
+        # Verified daily business analytics built directly from both Poster accounts.
+        self._migrate_business_analytics()
+
         # Run migration to fix shift_closings UNIQUE constraint (cafe + main same date)
         self._migrate_shift_closings_fix_unique()
 
@@ -1383,6 +1386,97 @@ class UserDatabase:
             logger.info("✅ Capital balance snapshots migration: completed")
         except Exception as e:
             logger.error(f"Capital balance snapshots migration error: {e}")
+
+    def _migrate_business_analytics(self):
+        """Create reproducible daily metrics and generated analyst reports."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS business_daily_metrics (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        metric_date TEXT NOT NULL,
+                        store_id TEXT NOT NULL,
+                        store_name TEXT NOT NULL,
+                        revenue REAL NOT NULL DEFAULT 0,
+                        checks INTEGER NOT NULL DEFAULT 0,
+                        average_check REAL NOT NULL DEFAULT 0,
+                        expenses REAL NOT NULL DEFAULT 0,
+                        supplies REAL NOT NULL DEFAULT 0,
+                        non_supply_expenses REAL NOT NULL DEFAULT 0,
+                        profit_withdrawals REAL NOT NULL DEFAULT 0,
+                        capital_balance REAL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, metric_date, store_id),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS business_analytics_reports (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        report_date TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        ai_commentary_json TEXT,
+                        source_status_json TEXT,
+                        generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        telegram_sent_at TEXT,
+                        UNIQUE(telegram_user_id, report_date),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS business_daily_metrics (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        metric_date DATE NOT NULL,
+                        store_id TEXT NOT NULL,
+                        store_name TEXT NOT NULL,
+                        revenue DECIMAL(16,2) NOT NULL DEFAULT 0,
+                        checks INTEGER NOT NULL DEFAULT 0,
+                        average_check DECIMAL(16,2) NOT NULL DEFAULT 0,
+                        expenses DECIMAL(16,2) NOT NULL DEFAULT 0,
+                        supplies DECIMAL(16,2) NOT NULL DEFAULT 0,
+                        non_supply_expenses DECIMAL(16,2) NOT NULL DEFAULT 0,
+                        profit_withdrawals DECIMAL(16,2) NOT NULL DEFAULT 0,
+                        capital_balance DECIMAL(16,2),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, metric_date, store_id),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS business_analytics_reports (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        report_date DATE NOT NULL,
+                        status TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        ai_commentary_json TEXT,
+                        source_status_json TEXT,
+                        generated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        telegram_sent_at TIMESTAMPTZ,
+                        UNIQUE(telegram_user_id, report_date),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_business_metrics_user_date
+                ON business_daily_metrics(telegram_user_id, metric_date)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_business_reports_user_date
+                ON business_analytics_reports(telegram_user_id, report_date)
+            """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ Business analytics migrations completed")
+        except Exception as e:
+            logger.error(f"Business analytics migration error: {e}")
 
     def _migrate_to_multi_account(self):
         """
@@ -5506,6 +5600,204 @@ class UserDatabase:
             return result
         except Exception as e:
             logger.error(f"Failed to get latest capital snapshot set: {e}")
+            return []
+
+    # ==================== Business Analytics ====================
+
+    def save_business_analytics_report(
+        self,
+        telegram_user_id: int,
+        report: dict,
+        ai_commentary: Optional[dict] = None,
+    ) -> bool:
+        """Persist a complete Poster-derived report and its daily facts."""
+        import json
+
+        if not report or not report.get('report_date'):
+            return False
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            report_json = json.dumps(report, ensure_ascii=False)
+            ai_json = json.dumps(ai_commentary, ensure_ascii=False) if ai_commentary else None
+            source_json = json.dumps(report.get('source_status', []), ensure_ascii=False)
+            status = 'complete' if report.get('success') else 'failed'
+
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    INSERT INTO business_analytics_reports
+                    (telegram_user_id, report_date, status, payload_json,
+                     ai_commentary_json, source_status_json, generated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, report_date) DO UPDATE SET
+                        status = excluded.status,
+                        payload_json = excluded.payload_json,
+                        ai_commentary_json = excluded.ai_commentary_json,
+                        source_status_json = excluded.source_status_json,
+                        generated_at = CURRENT_TIMESTAMP
+                """, (
+                    telegram_user_id, report['report_date'], status, report_json,
+                    ai_json, source_json,
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO business_analytics_reports
+                    (telegram_user_id, report_date, status, payload_json,
+                     ai_commentary_json, source_status_json, generated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, report_date) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        payload_json = EXCLUDED.payload_json,
+                        ai_commentary_json = EXCLUDED.ai_commentary_json,
+                        source_status_json = EXCLUDED.source_status_json,
+                        generated_at = CURRENT_TIMESTAMP
+                """, (
+                    telegram_user_id, report['report_date'], status, report_json,
+                    ai_json, source_json,
+                ))
+
+            capital_by_date = {
+                item['date']: item['balance']
+                for item in report.get('capital', {}).get('history', [])
+            }
+            if DB_TYPE == "sqlite":
+                metric_sql = """
+                    INSERT INTO business_daily_metrics
+                    (telegram_user_id, metric_date, store_id, store_name, revenue,
+                     checks, average_check, expenses, supplies, non_supply_expenses,
+                     profit_withdrawals, capital_balance, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, metric_date, store_id) DO UPDATE SET
+                        store_name = excluded.store_name,
+                        revenue = excluded.revenue,
+                        checks = excluded.checks,
+                        average_check = excluded.average_check,
+                        expenses = excluded.expenses,
+                        supplies = excluded.supplies,
+                        non_supply_expenses = excluded.non_supply_expenses,
+                        profit_withdrawals = excluded.profit_withdrawals,
+                        capital_balance = excluded.capital_balance,
+                        updated_at = CURRENT_TIMESTAMP
+                """
+            else:
+                metric_sql = """
+                    INSERT INTO business_daily_metrics
+                    (telegram_user_id, metric_date, store_id, store_name, revenue,
+                     checks, average_check, expenses, supplies, non_supply_expenses,
+                     profit_withdrawals, capital_balance, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT(telegram_user_id, metric_date, store_id) DO UPDATE SET
+                        store_name = EXCLUDED.store_name,
+                        revenue = EXCLUDED.revenue,
+                        checks = EXCLUDED.checks,
+                        average_check = EXCLUDED.average_check,
+                        expenses = EXCLUDED.expenses,
+                        supplies = EXCLUDED.supplies,
+                        non_supply_expenses = EXCLUDED.non_supply_expenses,
+                        profit_withdrawals = EXCLUDED.profit_withdrawals,
+                        capital_balance = EXCLUDED.capital_balance,
+                        updated_at = CURRENT_TIMESTAMP
+                """
+            for item in report.get('daily_metrics', []):
+                capital_balance = capital_by_date.get(item['date']) if item['store_id'] == 'total' else None
+                cursor.execute(metric_sql, (
+                    telegram_user_id,
+                    item['date'],
+                    str(item['store_id']),
+                    item['store_name'],
+                    item.get('revenue', 0),
+                    item.get('checks', 0),
+                    item.get('average_check', 0),
+                    item.get('expenses', 0),
+                    item.get('supplies', 0),
+                    item.get('non_supply_expenses', 0),
+                    item.get('profit_withdrawals', 0),
+                    capital_balance,
+                ))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save business analytics report: {e}")
+            return False
+
+    def get_latest_business_analytics_report(self, telegram_user_id: int) -> Optional[dict]:
+        """Return the newest complete report with parsed JSON fields."""
+        import json
+
+        try:
+            conn = self._get_connection()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT report_date, status, payload_json, ai_commentary_json,
+                       source_status_json, generated_at, telegram_sent_at
+                FROM business_analytics_reports
+                WHERE telegram_user_id = {placeholder} AND status = 'complete'
+                ORDER BY report_date DESC, generated_at DESC
+                LIMIT 1
+            """, (telegram_user_id,))
+            row = cursor.fetchone()
+            columns = [desc[0] for desc in cursor.description]
+            conn.close()
+            if not row:
+                return None
+            value = dict(zip(columns, row))
+            report = json.loads(value['payload_json'])
+            report['ai_commentary'] = (
+                json.loads(value['ai_commentary_json']) if value.get('ai_commentary_json') else None
+            )
+            report['stored_generated_at'] = str(value['generated_at'])
+            report['telegram_sent_at'] = str(value['telegram_sent_at']) if value.get('telegram_sent_at') else None
+            return report
+        except Exception as e:
+            logger.error(f"Failed to load latest business analytics report: {e}")
+            return None
+
+    def mark_business_report_sent(self, telegram_user_id: int, report_date: str) -> bool:
+        """Record successful Telegram delivery without changing report facts."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE business_analytics_reports
+                SET telegram_sent_at = CURRENT_TIMESTAMP
+                WHERE telegram_user_id = {placeholder} AND report_date = {placeholder}
+            """, (telegram_user_id, report_date))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to mark business report as sent: {e}")
+            return False
+
+    def get_business_daily_metrics(self, telegram_user_id: int, days: int = 30) -> list:
+        """Return combined daily metrics for dashboard charts."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT metric_date, revenue, checks, average_check, expenses,
+                       supplies, non_supply_expenses, profit_withdrawals, capital_balance
+                FROM business_daily_metrics
+                WHERE telegram_user_id = {placeholder} AND store_id = 'total'
+                ORDER BY metric_date DESC
+                LIMIT {max(1, min(int(days), 90))}
+            """, (telegram_user_id,))
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            conn.close()
+            rows.reverse()
+            for item in rows:
+                item['metric_date'] = str(item['metric_date'])
+                for key in ('revenue', 'average_check', 'expenses', 'supplies',
+                            'non_supply_expenses', 'profit_withdrawals', 'capital_balance'):
+                    item[key] = float(item[key]) if item.get(key) is not None else None
+            return rows
+        except Exception as e:
+            logger.error(f"Failed to load business daily metrics: {e}")
             return []
 
     def update_web_user(self, user_id: int, telegram_user_id: int, username: str = None,

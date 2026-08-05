@@ -17,7 +17,8 @@ class PosterClient:
         telegram_user_id: Optional[int] = None,
         poster_token: Optional[str] = None,
         poster_user_id: Optional[str] = None,
-        poster_base_url: Optional[str] = None
+        poster_base_url: Optional[str] = None,
+        request_timeout: int = 15,
     ):
         """
         Initialize Poster client for a specific user or with explicit credentials
@@ -59,12 +60,13 @@ class PosterClient:
             self.user_id = POSTER_USER_ID
             self.telegram_user_id = None
 
+        self.request_timeout = max(5, int(request_timeout))
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session"""
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=15)
+            timeout = aiohttp.ClientTimeout(total=self.request_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 

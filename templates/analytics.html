@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+
+{% block title %}Анализ — PizzBurg{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+    .analytics-page { color: #111827; }
+    .analytics-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; }
+    .analytics-head h1 { margin:0; font-size:28px; font-weight:750; letter-spacing:-.04em; }
+    .analytics-subtitle { margin:6px 0 0; color:#64748b; font-size:13px; }
+    .refresh-btn { border:1px solid #dbe2ea; background:#fff; color:#334155; border-radius:12px; padding:10px 14px; font-size:13px; font-weight:650; display:flex; align-items:center; gap:7px; white-space:nowrap; }
+    .refresh-btn:disabled { opacity:.55; }
+    .refresh-btn svg { width:17px; height:17px; }
+    .refresh-btn.loading svg { animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    .source-state { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; background:#ecfdf5; color:#047857; border-radius:999px; font-size:11px; font-weight:650; margin-top:10px; }
+    .source-state::before { content:""; width:7px; height:7px; border-radius:50%; background:#10b981; }
+
+    .kpi-grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; margin-bottom:14px; }
+    .kpi-card, .panel { background:#fff; border:1px solid #e4e9ef; border-radius:17px; box-shadow:0 1px 2px rgba(15,23,42,.025); }
+    .kpi-card { padding:16px; min-height:126px; display:flex; flex-direction:column; justify-content:space-between; }
+    .kpi-label { color:#64748b; font-size:12px; font-weight:600; }
+    .kpi-value { font-size:26px; font-weight:760; letter-spacing:-.045em; line-height:1.05; margin:8px 0; }
+    .kpi-meta { font-size:11.5px; color:#64748b; }
+    .delta { display:inline-flex; align-items:center; font-weight:700; }
+    .delta.up { color:#059669; } .delta.down { color:#dc2626; } .delta.flat { color:#64748b; }
+
+    .main-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr); gap:14px; align-items:start; min-width:0; }
+    .main-grid > *, .panel, .chart-wrap { min-width:0; }
+    .chart-wrap canvas { max-width:100% !important; }
+    .panel { padding:17px; margin-bottom:14px; }
+    .panel-title { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; }
+    .panel-title h2 { margin:0; font-size:16px; font-weight:720; letter-spacing:-.02em; }
+    .panel-note { color:#94a3b8; font-size:11px; }
+
+    .store-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .store-card { border:1px solid #e8edf2; border-radius:14px; padding:14px; background:#fbfcfd; }
+    .store-name { font-size:14px; font-weight:720; display:flex; justify-content:space-between; gap:8px; }
+    .store-revenue { font-size:23px; font-weight:760; letter-spacing:-.04em; margin:10px 0 12px; }
+    .store-stats { display:grid; grid-template-columns:1fr 1fr; gap:8px 10px; }
+    .stat-label { color:#94a3b8; font-size:10.5px; }
+    .stat-value { display:block; font-size:12.5px; font-weight:650; margin-top:2px; }
+    .quality-tag { display:inline-flex; margin-top:11px; padding:5px 8px; border-radius:8px; background:#fff7ed; color:#c2410c; font-size:10.5px; font-weight:650; }
+
+    .chart-wrap { height:245px; }
+    .ai-card { background:linear-gradient(135deg,#eef4ff,#f7f5ff); border-color:#dce6ff; }
+    .ai-kicker { color:#4f46e5; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; font-weight:800; }
+    .ai-summary { font-size:14px; line-height:1.5; margin:8px 0; }
+    .ai-question { margin-top:12px; padding:10px 11px; background:rgba(255,255,255,.75); border-radius:11px; font-size:12px; line-height:1.45; }
+
+    .insight-list { display:flex; flex-direction:column; gap:9px; }
+    .insight { border:1px solid #e7ebf0; border-left:4px solid #94a3b8; border-radius:12px; padding:11px 12px; background:#fff; }
+    .insight.critical { border-left-color:#ef4444; background:#fffafa; }
+    .insight.warning { border-left-color:#f59e0b; background:#fffdf7; }
+    .insight.info { border-left-color:#3b82f6; }
+    .insight-title { font-size:12.5px; font-weight:720; margin-bottom:4px; }
+    .insight-body { color:#475569; font-size:11.5px; line-height:1.45; }
+    .confidence { display:inline-block; margin-top:7px; color:#64748b; font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; }
+    .question { margin-top:7px; color:#334155; font-size:11px; font-weight:600; }
+    .limitations { color:#64748b; font-size:10.5px; line-height:1.5; margin:0; padding-left:17px; }
+
+    .loading-box, .error-box { min-height:280px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; border:1px solid #e4e9ef; border-radius:17px; background:#fff; padding:24px; }
+    .loading-dot { width:28px; height:28px; border:3px solid #dbeafe; border-top-color:#2563eb; border-radius:50%; animation:spin .8s linear infinite; margin-bottom:12px; }
+    .error-box { color:#64748b; } .error-box strong { color:#b91c1c; margin-bottom:6px; }
+
+    @media (max-width:1050px) {
+        .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        .main-grid { grid-template-columns:1fr; }
+    }
+    @media (max-width:600px) {
+        .analytics-head { align-items:center; margin-bottom:13px; }
+        .analytics-head h1 { font-size:23px; }
+        .analytics-subtitle { font-size:11px; }
+        .refresh-btn { width:42px; height:42px; padding:0; justify-content:center; border-radius:12px; }
+        .refresh-btn span { display:none; }
+        .kpi-grid { gap:8px; margin-bottom:10px; }
+        .kpi-card { padding:12px; min-height:105px; border-radius:14px; }
+        .kpi-value { font-size:20px; }
+        .kpi-meta { font-size:10px; }
+        .panel { padding:13px; border-radius:14px; margin-bottom:10px; }
+        .panel-title { margin-bottom:10px; }
+        .store-grid { grid-template-columns:1fr; gap:8px; }
+        .store-card { padding:12px; }
+        .store-revenue { font-size:20px; margin:7px 0 10px; }
+        .chart-wrap { height:210px; }
+        .insight { padding:10px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="analytics-page">
+    <div class="analytics-head">
+        <div>
+            <h1>Анализ бизнеса</h1>
+            <p class="analytics-subtitle" id="periodLabel">Данные двух заведений напрямую из Poster</p>
+            <span class="source-state" id="sourceState" style="display:none">Оба Poster подтверждены</span>
+        </div>
+        <button class="refresh-btn" id="refreshBtn" type="button" onclick="refreshReport()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8.1 8.1 0 10.9 4M20 4v7h-7"/></svg>
+            <span>Обновить</span>
+        </button>
+    </div>
+    <div id="analyticsContent"><div class="loading-box"><div class="loading-dot"></div>Собираю проверенные показатели…</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let capitalChart = null;
+
+function money(value) {
+    const n = Number(value || 0);
+    return new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(n) + ' ₸';
+}
+function pct(value) {
+    if (value === null || value === undefined) return '—';
+    const n = Number(value);
+    return (n > 0 ? '+' : '') + n.toFixed(1) + '%';
+}
+function deltaClass(value, inverse) {
+    if (value === null || value === undefined || Math.abs(value) < .05) return 'flat';
+    const good = inverse ? value < 0 : value > 0;
+    return good ? 'up' : 'down';
+}
+function esc(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function fmtDate(value) {
+    const [y,m,d] = String(value).split('-'); return `${d}.${m}.${y}`;
+}
+
+async function loadReport(refresh) {
+    const url = '/api/analytics/summary' + (refresh ? '?refresh=1' : '');
+    const response = await fetch(url, {credentials:'same-origin'});
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось получить аналитику');
+    renderReport(data.report);
+}
+
+function kpi(label, value, change, meta, inverse) {
+    return `<article class="kpi-card"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${money(value)}</div><div class="kpi-meta"><span class="delta ${deltaClass(change,inverse)}">${pct(change)}</span> ${esc(meta)}</div></article>`;
+}
+
+function renderStore(store) {
+    const current = store.current, changes = store.changes;
+    const zero = store.product_economics.current.zero_cost_revenue_pct;
+    return `<article class="store-card">
+        <div class="store-name"><span>${esc(store.store_name)}</span><span class="delta ${deltaClass(changes.revenue_pct,false)}">${pct(changes.revenue_pct)}</span></div>
+        <div class="store-revenue">${money(current.revenue)}</div>
+        <div class="store-stats">
+            <div><span class="stat-label">Чеки</span><span class="stat-value">${Number(current.checks).toLocaleString('ru-RU')} · ${pct(changes.checks_pct)}</span></div>
+            <div><span class="stat-label">Средний чек</span><span class="stat-value">${money(current.average_check)}</span></div>
+            <div><span class="stat-label">Расходы</span><span class="stat-value">${money(current.expenses)}</span></div>
+            <div><span class="stat-label">Кассовый результат</span><span class="stat-value">${money(current.cash_result)}</span></div>
+        </div>
+        ${zero >= 10 ? `<span class="quality-tag">${zero.toFixed(1)}% выручки без себестоимости</span>` : ''}
+    </article>`;
+}
+
+function renderInsight(item) {
+    const confidence = item.confidence === 'high' ? 'высокая уверенность' : item.confidence === 'medium' ? 'средняя уверенность' : 'ограниченная уверенность';
+    return `<article class="insight ${esc(item.severity)}"><div class="insight-title">${esc(item.title)}</div><div class="insight-body">${esc(item.body)}</div><span class="confidence">${confidence}</span>${item.question ? `<div class="question">Что проверить: ${esc(item.question)}</div>` : ''}</article>`;
+}
+
+function renderReport(report) {
+    const c = report.combined, capital = report.capital, ai = report.ai_commentary;
+    const capitalChangePct = Number(capital.current_period_start_balance)
+        ? Number(capital.current_change) / Number(capital.current_period_start_balance) * 100
+        : null;
+    document.getElementById('periodLabel').textContent = `30 дней по ${fmtDate(report.report_date)} · сравнение с предыдущими 30 днями`;
+    document.getElementById('sourceState').style.display = 'inline-flex';
+    const content = document.getElementById('analyticsContent');
+    content.innerHTML = `
+        <section class="kpi-grid">
+            ${kpi('Капитал на закрытие', capital.current_balance, capitalChangePct, 'изменение за 30 дней', false)}
+            ${kpi('Создано до изъятий', capital.current_generated, capital.generation_change_pct, 'к предыдущему периоду', false)}
+            ${kpi('Выручка за 30 дней', c.current.revenue, c.changes.revenue_pct, 'к предыдущим 30 дням', false)}
+            ${kpi('Расходы за 30 дней', c.current.expenses, c.changes.expenses_pct, 'к предыдущим 30 дням', true)}
+        </section>
+        <div class="main-grid">
+            <div>
+                <section class="panel"><div class="panel-title"><h2>Два заведения</h2><span class="panel-note">одинаковые периоды</span></div><div class="store-grid">${report.stores.map(renderStore).join('')}</div></section>
+                <section class="panel"><div class="panel-title"><h2>Движение капитала</h2><span class="panel-note">завершённые дни, 02:00 Алматы</span></div><div class="chart-wrap"><canvas id="capitalChart"></canvas></div></section>
+                <section class="panel"><div class="panel-title"><h2>Ограничения данных</h2></div><ul class="limitations">${report.data_limitations.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></section>
+            </div>
+            <div>
+                ${ai ? `<section class="panel ai-card"><div class="ai-kicker">ИИ-руководитель</div><div class="ai-summary">${esc(ai.summary)}</div><div class="panel-note">${esc(ai.priority)}</div><div class="ai-question"><strong>Вопрос:</strong> ${esc(ai.question)}</div></section>` : ''}
+                <section class="panel"><div class="panel-title"><h2>Требует внимания</h2><span class="panel-note">${report.insights.length} сигналов</span></div><div class="insight-list">${report.insights.map(renderInsight).join('') || '<div class="panel-note">Существенных отклонений не найдено.</div>'}</div></section>
+            </div>
+        </div>`;
+    renderChart(capital.history || []);
+}
+
+function renderChart(history) {
+    if (capitalChart) capitalChart.destroy();
+    const canvas = document.getElementById('capitalChart');
+    if (!canvas || !history.length) return;
+    capitalChart = new Chart(canvas, {
+        type:'line',
+        data:{labels:history.map(x=>x.formatted_date || x.date.slice(5)),datasets:[{data:history.map(x=>x.balance),borderColor:'#2563eb',backgroundColor:'rgba(37,99,235,.09)',fill:true,tension:.32,borderWidth:2,pointRadius:0,pointHoverRadius:4}]},
+        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>money(ctx.parsed.y)}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:7,color:'#94a3b8',font:{size:10}}},y:{grid:{color:'#eef2f6'},ticks:{color:'#94a3b8',font:{size:10},callback:v=>new Intl.NumberFormat('ru-RU',{notation:'compact',maximumFractionDigits:1}).format(v)}}}}
+    });
+}
+
+async function refreshReport() {
+    const btn = document.getElementById('refreshBtn'); btn.disabled=true; btn.classList.add('loading');
+    try { await loadReport(true); showToast('Аналитика обновлена из двух Poster', 'success'); }
+    catch (e) { showToast(e.message, 'error', 7000); }
+    finally { btn.disabled=false; btn.classList.remove('loading'); }
+}
+
+loadReport(false).catch(error => {
+    document.getElementById('analyticsContent').innerHTML = `<div class="error-box"><strong>Не удалось загрузить аналитику</strong><span>${esc(error.message)}</span></div>`;
+});
+</script>
+{% endblock %}
