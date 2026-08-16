@@ -445,6 +445,46 @@ class PosterClient:
         # and ingredient[] (singular) for items array
         # See: https://dev.joinposter.com/en/docs/v3/web/storage/createSupply
 
+        # Deduplicate and merge items with the same (id, type)
+        merged_ingredients = []
+        item_map = {}
+        for item in ingredients:
+            key = (item['id'], item.get('type', 'ingredient'))
+            num = float(item.get('num') or 0)
+            price = float(item.get('price') or 0)
+            item_sum = item.get('sum')
+            if item_sum is None:
+                item_sum = round(num * price, 2)
+            else:
+                item_sum = float(item_sum)
+
+            if key in item_map:
+                item_map[key]['num'] += num
+                item_map[key]['sum'] += item_sum
+            else:
+                item_map[key] = {
+                    'id': item['id'],
+                    'type': item.get('type', 'ingredient'),
+                    'num': num,
+                    'sum': item_sum,
+                    'packing': item.get('packing')
+                }
+
+        for key, val in item_map.items():
+            num = val['num']
+            val_sum = round(val['sum'], 2)
+            avg_price = round(val_sum / num, 2) if num > 0 else 0.0
+            merged_ingredients.append({
+                'id': val['id'],
+                'type': val['type'],
+                'num': num,
+                'price': avg_price,
+                'sum': val_sum,
+                'packing': val.get('packing')
+            })
+
+        ingredients = merged_ingredients
+
         def _build_supply_data(type_map):
             """Build form data in official Poster API format"""
             data = {
@@ -464,21 +504,23 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                price_for_api = item['price']
+                item_sum = item.get('sum')
+                if item_sum is None:
+                    item_sum = round(float(num) * float(item['price']), 2)
 
                 item_type = item.get('type', 'ingredient')
-                poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
+                poster_type = type_map.get(item_type, type_map.get('ingredient', 4))
 
                 data[f'ingredient[{idx}][id]'] = item['id']
                 data[f'ingredient[{idx}][type]'] = poster_type
                 data[f'ingredient[{idx}][num]'] = num_for_api
-                data[f'ingredient[{idx}][sum]'] = price_for_api
+                data[f'ingredient[{idx}][sum]'] = item_sum
                 if item.get('packing'):
                     data[f'ingredient[{idx}][packing]'] = item['packing']
 
             # Payment transaction — without this, Poster creates supply with 0₸ payment
             total_amount = round(sum(
-                item['num'] * item['price']
+                item.get('sum', item['num'] * item['price'])
                 for item in ingredients
             ), 2)
             data['transactions[0][account_id]'] = account_id
@@ -491,7 +533,7 @@ class PosterClient:
         def _build_legacy_data(type_map):
             """Build form data in legacy flat format (works for some accounts)"""
             total_amount = round(sum(
-                item['num'] * item['price']
+                item.get('sum', item['num'] * item['price'])
                 for item in ingredients
             ), 2)
 
@@ -514,7 +556,7 @@ class PosterClient:
                         num_for_api = str(num)
 
                 price_for_api = item['price']
-                ingredient_sum = round(num * price_for_api, 2)
+                ingredient_sum = item.get('sum', round(num * price_for_api, 2))
 
                 item_type = item.get('type', 'ingredient')
                 poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
