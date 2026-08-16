@@ -504,23 +504,20 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                item_sum = item.get('sum')
-                if item_sum is None:
-                    item_sum = round(float(num) * float(item['price']), 2)
-
+                unit_price = item['price']
                 item_type = item.get('type', 'ingredient')
-                poster_type = type_map.get(item_type, type_map.get('ingredient', 4))
+                poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
 
                 data[f'ingredient[{idx}][id]'] = item['id']
                 data[f'ingredient[{idx}][type]'] = poster_type
                 data[f'ingredient[{idx}][num]'] = num_for_api
-                data[f'ingredient[{idx}][sum]'] = item_sum
+                data[f'ingredient[{idx}][sum]'] = unit_price
                 if item.get('packing'):
                     data[f'ingredient[{idx}][packing]'] = item['packing']
 
-            # Payment transaction — without this, Poster creates supply with 0₸ payment
+            # Payment transaction
             total_amount = round(sum(
-                item.get('sum', item['num'] * item['price'])
+                item['num'] * item['price']
                 for item in ingredients
             ), 2)
             data['transactions[0][account_id]'] = account_id
@@ -533,7 +530,7 @@ class PosterClient:
         def _build_legacy_data(type_map):
             """Build form data in legacy flat format (works for some accounts)"""
             total_amount = round(sum(
-                item.get('sum', item['num'] * item['price'])
+                item['num'] * item['price']
                 for item in ingredients
             ), 2)
 
@@ -555,8 +552,8 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                price_for_api = item['price']
-                ingredient_sum = item.get('sum', round(num * price_for_api, 2))
+                unit_price = item['price']
+                ingredient_sum = round(num * unit_price, 2)
 
                 item_type = item.get('type', 'ingredient')
                 poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
@@ -564,7 +561,7 @@ class PosterClient:
                 data[f'ingredients[{idx}][id]'] = item['id']
                 data[f'ingredients[{idx}][type]'] = poster_type
                 data[f'ingredients[{idx}][num]'] = num_for_api
-                data[f'ingredients[{idx}][price]'] = price_for_api
+                data[f'ingredients[{idx}][price]'] = unit_price
                 data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
                 data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
                 data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
@@ -576,9 +573,8 @@ class PosterClient:
 
             return data
 
-        # Poster API docs type mapping: product=1, ingredient=4, modifier=5
-        docs_type_map = {'ingredient': 4, 'semi_product': 4, 'product': 1}
-        # Legacy type mapping (worked for some accounts): ingredient=1, semi_product=2, product=4
+        # Poster API type mapping for supplies: ingredient=1, semi_product=2, product=4
+        docs_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
         legacy_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
 
         logger.info(f"Creating supply: supplier={supplier_id}, storage={storage_id}, "
