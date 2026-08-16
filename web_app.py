@@ -62,20 +62,30 @@ def run_async(coro):
     finally:
         loop.close()
 
-# Simple in-memory cache for Poster API data (categories/accounts change rarely)
+# Simple in-memory cache for Poster API data (categories change rarely)
 _poster_cache = {}
-_CACHE_TTL = 300  # 5 minutes
+_CACHE_TTL = 300  # 5 minutes for categories
 
-def _cache_get(key):
+def _cache_get(key, ttl=_CACHE_TTL):
     """Get cached value if not expired."""
     entry = _poster_cache.get(key)
-    if entry and (_time.time() - entry['ts']) < _CACHE_TTL:
+    if entry and (_time.time() - entry['ts']) < ttl:
         return entry['val']
     return None
 
 def _cache_set(key, val):
     """Store value in cache."""
     _poster_cache[key] = {'val': val, 'ts': _time.time()}
+
+def _cache_delete(key):
+    """Remove key from cache."""
+    _poster_cache.pop(key, None)
+
+def _cache_clear_user(user_id):
+    """Clear all cached entries for a user."""
+    keys_to_delete = [k for k in _poster_cache if str(user_id) in k]
+    for k in keys_to_delete:
+        _poster_cache.pop(k, None)
 
 
 app = Flask(__name__)
@@ -1734,14 +1744,14 @@ def list_expenses():
                     'is_primary': acc.get('is_primary', False)
                 })
 
-            # Check cache for categories and accounts
-            cache_key = f"cats_accs_{g.user_id}"
-            cached = _cache_get(cache_key)
+            # Check cache for categories (accounts/balances are always fetched fresh)
+            cache_key_cats = f"cats_{g.user_id}"
+            cached_cats = _cache_get(cache_key_cats)
 
             async def load_data():
                 date_str = selected_date.replace("-", "")
 
-                async def fetch_for_account(acc, need_cats_accs):
+                async def fetch_for_account(acc, need_cats):
                     """Fetch data for one Poster account."""
                     client = PosterClient(
                         telegram_user_id=g.user_id,
@@ -1750,29 +1760,32 @@ def list_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        if need_cats_accs:
+                        if need_cats:
                             cats, accs, transactions = await asyncio.gather(
                                 client.get_categories(),
                                 client.get_accounts(),
                                 client.get_transactions(date_str, date_str)
                             )
                         else:
-                            cats, accs = [], []
-                            transactions = await client.get_transactions(date_str, date_str)
+                            cats = []
+                            accs, transactions = await asyncio.gather(
+                                client.get_accounts(),
+                                client.get_transactions(date_str, date_str)
+                            )
                         return acc, cats, accs, transactions
                     finally:
                         await client.close()
 
-                need_cats_accs = cached is None
+                need_cats = cached_cats is None
                 results = await asyncio.gather(
-                    *[fetch_for_account(acc, need_cats_accs) for acc in poster_accounts]
+                    *[fetch_for_account(acc, need_cats) for acc in poster_accounts]
                 )
 
                 all_categories = []
                 all_accounts = []
                 all_transactions = []
                 for acc, cats, accs, transactions in results:
-                    if need_cats_accs:
+                    if need_cats:
                         for c in cats:
                             if str(c.get('type', '1')) != '1':
                                 continue
@@ -1780,28 +1793,27 @@ def list_expenses():
                             c['poster_account_name'] = acc['account_name']
                             all_categories.append(c)
 
-                        for a in accs:
-                            a['poster_account_id'] = acc['id']
-                            a['poster_account_name'] = acc['account_name']
-                        all_accounts.extend(accs)
+                    for a in accs:
+                        a['poster_account_id'] = acc['id']
+                        a['poster_account_name'] = acc['account_name']
+                    all_accounts.extend(accs)
 
                     for t in transactions:
                         t['poster_account_id'] = acc['id']
                         t['poster_account_name'] = acc['account_name']
                     all_transactions.extend(transactions)
 
-                if need_cats_accs:
-                    _cache_set(cache_key, {'categories': all_categories, 'accounts': all_accounts})
+                if need_cats:
+                    _cache_set(cache_key_cats, all_categories)
+
+                # Keep legacy cache updated with latest accounts and categories
+                _cache_set(f"cats_accs_{g.user_id}", {'categories': cached_cats or all_categories, 'accounts': all_accounts})
 
                 return all_categories, all_accounts, all_transactions
 
             result_cats, result_accs, poster_transactions = run_async(load_data())
-            if cached:
-                categories = cached['categories']
-                accounts = cached['accounts']
-            else:
-                categories = result_cats
-                accounts = result_accs
+            categories = cached_cats if cached_cats is not None else result_cats
+            accounts = result_accs
     except Exception as e:
         logger.error(f"Error loading categories/accounts: {e}")
         import traceback
@@ -1911,12 +1923,13 @@ def view_assistant():
                     'is_primary': acc.get('is_primary', False)
                 })
 
-            cache_key = f"cats_accs_{g.user_id}"
-            cached = _cache_get(cache_key)
+            # Check cache for categories (accounts/balances are always fetched fresh)
+            cache_key_cats = f"cats_{g.user_id}"
+            cached_cats = _cache_get(cache_key_cats)
 
             async def load_data():
                 date_str = selected_date.replace("-", "")
-                async def fetch_for_account(acc, need_cats_accs):
+                async def fetch_for_account(acc, need_cats):
                     client = PosterClient(
                         telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
@@ -1924,29 +1937,32 @@ def view_assistant():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        if need_cats_accs:
+                        if need_cats:
                             cats, accs, transactions = await asyncio.gather(
                                 client.get_categories(),
                                 client.get_accounts(),
                                 client.get_transactions(date_str, date_str)
                             )
                         else:
-                            cats, accs = [], []
-                            transactions = await client.get_transactions(date_str, date_str)
+                            cats = []
+                            accs, transactions = await asyncio.gather(
+                                client.get_accounts(),
+                                client.get_transactions(date_str, date_str)
+                            )
                         return acc, cats, accs, transactions
                     finally:
                         await client.close()
 
-                need_cats_accs = cached is None
+                need_cats = cached_cats is None
                 results = await asyncio.gather(
-                    *[fetch_for_account(acc, need_cats_accs) for acc in poster_accounts]
+                    *[fetch_for_account(acc, need_cats) for acc in poster_accounts]
                 )
 
                 all_categories = []
                 all_accounts = []
                 all_transactions = []
                 for acc, cats, accs, transactions in results:
-                    if need_cats_accs:
+                    if need_cats:
                         for c in cats:
                             if str(c.get('type', '1')) != '1':
                                 continue
@@ -1954,28 +1970,27 @@ def view_assistant():
                             c['poster_account_name'] = acc['account_name']
                             all_categories.append(c)
 
-                        for a in accs:
-                            a['poster_account_id'] = acc['id']
-                            a['poster_account_name'] = acc['account_name']
-                        all_accounts.extend(accs)
+                    for a in accs:
+                        a['poster_account_id'] = acc['id']
+                        a['poster_account_name'] = acc['account_name']
+                    all_accounts.extend(accs)
 
                     for t in transactions:
                         t['poster_account_id'] = acc['id']
                         t['poster_account_name'] = acc['account_name']
                     all_transactions.extend(transactions)
 
-                if need_cats_accs:
-                    _cache_set(cache_key, {'categories': all_categories, 'accounts': all_accounts})
+                if need_cats:
+                    _cache_set(cache_key_cats, all_categories)
+
+                # Keep legacy cache updated with latest accounts and categories
+                _cache_set(f"cats_accs_{g.user_id}", {'categories': cached_cats or all_categories, 'accounts': all_accounts})
 
                 return all_categories, all_accounts, all_transactions
 
             result_cats, result_accs, poster_transactions = run_async(load_data())
-            if cached:
-                categories = cached['categories']
-                accounts = cached['accounts']
-            else:
-                categories = result_cats
-                accounts = result_accs
+            categories = cached_cats if cached_cats is not None else result_cats
+            accounts = result_accs
     except Exception as e:
         logger.error(f"Error loading assistant categories/accounts: {e}")
 
@@ -3575,14 +3590,13 @@ def sync_expenses_from_poster():
     db = get_database()
     poster_accounts = db.get_accounts(g.user_id)
 
-    if not poster_accounts:
-        return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
-
     # Get today's date in Kazakhstan timezone (UTC+5)
     kz_tz = KZ_TZ
     today = _kz_now()
     date_str = today.strftime('%Y%m%d')
 
+    # Clear cached Poster data so latest accounts/categories are pulled
+    _cache_clear_user(g.user_id)
 
     async def fetch_and_sync():
         synced_count = 0
@@ -3950,8 +3964,6 @@ def api_poster_transactions():
         return jsonify({'success': False, 'error': str(e)})
 
 
-# ==================== EXPENSES API ====================
-
 @app.route('/api/expenses')
 def api_get_expenses():
     """Get all expense drafts with categories, accounts, and poster transactions for React app"""
@@ -3988,13 +4000,14 @@ def api_get_expenses():
                     'is_primary': acc.get('is_primary', False)
                 })
 
-            cache_key_api = f"cats_accs_{g.user_id}"
-            cached_api = _cache_get(cache_key_api)
+            # Check cache for categories (accounts/balances are always fetched fresh)
+            cache_key_cats = f"cats_{g.user_id}"
+            cached_cats = _cache_get(cache_key_cats)
 
             async def load_data():
                 date_str = filter_date.replace("-", "")
 
-                async def fetch_for_account(acc, need_cats_accs):
+                async def fetch_for_account(acc, need_cats):
                     client = PosterClient(
                         telegram_user_id=g.user_id,
                         poster_token=acc['poster_token'],
@@ -4002,29 +4015,32 @@ def api_get_expenses():
                         poster_base_url=acc['poster_base_url']
                     )
                     try:
-                        if need_cats_accs:
+                        if need_cats:
                             cats, accs, transactions = await asyncio.gather(
                                 client.get_categories(),
                                 client.get_accounts(),
                                 client.get_transactions(date_str, date_str)
                             )
                         else:
-                            cats, accs = [], []
-                            transactions = await client.get_transactions(date_str, date_str)
+                            cats = []
+                            accs, transactions = await asyncio.gather(
+                                client.get_accounts(),
+                                client.get_transactions(date_str, date_str)
+                            )
                         return acc, cats, accs, transactions
                     finally:
                         await client.close()
 
-                need_cats_accs = cached_api is None
+                need_cats = cached_cats is None
                 results = await asyncio.gather(
-                    *[fetch_for_account(acc, need_cats_accs) for acc in poster_accounts]
+                    *[fetch_for_account(acc, need_cats) for acc in poster_accounts]
                 )
 
                 all_categories = []
                 all_accounts = []
                 all_transactions = []
                 for acc, cats, accs, transactions in results:
-                    if need_cats_accs:
+                    if need_cats:
                         for c in cats:
                             if str(c.get('type', '1')) != '1':
                                 continue
@@ -4042,18 +4058,17 @@ def api_get_expenses():
                         t['poster_account_name'] = acc['account_name']
                     all_transactions.extend(transactions)
 
-                if need_cats_accs:
-                    _cache_set(cache_key_api, {'categories': all_categories, 'accounts': all_accounts})
+                if need_cats:
+                    _cache_set(cache_key_cats, all_categories)
+
+                # Keep legacy cache updated with latest accounts and categories
+                _cache_set(f"cats_accs_{g.user_id}", {'categories': cached_cats or all_categories, 'accounts': all_accounts})
 
                 return all_categories, all_accounts, all_transactions
 
             result_cats, result_accs, poster_transactions = run_async(load_data())
-            if cached_api:
-                categories = cached_api['categories']
-                accounts = cached_api['accounts']
-            else:
-                categories = result_cats
-                accounts = result_accs
+            categories = cached_cats if cached_cats is not None else result_cats
+            accounts = result_accs
     except Exception as e:
         logger.error(f"Error loading expenses data: {e}")
         import traceback
@@ -4833,14 +4848,13 @@ def api_sync_expenses_from_poster():
     db = get_database()
     poster_accounts = db.get_accounts(g.user_id)
 
-    if not poster_accounts:
-        return jsonify({'success': False, 'error': 'No Poster accounts', 'synced': 0, 'skipped': 0, 'errors': []})
-
     # Kazakhstan time UTC+5
     kz_tz = KZ_TZ
     today = _kz_now()
     date_str = today.strftime("%Y%m%d")
 
+    # Clear cached Poster data so latest accounts/categories are pulled
+    _cache_clear_user(g.user_id)
 
     synced = 0
     updated = 0
@@ -5110,6 +5124,8 @@ def api_process_expenses(validated=None):
     if not poster_accounts:
         return jsonify({'success': False, 'error': 'No Poster accounts'})
 
+    # Clear cache so fresh balances are fetched
+    _cache_clear_user(g.user_id)
 
     created = 0
     errors = []
