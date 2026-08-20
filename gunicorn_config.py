@@ -5,6 +5,13 @@ Telegram bot asyncio event loop running in a daemon thread is shared
 across all request-handling threads.
 """
 import os
+import sys
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+if '/app' not in sys.path:
+    sys.path.insert(0, '/app')
 
 # Bind to the port Railway injects, defaulting to 8080
 bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
