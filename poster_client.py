@@ -504,25 +504,20 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                item_sum = item.get('sum')
-                if item_sum is None:
-                    item_sum = round(float(num) * float(item['price']), 2)
-                else:
-                    item_sum = round(float(item_sum), 2)
-
+                unit_price = item['price']
                 item_type = item.get('type', 'ingredient')
-                poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
+                poster_type = type_map.get(item_type, type_map.get('ingredient', 4))
 
                 data[f'ingredient[{idx}][id]'] = item['id']
                 data[f'ingredient[{idx}][type]'] = poster_type
                 data[f'ingredient[{idx}][num]'] = num_for_api
-                data[f'ingredient[{idx}][sum]'] = item_sum
+                data[f'ingredient[{idx}][sum]'] = unit_price
                 if item.get('packing') is not None and item.get('packing') != '':
                     data[f'ingredient[{idx}][packing]'] = item['packing']
 
             # Payment transaction
             total_amount = round(sum(
-                item.get('sum', item['num'] * item['price'])
+                float(item['num']) * float(item['price'])
                 for item in ingredients
             ), 2)
             data['transactions[0][account_id]'] = account_id
@@ -535,7 +530,7 @@ class PosterClient:
         def _build_legacy_data(type_map):
             """Build form data in legacy flat format (works for some accounts)"""
             total_amount = round(sum(
-                item.get('sum', item['num'] * item['price'])
+                float(item['num']) * float(item['price'])
                 for item in ingredients
             ), 2)
 
