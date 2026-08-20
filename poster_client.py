@@ -584,53 +584,55 @@ class PosterClient:
 
             return data
 
-        # Poster API type mapping for supplies: ingredient=1, semi_product=2, product=4 (or 3)
-        type_map_v1 = {'ingredient': 1, 'semi_product': 2, 'product': 4}
-        type_map_v2 = {'ingredient': 1, 'semi_product': 2, 'product': 3}
+        # Poster API type mapping:
+        # In Poster docs format: ingredient=4, semi_product=2, product=1 (type 1 is product/dish, type 4 is ingredient)
+        # In Poster legacy format: ingredient=1, semi_product=2, product=4
+        docs_type_map = {'ingredient': 4, 'semi_product': 2, 'product': 1}
+        legacy_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
 
         logger.info(f"Creating supply: supplier={supplier_id}, storage={storage_id}, "
                     f"items={len(ingredients)}, account_id={account_id}")
 
-        # Try Strategy 1: Docs format with standard type map (product=4)
-        data = _build_supply_data(type_map_v1)
-        logger.info(f"Supply data (docs format): {data}")
+        # Try Strategy 1: Docs format with ingredient=4, product=1
+        data = _build_supply_data(docs_type_map)
+        logger.info(f"Supply data (docs format, ingredient=4): {data}")
 
         try:
             result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
         except Exception as e1:
             error_msg1 = str(e1)
-            logger.warning(f"Docs format failed: {error_msg1}. Trying legacy format...")
+            logger.warning(f"Docs format (ingredient=4) failed: {error_msg1}. Trying legacy format (ingredient=1)...")
 
-            # Try Strategy 2: Legacy format with standard type map (product=4)
-            data = _build_legacy_data(type_map_v1)
-            logger.info(f"Supply data (legacy format): {data}")
+            # Try Strategy 2: Legacy format with ingredient=1, product=4
+            data = _build_legacy_data(legacy_type_map)
+            logger.info(f"Supply data (legacy format, ingredient=1): {data}")
 
             try:
                 result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
             except Exception as e2:
                 error_msg2 = str(e2)
-                logger.warning(f"Legacy format also failed: {error_msg2}. Trying docs format with product=3...")
+                logger.warning(f"Legacy format (ingredient=1) failed: {error_msg2}. Trying docs format (ingredient=1)...")
 
-                # Try Strategy 3: Docs format with product=3
-                data = _build_supply_data(type_map_v2)
-                logger.info(f"Supply data (docs format + product=3): {data}")
+                # Try Strategy 3: Docs format with ingredient=1, product=4
+                data = _build_supply_data(legacy_type_map)
+                logger.info(f"Supply data (docs format, ingredient=1): {data}")
 
                 try:
                     result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
                 except Exception as e3:
                     error_msg3 = str(e3)
-                    logger.warning(f"Docs (product=3) failed: {error_msg3}. Trying legacy format with product=3...")
+                    logger.warning(f"Docs (ingredient=1) failed: {error_msg3}. Trying legacy format (ingredient=4)...")
 
-                    # Try Strategy 4: Legacy format with product=3
-                    data = _build_legacy_data(type_map_v2)
-                    logger.info(f"Supply data (legacy format + product=3): {data}")
+                    # Try Strategy 4: Legacy format with ingredient=4, product=1
+                    data = _build_legacy_data(docs_type_map)
+                    logger.info(f"Supply data (legacy format, ingredient=4): {data}")
 
                     try:
                         result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
                     except Exception as e4:
                         ingredient_ids = [item['id'] for item in ingredients]
                         logger.error(f"All supply formats failed. IDs: {ingredient_ids}. "
-                                    f"Errors: docs={error_msg1}, legacy={error_msg2}, docs_v2={error_msg3}, legacy_v2={e4}")
+                                    f"Errors: docs_v1={error_msg1}, legacy_v1={error_msg2}, docs_v2={error_msg3}, legacy_v2={e4}")
                         raise Exception(
                             f"Ошибка Poster API: Не удалось создать поставку ({error_msg1}). "
                             f"Ингредиенты ID: {ingredient_ids}. "
