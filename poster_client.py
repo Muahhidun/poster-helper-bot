@@ -119,12 +119,12 @@ class PosterClient:
                 error = result['error']
                 # Handle both error formats: int error code or dict with message
                 if isinstance(error, dict):
-                    error_msg = error.get('message', 'Unknown error')
+                    error_msg = error.get('message') or error.get('error') or str(error)
                     error_code = error.get('code', 0)
                 else:
                     # Error is just a code (int)
                     error_code = error
-                    error_msg = f"Error code {error_code}"
+                    error_msg = result.get('message') or result.get('response') or f"Error code {error_code}"
                 raise Exception(f"Poster API error ({error_code}): {error_msg}")
 
             return result
@@ -504,20 +504,25 @@ class PosterClient:
                     else:
                         num_for_api = str(num)
 
-                unit_price = item['price']
+                item_sum = item.get('sum')
+                if item_sum is None:
+                    item_sum = round(float(num) * float(item['price']), 2)
+                else:
+                    item_sum = round(float(item_sum), 2)
+
                 item_type = item.get('type', 'ingredient')
                 poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
 
                 data[f'ingredient[{idx}][id]'] = item['id']
                 data[f'ingredient[{idx}][type]'] = poster_type
                 data[f'ingredient[{idx}][num]'] = num_for_api
-                data[f'ingredient[{idx}][sum]'] = unit_price
-                if item.get('packing'):
+                data[f'ingredient[{idx}][sum]'] = item_sum
+                if item.get('packing') is not None and item.get('packing') != '':
                     data[f'ingredient[{idx}][packing]'] = item['packing']
 
             # Payment transaction
             total_amount = round(sum(
-                item['num'] * item['price']
+                item.get('sum', item['num'] * item['price'])
                 for item in ingredients
             ), 2)
             data['transactions[0][account_id]'] = account_id
@@ -530,7 +535,7 @@ class PosterClient:
         def _build_legacy_data(type_map):
             """Build form data in legacy flat format (works for some accounts)"""
             total_amount = round(sum(
-                item['num'] * item['price']
+                item.get('sum', item['num'] * item['price'])
                 for item in ingredients
             ), 2)
 
@@ -553,7 +558,11 @@ class PosterClient:
                         num_for_api = str(num)
 
                 unit_price = item['price']
-                ingredient_sum = round(num * unit_price, 2)
+                item_sum = item.get('sum')
+                if item_sum is None:
+                    item_sum = round(float(num) * float(unit_price), 2)
+                else:
+                    item_sum = round(float(item_sum), 2)
 
                 item_type = item.get('type', 'ingredient')
                 poster_type = type_map.get(item_type, type_map.get('ingredient', 1))
@@ -562,9 +571,11 @@ class PosterClient:
                 data[f'ingredients[{idx}][type]'] = poster_type
                 data[f'ingredients[{idx}][num]'] = num_for_api
                 data[f'ingredients[{idx}][price]'] = unit_price
-                data[f'ingredients[{idx}][ingredient_sum]'] = ingredient_sum
-                data[f'ingredients[{idx}][tax_id]'] = item.get('tax_id', 0)
-                data[f'ingredients[{idx}][packing]'] = item.get('packing', 1)
+                data[f'ingredients[{idx}][ingredient_sum]'] = item_sum
+                if item.get('tax_id') is not None and item.get('tax_id') != '':
+                    data[f'ingredients[{idx}][tax_id]'] = item['tax_id']
+                if item.get('packing') is not None and item.get('packing') != '':
+                    data[f'ingredients[{idx}][packing]'] = item['packing']
 
             data['transactions[0][account_id]'] = account_id
             data['transactions[0][date]'] = date
@@ -573,15 +584,15 @@ class PosterClient:
 
             return data
 
-        # Poster API type mapping for supplies: ingredient=1, semi_product=2, product=4
-        docs_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
-        legacy_type_map = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+        # Poster API type mapping for supplies: ingredient=1, semi_product=2, product=4 (or 3)
+        type_map_v1 = {'ingredient': 1, 'semi_product': 2, 'product': 4}
+        type_map_v2 = {'ingredient': 1, 'semi_product': 2, 'product': 3}
 
         logger.info(f"Creating supply: supplier={supplier_id}, storage={storage_id}, "
                     f"items={len(ingredients)}, account_id={account_id}")
 
-        # Try documented format first (supply[] wrapper, ingredient singular, type: ingredient=4)
-        data = _build_supply_data(docs_type_map)
+        # Try Strategy 1: Docs format with standard type map (product=4)
+        data = _build_supply_data(type_map_v1)
         logger.info(f"Supply data (docs format): {data}")
 
         try:
@@ -590,31 +601,41 @@ class PosterClient:
             error_msg1 = str(e1)
             logger.warning(f"Docs format failed: {error_msg1}. Trying legacy format...")
 
-            # Try legacy flat format with legacy type mapping (ingredient=1)
-            data = _build_legacy_data(legacy_type_map)
+            # Try Strategy 2: Legacy format with standard type map (product=4)
+            data = _build_legacy_data(type_map_v1)
             logger.info(f"Supply data (legacy format): {data}")
 
             try:
                 result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
             except Exception as e2:
                 error_msg2 = str(e2)
-                logger.warning(f"Legacy format also failed: {error_msg2}. Trying docs format with legacy types...")
+                logger.warning(f"Legacy format also failed: {error_msg2}. Trying docs format with product=3...")
 
-                # Try docs format but with legacy type mapping
-                data = _build_supply_data(legacy_type_map)
-                logger.info(f"Supply data (docs format + legacy types): {data}")
+                # Try Strategy 3: Docs format with product=3
+                data = _build_supply_data(type_map_v2)
+                logger.info(f"Supply data (docs format + product=3): {data}")
 
                 try:
                     result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
                 except Exception as e3:
-                    ingredient_ids = [item['id'] for item in ingredients]
-                    logger.error(f"All supply formats failed. IDs: {ingredient_ids}. "
-                                f"Errors: docs={error_msg1}, legacy={error_msg2}, mixed={e3}")
-                    raise Exception(
-                        f"Ошибка Poster API: Не удалось создать поставку. "
-                        f"Ингредиенты ID: {ingredient_ids}. "
-                        f"Проверьте, что ингредиенты существуют в этом заведении."
-                    )
+                    error_msg3 = str(e3)
+                    logger.warning(f"Docs (product=3) failed: {error_msg3}. Trying legacy format with product=3...")
+
+                    # Try Strategy 4: Legacy format with product=3
+                    data = _build_legacy_data(type_map_v2)
+                    logger.info(f"Supply data (legacy format + product=3): {data}")
+
+                    try:
+                        result = await self._request('POST', 'storage.createSupply', data=data, use_json=False)
+                    except Exception as e4:
+                        ingredient_ids = [item['id'] for item in ingredients]
+                        logger.error(f"All supply formats failed. IDs: {ingredient_ids}. "
+                                    f"Errors: docs={error_msg1}, legacy={error_msg2}, docs_v2={error_msg3}, legacy_v2={e4}")
+                        raise Exception(
+                            f"Ошибка Poster API: Не удалось создать поставку ({error_msg1}). "
+                            f"Ингредиенты ID: {ingredient_ids}. "
+                            f"Проверьте, что ингредиенты, поставщик и счет списания существуют в этом заведении."
+                        )
 
         supply_id = result.get('response')
         if supply_id:

@@ -6571,9 +6571,11 @@ def process_supply(draft_id):
                     if not supplier_id and suppliers:
                         supplier_id = int(suppliers[0]['supplier_id'])
 
-                    # Process finance accounts
+                    # Process finance accounts (validate against this account's finance accounts)
+                    valid_account_ids = {int(acc['account_id']): acc for acc in finance_accounts} if finance_accounts else {}
                     account_id = draft.get('account_id')
-                    if not account_id:
+                    if not account_id or int(account_id) not in valid_account_ids:
+                        account_id = None
                         source = draft.get('source', 'cash')
                         if source == 'kaspi':
                             for acc in finance_accounts:
@@ -6596,7 +6598,8 @@ def process_supply(draft_id):
                     if not account_id and finance_accounts:
                         account_id = int(finance_accounts[0]['account_id'])
 
-                    # Process storages
+                    # Process storages (validate against this account's storages)
+                    valid_storage_ids = {int(st['storage_id']) for st in storages} if storages else set()
                     api_default_storage_id = int(storages[0]['storage_id']) if storages else 1
 
                     # Prepare ingredients for this account
@@ -6647,7 +6650,7 @@ def process_supply(draft_id):
                     supply_storage_id = api_default_storage_id
                     for item in account_items:
                         item_storage_id = item.get('storage_id')
-                        if item_storage_id:
+                        if item_storage_id and int(item_storage_id) in valid_storage_ids:
                             supply_storage_id = int(item_storage_id)
                             break  # Use first item's storage_id
 
