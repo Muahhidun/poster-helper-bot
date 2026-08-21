@@ -892,6 +892,32 @@ class UserDatabase:
         # Run migration for purchase sheet tables
         self._migrate_purchase_sheet()
 
+        # Clean invalid or corrupted aliases
+        self._clean_invalid_aliases()
+
+    def _clean_invalid_aliases(self):
+        """Clean up mistakenly saved or corrupt aliases"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    DELETE FROM ingredient_aliases
+                    WHERE (alias_text LIKE '%фьюс%' OR alias_text LIKE '%fuse%')
+                      AND (poster_item_name LIKE '%палочк%' OR poster_item_name LIKE '%перреро%')
+                """)
+            else:
+                cursor.execute("""
+                    DELETE FROM ingredient_aliases
+                    WHERE (alias_text ILIKE '%фьюс%' OR alias_text ILIKE '%fuse%')
+                      AND (poster_item_name ILIKE '%палочк%' OR poster_item_name ILIKE '%перреро%')
+                """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ Cleaned invalid aliases from database")
+        except Exception as e:
+            logger.warning(f"Error during alias cleanup: {e}")
+
     def _migrate_shift_closings_fix_unique(self):
         """Fix UNIQUE constraint on shift_closings to include poster_account_id.
 

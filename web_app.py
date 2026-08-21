@@ -1,6 +1,7 @@
 """Flask web application for managing ingredient aliases and Telegram Mini App API"""
 import os
 import csv
+from typing import Optional, Dict, List, Tuple
 import secrets
 import hmac
 import hashlib
@@ -545,6 +546,50 @@ def resolve_supplier_name_and_id(user_id: int, text: str) -> tuple:
         logger.error(f"Error in fuzzy matching supplier: {e}")
 
     return text, None
+
+
+def resolve_item_match(ing_matcher, prod_matcher, name: str, target_account: Optional[str] = None):
+    """
+    Match item against both ingredient and product catalogs.
+    Prioritizes:
+    1. Exact string matches (products or ingredients).
+    2. Higher confidence score.
+    3. Primary account ('Pizzburg') over secondary account ('Pizzburg-cafe').
+    Returns: (item_id, matched_name, unit, item_type, account_name)
+    """
+    if not name:
+        return None, None, None, 'ingredient', None
+
+    from matchers import normalize_text_for_matching
+    name_norm = normalize_text_for_matching(name)
+    ing_match = ing_matcher.match(name, target_account=target_account) if ing_matcher else None
+    prod_match = prod_matcher.match(name, target_account=target_account) if prod_matcher else None
+
+    if not ing_match and not prod_match:
+        return None, None, None, 'ingredient', None
+
+    if ing_match and not prod_match:
+        return ing_match[0], ing_match[1], ing_match[2], 'ingredient', ing_match[4]
+
+    if prod_match and not ing_match:
+        return prod_match[0], prod_match[1], prod_match[2], 'product', prod_match[4]
+
+    # Both matched: compare quality
+    ing_exact = (normalize_text_for_matching(ing_match[1]) == name_norm)
+    prod_exact = (normalize_text_for_matching(prod_match[1]) == name_norm)
+
+    if prod_exact and not ing_exact:
+        return prod_match[0], prod_match[1], prod_match[2], 'product', prod_match[4]
+    elif ing_exact and not prod_exact:
+        return ing_match[0], ing_match[1], ing_match[2], 'ingredient', ing_match[4]
+
+    # Compare scores
+    ing_score = ing_match[3]
+    prod_score = prod_match[3]
+    if prod_score > ing_score:
+        return prod_match[0], prod_match[1], prod_match[2], 'product', prod_match[4]
+    else:
+        return ing_match[0], ing_match[1], ing_match[2], 'ingredient', ing_match[4]
 
 
 @app.route('/')
@@ -1528,29 +1573,11 @@ def api_supply_ocr(draft_id):
             total = qty * price
             calculated_total += total
             
-            item_id = None
-            item_type = 'ingredient'
-            matched_name = None
-            account_name = None
-            account_id = None
+            item_id, matched_name, _, item_type, account_name = resolve_item_match(
+                ing_matcher, prod_matcher, name, target_account=target_account
+            )
+            account_id = account_name_to_id.get(account_name) if account_name else None
             
-            # Try ingredient matching first
-            match_result = ing_matcher.match(name, target_account=target_account)
-            if match_result:
-                # Returns (ingredient_id, name, unit, score, account_name)
-                item_id, matched_name, _, _, account_name = match_result
-                item_type = 'ingredient'
-            else:
-                # Try product matching if ingredient not found
-                prod_match_result = prod_matcher.match(name, target_account=target_account)
-                if prod_match_result:
-                    # Returns (product_id, name, unit, score, account_name)
-                    item_id, matched_name, _, _, account_name = prod_match_result
-                    item_type = 'product'
-            
-            if account_name:
-                account_id = account_name_to_id.get(account_name)
-                
             # Add to draft
             db.add_supply_draft_item(
                 supply_draft_id=draft_id,
@@ -4210,24 +4237,10 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
             price = float(item.get('price') or 0)
             unit = item.get('unit', 'шт').strip().lower()
 
-            item_id = None
-            item_type = 'ingredient'
-            matched_name = None
-            account_name = None
-            account_id = None
-
-            match_result = ing_matcher.match(name, target_account=target_account)
-            if match_result:
-                item_id, matched_name, _, _, account_name = match_result
-                item_type = 'ingredient'
-            else:
-                prod_match_result = prod_matcher.match(name, target_account=target_account)
-                if prod_match_result:
-                    item_id, matched_name, _, _, account_name = prod_match_result
-                    item_type = 'product'
-
-            if account_name:
-                account_id = account_name_to_id.get(account_name)
+            item_id, matched_name, _, item_type, account_name = resolve_item_match(
+                ing_matcher, prod_matcher, name, target_account=target_account
+            )
+            account_id = account_name_to_id.get(account_name) if account_name else None
 
             parsed_quantity = qty
             parsed_unit = item.get('unit', 'шт')
@@ -4675,24 +4688,10 @@ def api_import_batch():
                             qty = float(item.get('qty') or 1)
                             price = float(item.get('price') or 0)
                             
-                            item_id = None
-                            item_type = 'ingredient'
-                            matched_name = None
-                            account_name = None
-                            account_id = None
-                            
-                            match_result = ing_matcher.match(name, target_account=target_account)
-                            if match_result:
-                                item_id, matched_name, _, _, account_name = match_result
-                                item_type = 'ingredient'
-                            else:
-                                prod_match_result = prod_matcher.match(name, target_account=target_account)
-                                if prod_match_result:
-                                    item_id, matched_name, _, _, account_name = prod_match_result
-                                    item_type = 'product'
-                                    
-                            if account_name:
-                                account_id = account_name_to_id.get(account_name)
+                            item_id, matched_name, _, item_type, account_name = resolve_item_match(
+                                ing_matcher, prod_matcher, name, target_account=target_account
+                            )
+                            account_id = account_name_to_id.get(account_name) if account_name else None
                                 
                             db.add_supply_draft_item(
                                 supply_draft_id=supply_draft_id,

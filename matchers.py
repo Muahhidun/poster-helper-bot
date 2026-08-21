@@ -536,41 +536,26 @@ class IngredientMatcher:
                     item_id = int(row['poster_item_id'])
 
                     # Find candidates by ID to resolve collisions
-                    candidates = self._id_entries.get(item_id, [])
+                    candidates = list(self._id_entries.get(item_id, []))
+                    db_item_name = row.get('poster_item_name', '').strip().lower()
+
+                    # Also find candidates across all accounts by matching item name
+                    if db_item_name and db_item_name in self.names:
+                        for ing_id, acc_name in self.names[db_item_name]:
+                            cand_info = self.ingredients.get((ing_id, acc_name))
+                            if cand_info and cand_info not in candidates:
+                                candidates.append(cand_info)
+
                     if not candidates:
                         filtered_count += 1
                         continue
 
-                    target_info = None
-                    if len(candidates) == 1:
-                        target_info = candidates[0]
-                    else:
-                        db_item_name = row.get('poster_item_name', '').strip().lower()
-                        best_match = None
-                        best_score = -1
-                        for cand in candidates:
-                            cand_name = cand['name'].lower()
-                            if db_item_name == cand_name:
-                                target_info = cand
-                                break
-                            score = fuzz.ratio(db_item_name, cand_name)
-                            if score > best_score:
-                                best_score = score
-                                best_match = cand
-                        if not target_info and best_match and best_score >= 80:
-                            target_info = best_match
-                        if not target_info:
-                            for cand in candidates:
-                                if cand.get('account_name') == 'Pizzburg':
-                                    target_info = cand
-                                    break
-                            if not target_info:
-                                target_info = candidates[0]
-
-                    if target_info:
-                        self.aliases.setdefault(alias, []).append((target_info['id'], target_info['account_name']))
-                    else:
-                        filtered_count += 1
+                    # Add all candidates so priority logic can pick the primary account (Pizzburg)
+                    for cand in candidates:
+                        entry = (cand['id'], cand['account_name'])
+                        current_list = self.aliases.setdefault(alias, [])
+                        if entry not in current_list:
+                            current_list.append(entry)
 
                 if filtered_count > 0:
                     logger.warning(f"⚠️ Filtered out {filtered_count}/{len(db_aliases)} aliases (ingredient IDs not found in self.ingredients)")
@@ -694,7 +679,13 @@ class IngredientMatcher:
                     len(list(common_tokens)[0]) < 4
                 )
 
-                if is_suspicious or is_generic_overlap:
+                is_single_word_mismatch = (
+                    len(matched_words) == 1 and 
+                    len(text_words) > 1 and 
+                    (len(common_tokens) / len(text_words) < 0.6 or fuzz.WRatio(text_lower, matched_alias) < 88)
+                )
+
+                if is_suspicious or is_generic_overlap or is_single_word_mismatch:
                     logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
                     continue
 
@@ -1002,41 +993,26 @@ class ProductMatcher:
                     item_id = int(row['poster_item_id'])
 
                     # Find candidates by ID to resolve collisions
-                    candidates = self._id_entries.get(item_id, [])
+                    candidates = list(self._id_entries.get(item_id, []))
+                    db_item_name = row.get('poster_item_name', '').strip().lower()
+
+                    # Also find candidates across all accounts by matching product name
+                    if db_item_name and db_item_name in self.names:
+                        for prod_id, acc_name in self.names[db_item_name]:
+                            cand_info = self.products.get((prod_id, acc_name))
+                            if cand_info and cand_info not in candidates:
+                                candidates.append(cand_info)
+
                     if not candidates:
                         filtered_count += 1
                         continue
 
-                    target_info = None
-                    if len(candidates) == 1:
-                        target_info = candidates[0]
-                    else:
-                        db_item_name = row.get('poster_item_name', '').strip().lower()
-                        best_match = None
-                        best_score = -1
-                        for cand in candidates:
-                            cand_name = cand['name'].lower()
-                            if db_item_name == cand_name:
-                                target_info = cand
-                                break
-                            score = fuzz.ratio(db_item_name, cand_name)
-                            if score > best_score:
-                                best_score = score
-                                best_match = cand
-                        if not target_info and best_match and best_score >= 80:
-                            target_info = best_match
-                        if not target_info:
-                            for cand in candidates:
-                                if cand.get('account_name') == 'Pizzburg':
-                                    target_info = cand
-                                    break
-                            if not target_info:
-                                target_info = candidates[0]
-
-                    if target_info:
-                        self.aliases.setdefault(alias, []).append((target_info['id'], target_info['account_name']))
-                    else:
-                        filtered_count += 1
+                    # Add all candidates so priority logic can pick the primary account (Pizzburg)
+                    for cand in candidates:
+                        entry = (cand['id'], cand['account_name'])
+                        current_list = self.aliases.setdefault(alias, [])
+                        if entry not in current_list:
+                            current_list.append(entry)
 
                 if filtered_count > 0:
                     logger.warning(f"⚠️ Filtered out {filtered_count}/{product_count} product aliases (product IDs not found in self.products)")
@@ -1160,7 +1136,13 @@ class ProductMatcher:
                     len(list(common_tokens)[0]) < 4
                 )
 
-                if is_suspicious or is_generic_overlap:
+                is_single_word_mismatch = (
+                    len(matched_words) == 1 and 
+                    len(text_words) > 1 and 
+                    (len(common_tokens) / len(text_words) < 0.6 or fuzz.WRatio(text_lower, matched_alias) < 88)
+                )
+
+                if is_suspicious or is_generic_overlap or is_single_word_mismatch:
                     logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
                     continue
 
