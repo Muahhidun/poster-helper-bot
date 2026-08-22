@@ -538,12 +538,23 @@ def resolve_supplier_name_and_id(user_id: int, text: str) -> tuple:
     try:
         from matchers import get_supplier_matcher
         supplier_matcher = get_supplier_matcher(user_id)
-        matched_id = supplier_matcher.match(text, score_cutoff=60)  # Use 60 for high tolerance
+        
+        # 1. Match with safe score_cutoff=80
+        matched_id = supplier_matcher.match(text, score_cutoff=80)
         if matched_id:
             name = supplier_matcher.get_supplier_name(matched_id)
             return name, matched_id
+
+        # 2. Check live suppliers from connected accounts
+        live_suppliers = load_suppliers_from_csv(user_id)
+        text_clean = text.strip().lower()
+        for sup in live_suppliers:
+            sup_name = sup.get('name', '').strip()
+            if sup_name.lower() == text_clean:
+                supplier_matcher.add_supplier(sup['id'], sup_name)
+                return sup_name, sup['id']
     except Exception as e:
-        logger.error(f"Error in fuzzy matching supplier: {e}")
+        logger.error(f"Error in resolving supplier: {e}")
 
     return text, None
 
@@ -6859,8 +6870,53 @@ def process_supply(draft_id):
 # Supplier Aliases Web Interface
 # ========================================
 
-def load_suppliers_from_csv():
-    """Load suppliers from CSV file"""
+def load_suppliers_from_csv(user_id: Optional[int] = None):
+    """Load suppliers from connected Poster accounts or CSV file"""
+    target_user_id = user_id
+    if target_user_id is None and has_request_context():
+        target_user_id = getattr(g, 'user_id', None)
+
+    if target_user_id:
+        try:
+            db = get_database()
+            poster_accounts = db.get_accounts(target_user_id)
+            if poster_accounts:
+                from poster_client import PosterClient
+
+                async def _fetch_acc_suppliers():
+                    seen = set()
+                    suppliers_list = []
+                    for acc in poster_accounts:
+                        client = PosterClient(
+                            telegram_user_id=target_user_id,
+                            poster_token=acc['poster_token'],
+                            poster_user_id=acc['poster_user_id'],
+                            poster_base_url=acc['poster_base_url']
+                        )
+                        try:
+                            s_data = await client.get_suppliers()
+                            for s in s_data:
+                                sid = int(s.get('supplier_id', 0))
+                                sname = s.get('supplier_name', '').strip()
+                                if sid and sname and sid not in seen:
+                                    seen.add(sid)
+                                    suppliers_list.append({'id': sid, 'name': sname})
+                        except Exception as e:
+                            logger.warning(f"Error fetching suppliers for {acc.get('account_name')}: {e}")
+                        finally:
+                            await client.close()
+                    return suppliers_list
+
+                live_suppliers = run_async(_fetch_acc_suppliers())
+                if live_suppliers:
+                    from matchers import get_supplier_matcher
+                    sm = get_supplier_matcher(target_user_id)
+                    for sup in live_suppliers:
+                        sm.add_supplier(sup['id'], sup['name'])
+                    return live_suppliers
+        except Exception as e:
+            logger.error(f"Error loading live suppliers for user {target_user_id}: {e}")
+
     suppliers = []
     suppliers_csv = config.DATA_DIR / "poster_suppliers.csv"
 

@@ -373,8 +373,31 @@ class SupplierMatcher:
             except Exception as e:
                 logger.warning(f"Could not load supplier aliases from database: {e}")
 
+    def add_supplier(self, supplier_id: int, name: str, aliases_str: str = ''):
+        """Dynamically add or update a supplier in the matcher."""
+        supplier_id = int(supplier_id)
+        name = name.strip()
+        self.suppliers[supplier_id] = {
+            'id': supplier_id,
+            'name': name
+        }
+        name_clean = name.lower()
+        self.aliases[name_clean] = supplier_id
+        norm_name = normalize_supplier_text(name_clean)
+        if norm_name:
+            self.normalized_aliases[norm_name] = supplier_id
+
+        if aliases_str:
+            for alias in aliases_str.split('|'):
+                alias_clean = alias.strip().lower()
+                if alias_clean:
+                    self.aliases[alias_clean] = supplier_id
+                    norm_alias = normalize_supplier_text(alias_clean)
+                    if norm_alias:
+                        self.normalized_aliases[norm_alias] = supplier_id
+
     def match(self, text: str, score_cutoff: int = 80) -> Optional[int]:
-        """Match supplier by text"""
+        """Match supplier by text with fuzzy matching and safety checks"""
         if not text:
             return None
 
@@ -414,15 +437,27 @@ class SupplierMatcher:
         for candidate in candidates:
             if not candidate:
                 continue
-            match = process.extractOne(
+            matches = process.extract(
                 candidate,
                 norm_aliases_list,
                 scorer=fuzz.WRatio,
-                score_cutoff=score_cutoff
+                limit=10
             )
-            if match:
-                matched_alias = match[0]
-                score = match[1]
+            for match_item in matches:
+                matched_alias = match_item[0]
+                score = match_item[1]
+                if score < score_cutoff:
+                    continue
+
+                # Single-word alias mismatch protection:
+                # If query is multi-word and alias is single-word, ensure token overlap or very high ratio (>=88)
+                cand_words = candidate.split()
+                alias_words = matched_alias.split()
+                if len(cand_words) > 1 and len(alias_words) == 1:
+                    common_tokens = set(cand_words) & set(alias_words)
+                    if not common_tokens and score < 88:
+                        continue
+
                 if score > best_score:
                     best_score = score
                     best_match = matched_alias
@@ -431,6 +466,8 @@ class SupplierMatcher:
             supplier_id = self.normalized_aliases[best_match]
             logger.info(f"Supplier fuzzy match (normalized/translit): '{text}' -> {supplier_id} (score={best_score}, matched_alias='{best_match}')")
             return supplier_id
+
+        return None
 
     def get_supplier_name(self, supplier_id: int) -> Optional[str]:
         """Get supplier name by ID"""
