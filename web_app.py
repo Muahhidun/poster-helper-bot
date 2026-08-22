@@ -13,7 +13,7 @@ import pytz
 from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g, session, has_request_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from database import get_database
