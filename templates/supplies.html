@@ -1478,7 +1478,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         poster_ingredient_id: ingredientId,
                         poster_ingredient_name: ingredientName,
                         poster_account_id: accountId,
-                        poster_account_name: accountName
+                        poster_account_name: accountName,
+                        item_type: itemType,
+                        storage_id: storageId,
+                        storage_name: storageName
                     })
                 });
 
@@ -1492,6 +1495,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             supplyItems[draftId][idx].poster_ingredient_name = ingredientName;
                             supplyItems[draftId][idx].poster_account_id = accountId;
                             supplyItems[draftId][idx].poster_account_name = accountName;
+                            supplyItems[draftId][idx].item_type = itemType;
+                            supplyItems[draftId][idx].storage_id = storageId;
+                            supplyItems[draftId][idx].storage_name = storageName;
                             supplyItems[draftId][idx].lastPrice = lastPrice;
                             if (!supplyItems[draftId][idx].price_per_unit && autoPrice) {
                                 supplyItems[draftId][idx].price_per_unit = autoPrice;
