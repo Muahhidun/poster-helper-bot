@@ -1046,15 +1046,17 @@ document.addEventListener('DOMContentLoaded', function() {
             supplierSearchTimeout = setTimeout(() => {
                 const matches = suppliers.filter(s =>
                     s.name.toLowerCase().includes(query)
-                ).slice(0, 10);
+                ).slice(0, 15);
 
                 if (matches.length === 0) {
                     resultsDiv.innerHTML = '<div class="supplier-result-item" style="color:#999">Не найдено</div>';
                 } else {
                     resultsDiv.innerHTML = matches.map((s, i) => `
                         <div class="supplier-result-item" data-index="${i}"
-                             data-id="${s.id}" data-name="${s.name}">
-                            ${s.name}
+                             data-id="${s.id}" data-name="${s.name}" data-poster-account-id="${s.poster_account_id || ''}"
+                             style="display: flex; justify-content: space-between; align-items: center;">
+                            <span>${s.name}</span>
+                            ${s.poster_account_name ? `<span style="font-size: 0.75rem; color: #888; background: #f0f0f0; border-radius: 4px; padding: 2px 6px;">${s.poster_account_name}</span>` : ''}
                         </div>
                     `).join('');
                 }
@@ -1124,13 +1126,18 @@ document.addEventListener('DOMContentLoaded', function() {
             const draftId = inputEl.dataset.id;
             const supplierId = parseInt(item.dataset.id);
             const supplierName = item.dataset.name;
+            const posterAccountId = item.dataset.posterAccountId ? parseInt(item.dataset.posterAccountId) : null;
 
             inputEl.value = supplierName;
             inputEl.dataset.supplierId = supplierId;
             resultsDiv.style.display = 'none';
 
             // Save to server
-            await updateSupplyDraft(draftId, { supplier_name: supplierName, supplier_id: supplierId });
+            const updatePayload = { supplier_name: supplierName, supplier_id: supplierId };
+            if (posterAccountId) {
+                updatePayload.poster_account_id = posterAccountId;
+            }
+            await updateSupplyDraft(draftId, updatePayload);
             inputEl.classList.add('saved');
             setTimeout(() => inputEl.classList.remove('saved'), 300);
 

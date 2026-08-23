@@ -5928,8 +5928,9 @@ def list_supplies():
                     fetched_items, fetched_suppliers = run_async(_fetch_supply_data())
                     items.extend(fetched_items)
                     for sup in fetched_suppliers:
-                        if sup['id'] not in seen_supplier_ids:
-                            seen_supplier_ids.add(sup['id'])
+                        sup_key = (sup.get('poster_account_id'), sup['id'])
+                        if sup_key not in seen_supplier_ids:
+                            seen_supplier_ids.add(sup_key)
                             all_suppliers.append(sup)
                 except Exception as e:
                     logger.error(f"Error loading reference data from account {acc.get('account_name', acc['id'])}: {e}")
@@ -6925,10 +6926,17 @@ def load_suppliers_from_csv(user_id: Optional[int] = None):
                             s_data = await client.get_suppliers()
                             for s in s_data:
                                 sid = int(s.get('supplier_id', 0))
-                                sname = s.get('supplier_name', '').strip()
-                                if sid and sname and sid not in seen:
-                                    seen.add(sid)
-                                    suppliers_list.append({'id': sid, 'name': sname})
+                                sname = s.get('supplier_name') or s.get('name') or s.get('company_name') or ''
+                                sname = sname.strip()
+                                key = (acc['id'], sid)
+                                if sid and sname and key not in seen:
+                                    seen.add(key)
+                                    suppliers_list.append({
+                                        'id': sid,
+                                        'name': sname,
+                                        'poster_account_id': acc['id'],
+                                        'poster_account_name': acc.get('account_name', '')
+                                    })
                         except Exception as e:
                             logger.warning(f"Error fetching suppliers for {acc.get('account_name')}: {e}")
                         finally:
