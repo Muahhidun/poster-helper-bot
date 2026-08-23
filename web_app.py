@@ -5837,6 +5837,9 @@ def list_supplies():
 
     try:
         accounts = db.get_accounts(g.user_id)
+        all_suppliers = []
+        seen_supplier_ids = set()
+
         if accounts:
             from poster_client import PosterClient
 
@@ -5848,7 +5851,7 @@ def list_supplies():
                     'is_primary': acc.get('is_primary', False)
                 })
 
-            # Load ingredients from all accounts (no deduplication)
+            # Load ingredients, products, storages, and suppliers from all accounts
             for acc in accounts:
                 try:
                     poster_client = PosterClient(
@@ -5858,14 +5861,14 @@ def list_supplies():
                         poster_base_url=acc['poster_base_url']
                     )
 
-
-                    async def _fetch_supply_items():
+                    async def _fetch_supply_data():
                         try:
-                            # Parallel: fetch storages, ingredients, and products
-                            storages, ingredients, products = await asyncio.gather(
+                            # Parallel: fetch storages, ingredients, products, suppliers
+                            storages, ingredients, products, acc_suppliers = await asyncio.gather(
                                 poster_client.get_storages(),
                                 poster_client.get_ingredients(),
-                                poster_client.get_products()
+                                poster_client.get_products(),
+                                poster_client.get_suppliers()
                             )
                             result_items = []
                             storage_map = {int(s.get('storage_id', 0)): s.get('storage_name', '') for s in storages}
@@ -5904,19 +5907,44 @@ def list_supplies():
                                     'poster_account_name': acc.get('account_name', ''),
                                     'storage_id': sid, 'storage_name': sname
                                 })
-                            return result_items
+
+                            result_suppliers = []
+                            for sup in acc_suppliers:
+                                sid = int(sup.get('supplier_id', 0))
+                                sname = sup.get('supplier_name') or sup.get('name') or sup.get('company_name') or ''
+                                sname = sname.strip()
+                                if sid and sname:
+                                    result_suppliers.append({
+                                        'id': sid,
+                                        'name': sname,
+                                        'poster_account_id': acc['id'],
+                                        'poster_account_name': acc.get('account_name', '')
+                                    })
+
+                            return result_items, result_suppliers
                         finally:
                             await poster_client.close()
 
-                    items.extend(run_async(_fetch_supply_items()))
+                    fetched_items, fetched_suppliers = run_async(_fetch_supply_data())
+                    items.extend(fetched_items)
+                    for sup in fetched_suppliers:
+                        if sup['id'] not in seen_supplier_ids:
+                            seen_supplier_ids.add(sup['id'])
+                            all_suppliers.append(sup)
                 except Exception as e:
-                    logger.error(f"Error loading ingredients from account {acc.get('account_name', acc['id'])}: {e}")
+                    logger.error(f"Error loading reference data from account {acc.get('account_name', acc['id'])}: {e}")
 
     except Exception as e:
-        logger.error(f"Error loading ingredients: {e}")
+        logger.error(f"Error loading reference data: {e}")
 
-    # Load suppliers for autocomplete
-    suppliers = load_suppliers_from_csv()
+    if all_suppliers:
+        suppliers = all_suppliers
+        from matchers import get_supplier_matcher
+        sm = get_supplier_matcher(g.user_id)
+        for sup in all_suppliers:
+            sm.add_supplier(sup['id'], sup['name'])
+    else:
+        suppliers = load_suppliers_from_csv(g.user_id)
 
     return render_template('supplies.html',
                           drafts=drafts,
