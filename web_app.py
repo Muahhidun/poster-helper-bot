@@ -6460,24 +6460,7 @@ def update_supply_item(item_id):
                     except Exception as acc_err:
                         logger.error(f"Error resolving fallback account name: {acc_err}")
 
-                # A. Packaging rule: user edited quantity vs parsed quantity
-                if parsed_qty is not None and parsed_qty > 0 and qty is not None:
-                    # Ignore minor floating-point difference
-                    if abs(qty - parsed_qty) > 0.001:
-                        coef = qty / parsed_qty
-                        # original unit is parsed unit (default 'шт')
-                        orig_unit = parsed_unit or 'шт'
-                        db.add_packaging_rule(
-                            telegram_user_id=g.user_id,
-                            poster_ingredient_id=int(ing_id),
-                            original_unit=orig_unit,
-                            coefficient=coef,
-                            target_unit='кг',
-                            notes=f"Авто-изучено: {parsed_qty} {orig_unit} -> {qty} кг",
-                            account_name=acc_name
-                        )
-
-                # B. Habit: user edited price
+                # Habit: user edited price
                 if price is not None and price > 0:
                     db.add_ingredient_habit(
                         telegram_user_id=g.user_id,

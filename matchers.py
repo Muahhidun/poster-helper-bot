@@ -570,11 +570,18 @@ class IngredientMatcher:
 
                     # Normalize alias text (same as input text normalization)
                     alias = normalize_text_for_matching(row['alias_text'])
-                    item_id = int(row['poster_item_id'])
-
                     # Find candidates by ID to resolve collisions
                     candidates = list(self._id_entries.get(item_id, []))
                     db_item_name = row.get('poster_item_name', '').strip().lower()
+
+                    # Filter candidates by db_item_name if known to avoid cross-account ID collisions
+                    if db_item_name:
+                        matched_cands = [
+                            c for c in candidates
+                            if c['name'].strip().lower() == db_item_name or fuzz.ratio(c['name'].strip().lower(), db_item_name) >= 80
+                        ]
+                        if matched_cands:
+                            candidates = matched_cands
 
                     # Also find candidates across all accounts by matching item name
                     if db_item_name and db_item_name in self.names:
