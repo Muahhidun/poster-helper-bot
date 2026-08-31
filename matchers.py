@@ -9,6 +9,13 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# A short-lived auto-learning feature used to save the previous (often OCR/AI
+# generated) supplier name as an alias whenever a draft was corrected by hand.
+# Those rows can map canonical names such as "Алимжан помидоры" to an unrelated
+# supplier.  New rows are no longer created, but production databases may still
+# contain old ones, so they must never participate in automatic matching.
+CORRUPTED_AUTO_SUPPLIER_ALIAS_NOTE = "Авто-обучено при редактировании черновика"
+
 
 def normalize_text_for_matching(text: str) -> str:
     """
@@ -299,6 +306,10 @@ class SupplierMatcher:
         self.suppliers: Dict[int, Dict] = {}  # supplier_id -> supplier_info
         self.aliases: Dict[str, int] = {}  # alias -> supplier_id
         self.normalized_aliases: Dict[str, int] = {}  # normalized_alias -> supplier_id
+        # Keep Poster/CSV names separately so a database alias can never
+        # override the authoritative supplier catalogue.
+        self.canonical_aliases: Dict[str, int] = {}
+        self.canonical_normalized_aliases: Dict[str, int] = {}
 
         # Determine CSV path based on user (with fallback to global)
         if telegram_user_id:
@@ -333,18 +344,22 @@ class SupplierMatcher:
                 # Add main name as alias
                 name_clean = name.lower()
                 self.aliases[name_clean] = supplier_id
+                self.canonical_aliases[name_clean] = supplier_id
                 norm_name = normalize_supplier_text(name_clean)
                 if norm_name:
                     self.normalized_aliases[norm_name] = supplier_id
+                    self.canonical_normalized_aliases[norm_name] = supplier_id
 
                 # Add additional aliases
                 if aliases_str:
                     for alias in aliases_str.split('|'):
                         alias_clean = alias.strip().lower()
                         self.aliases[alias_clean] = supplier_id
+                        self.canonical_aliases[alias_clean] = supplier_id
                         norm_alias = normalize_supplier_text(alias_clean)
                         if norm_alias:
                             self.normalized_aliases[norm_alias] = supplier_id
+                            self.canonical_normalized_aliases[norm_alias] = supplier_id
 
         logger.info(f"Loaded {len(self.suppliers)} suppliers with {len(self.aliases)} aliases ({len(self.normalized_aliases)} normalized) for user {self.telegram_user_id}")
 
@@ -361,11 +376,33 @@ class SupplierMatcher:
                 for row in db_aliases:
                     alias_text = row['alias_text'].strip().lower()
                     supplier_id = int(row['poster_supplier_id'])
+                    notes = (row.get('notes') or '').strip()
+
+                    if notes.startswith(CORRUPTED_AUTO_SUPPLIER_ALIAS_NOTE):
+                        logger.warning(
+                            "Ignoring legacy auto-learned supplier alias '%s' -> %s",
+                            alias_text,
+                            row.get('poster_supplier_name') or supplier_id,
+                        )
+                        continue
+
+                    norm_alias = normalize_supplier_text(alias_text)
+                    canonical_id = (
+                        self.canonical_aliases.get(alias_text)
+                        or self.canonical_normalized_aliases.get(norm_alias)
+                    )
+                    if canonical_id and canonical_id != supplier_id:
+                        logger.warning(
+                            "Ignoring supplier alias '%s' -> %s because the canonical catalogue maps it to %s",
+                            alias_text,
+                            supplier_id,
+                            canonical_id,
+                        )
+                        continue
                     
                     # Verify supplier exists in our database/CSV
                     if supplier_id in self.suppliers:
                         self.aliases[alias_text] = supplier_id
-                        norm_alias = normalize_supplier_text(alias_text)
                         if norm_alias:
                             self.normalized_aliases[norm_alias] = supplier_id
                             
@@ -383,18 +420,22 @@ class SupplierMatcher:
         }
         name_clean = name.lower()
         self.aliases[name_clean] = supplier_id
+        self.canonical_aliases[name_clean] = supplier_id
         norm_name = normalize_supplier_text(name_clean)
         if norm_name:
             self.normalized_aliases[norm_name] = supplier_id
+            self.canonical_normalized_aliases[norm_name] = supplier_id
 
         if aliases_str:
             for alias in aliases_str.split('|'):
                 alias_clean = alias.strip().lower()
                 if alias_clean:
                     self.aliases[alias_clean] = supplier_id
+                    self.canonical_aliases[alias_clean] = supplier_id
                     norm_alias = normalize_supplier_text(alias_clean)
                     if norm_alias:
                         self.normalized_aliases[norm_alias] = supplier_id
+                        self.canonical_normalized_aliases[norm_alias] = supplier_id
 
     def match(self, text: str, score_cutoff: int = 80) -> Optional[int]:
         """Match supplier by text with fuzzy matching and safety checks"""
@@ -403,6 +444,10 @@ class SupplierMatcher:
 
         # 1. First, try exact match on raw lower text
         text_lower = text.strip().lower()
+        if text_lower in self.canonical_aliases:
+            supplier_id = self.canonical_aliases[text_lower]
+            logger.info(f"Supplier canonical match: '{text}' -> {supplier_id}")
+            return supplier_id
         if text_lower in self.aliases:
             supplier_id = self.aliases[text_lower]
             logger.info(f"Supplier exact match: '{text}' -> {supplier_id}")
@@ -410,6 +455,10 @@ class SupplierMatcher:
 
         # 2. Try exact match on normalized text
         norm_text = normalize_supplier_text(text)
+        if norm_text in self.canonical_normalized_aliases:
+            supplier_id = self.canonical_normalized_aliases[norm_text]
+            logger.info(f"Supplier canonical match (normalized): '{text}' -> {supplier_id}")
+            return supplier_id
         if norm_text in self.normalized_aliases:
             supplier_id = self.normalized_aliases[norm_text]
             logger.info(f"Supplier exact match (normalized): '{text}' -> {supplier_id}")
@@ -417,6 +466,10 @@ class SupplierMatcher:
 
         # 3. Transliterate normalized text and try exact match
         translit_text = transliterate_latin_to_cyrillic(norm_text)
+        if translit_text in self.canonical_normalized_aliases:
+            supplier_id = self.canonical_normalized_aliases[translit_text]
+            logger.info(f"Supplier canonical match (transliterated): '{text}' -> {supplier_id}")
+            return supplier_id
         if translit_text in self.normalized_aliases:
             supplier_id = self.normalized_aliases[translit_text]
             logger.info(f"Supplier exact match (transliterated): '{text}' -> {supplier_id}")

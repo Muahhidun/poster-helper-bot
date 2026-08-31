@@ -3317,7 +3317,8 @@ class UserDatabase:
                 SELECT poster_supplier_id, poster_supplier_name
                 FROM supplier_aliases
                 WHERE telegram_user_id = ? AND alias_text = ?
-            """, (telegram_user_id, alias_normalized))
+                  AND COALESCE(notes, '') NOT LIKE ?
+            """, (telegram_user_id, alias_normalized, 'Авто-обучено при редактировании черновика%'))
             row = cursor.fetchone()
 
             if not row:
@@ -3326,7 +3327,9 @@ class UserDatabase:
                     SELECT poster_supplier_id, poster_supplier_name, alias_text
                     FROM supplier_aliases
                     WHERE telegram_user_id = ?
-                """, (telegram_user_id,))
+                      AND COALESCE(notes, '') NOT LIKE ?
+                    ORDER BY LENGTH(alias_text) DESC
+                """, (telegram_user_id, 'Авто-обучено при редактировании черновика%'))
                 all_aliases = cursor.fetchall()
 
                 for alias_row in all_aliases:
@@ -3340,7 +3343,8 @@ class UserDatabase:
                 SELECT poster_supplier_id, poster_supplier_name
                 FROM supplier_aliases
                 WHERE telegram_user_id = %s AND alias_text = %s
-            """, (telegram_user_id, alias_normalized))
+                  AND COALESCE(notes, '') NOT LIKE %s
+            """, (telegram_user_id, alias_normalized, 'Авто-обучено при редактировании черновика%'))
             row = cursor.fetchone()
 
             if not row:
@@ -3348,7 +3352,9 @@ class UserDatabase:
                     SELECT poster_supplier_id, poster_supplier_name, alias_text
                     FROM supplier_aliases
                     WHERE telegram_user_id = %s
-                """, (telegram_user_id,))
+                      AND COALESCE(notes, '') NOT LIKE %s
+                    ORDER BY LENGTH(alias_text) DESC
+                """, (telegram_user_id, 'Авто-обучено при редактировании черновика%'))
                 all_aliases = cursor.fetchall()
 
                 for alias_row in all_aliases:

@@ -9,6 +9,55 @@ from config import POSTER_BASE_URL, POSTER_TOKEN, POSTER_USER_ID
 logger = logging.getLogger(__name__)
 
 
+def find_existing_finance_transaction(
+    transactions: List[Dict],
+    *,
+    transaction_type: int,
+    category_id: int,
+    account_from_id: int,
+    amount: int,
+    comment: str,
+) -> Optional[Dict]:
+    """Find the same Poster finance operation in a daily transaction list.
+
+    Poster returns finance amounts in minor units from ``getTransactions`` even
+    though ``createTransactions`` accepts whole tenge.  Matching the complete
+    operation lets a retry resume after a partial multi-salary failure without
+    creating the employees that already succeeded a second time.
+    """
+    expected_comment = (comment or '').strip().casefold()
+    if not expected_comment:
+        return None
+
+    for tx in transactions or []:
+        if str(tx.get('delete') or '0') == '1':
+            continue
+        if str(tx.get('type', '')) != str(transaction_type):
+            continue
+        if (tx.get('comment') or '').strip().casefold() != expected_comment:
+            continue
+
+        raw_amount = tx.get('amount_from')
+        if raw_amount is None:
+            raw_amount = tx.get('amount')
+        try:
+            amount_kzt = abs(float(raw_amount)) / 100
+        except (TypeError, ValueError):
+            continue
+        if abs(amount_kzt - float(amount)) > 0.01:
+            continue
+
+        tx_category = tx.get('category') or tx.get('finance_category_id') or tx.get('category_id')
+        if tx_category is not None and str(tx_category) != str(category_id):
+            continue
+        tx_account = tx.get('account_from_id') or tx.get('account_from') or tx.get('account_id')
+        if tx_account is not None and str(tx_account) != str(account_from_id):
+            continue
+        return tx
+
+    return None
+
+
 class PosterClient:
     """Client for interacting with Poster API"""
 

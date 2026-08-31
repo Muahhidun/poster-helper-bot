@@ -5808,6 +5808,15 @@ async def post_init(application: Application) -> None:
     logger.info(f"✅ Web App menu button set: {WEBAPP_URL}")
 
 
+async def configure_notification_only_bot(application: Application) -> None:
+    """Remove interactive Telegram UI while keeping outbound notifications."""
+    from telegram import MenuButtonDefault
+
+    await application.bot.delete_my_commands()
+    await application.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+    logger.info("✅ Telegram configured in notification-only mode (commands and Mini App button removed)")
+
+
 async def run_daily_transactions_for_user(telegram_user_id: int):
     """
     Выполнить ежедневные транзакции для пользователя
@@ -5941,22 +5950,12 @@ async def check_and_notify_missed_transactions(app: Application):
                 if not transactions_exist:
                     logger.info(f"⚠️ Ежедневные транзакции не найдены для пользователя {telegram_user_id}. Отправляю уведомление...")
 
-                    # Отправить сообщение с кнопкой подтверждения
-                    keyboard = [
-                        [
-                            InlineKeyboardButton("✅ Да, создать транзакции", callback_data=f"create_missed_daily_{telegram_user_id}"),
-                            InlineKeyboardButton("❌ Нет, не нужно", callback_data=f"skip_missed_daily_{telegram_user_id}")
-                        ]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-
                     await app.bot.send_message(
                         chat_id=telegram_user_id,
                         text="⚠️ *Ежедневные транзакции не были созданы сегодня*\n\n"
                              "Возможно, бот был перезапущен после 9:00.\n\n"
-                             "Хотите создать транзакции сейчас?",
-                        parse_mode='Markdown',
-                        reply_markup=reply_markup
+                             "Проверьте состояние операций на сайте.",
+                        parse_mode='Markdown'
                     )
 
     except Exception as e:
@@ -6245,8 +6244,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Error in error_handler: {e}", exc_info=True)
 
 
-def initialize_application():
-    """Initialize and configure the bot application (for both webhook and polling)"""
+def initialize_application(interactive: bool = False):
+    """Initialize Telegram delivery and background jobs.
+
+    Production uses notification-only mode. ``interactive=True`` is retained
+    temporarily for local legacy debugging while the old handlers are removed
+    from the codebase in a later cleanup.
+    """
     # Validate configuration
     validate_config()
     logger.info("✅ Configuration validated")
@@ -6267,51 +6271,44 @@ def initialize_application():
     migrate_csv_aliases_to_db()
 
     # Create application
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    builder = Application.builder().token(TELEGRAM_BOT_TOKEN)
+    if interactive:
+        builder = builder.post_init(post_init)
+    app = builder.build()
 
-    # Register handlers
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("menu", menu_command))
-    app.add_handler(CommandHandler("myid", myid_command))
-    app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("subscription", subscription_command))
-    app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
-    app.add_handler(CommandHandler("sync", sync_command))
-    app.add_handler(CommandHandler("force_sync", force_sync_command))
-    app.add_handler(CommandHandler("cancel", cancel_command))
-    app.add_handler(CommandHandler("test_daily", test_daily_command))
-    app.add_handler(CommandHandler("cleanup_daily", cleanup_daily_command))
-    app.add_handler(CommandHandler("check_ids", check_ids_command))
-    app.add_handler(CommandHandler("test_report", test_report_command))
-    app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
-    app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
-    app.add_handler(CommandHandler("price_check", price_check_command))
-    # Cafe access token management
-    app.add_handler(CommandHandler("cafe_token", cafe_token_command))
-
-    # Cashier access token management
-    app.add_handler(CommandHandler("cashier_token", cashier_token_command))
-
-    # Web user management (login/password auth)
-    app.add_handler(CommandHandler("staff", staff_command))
-
-    # Accounts check commands (сверка счетов двух отделов)
-    app.add_handler(CommandHandler("accounts_check", accounts_check_command))
-    app.add_handler(CommandHandler("check", check_discrepancy_command))
-
-    # Shipment template commands
-    app.add_handler(CommandHandler("templates", templates_command))
-    app.add_handler(CommandHandler("edit_template", edit_template_command))
-    app.add_handler(CommandHandler("delete_template", delete_template_command))
-
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    app.add_handler(CallbackQueryHandler(handle_callback))
-
-    # Register global error handler
-    app.add_error_handler(error_handler)
+    if interactive:
+        # Legacy interactive mode is intentionally not used in production.
+        app.add_handler(CommandHandler("start", start_command))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(CommandHandler("menu", menu_command))
+        app.add_handler(CommandHandler("myid", myid_command))
+        app.add_handler(CommandHandler("settings", settings_command))
+        app.add_handler(CommandHandler("subscription", subscription_command))
+        app.add_handler(CommandHandler("daily_transfers", daily_transfers_command))
+        app.add_handler(CommandHandler("sync", sync_command))
+        app.add_handler(CommandHandler("force_sync", force_sync_command))
+        app.add_handler(CommandHandler("cancel", cancel_command))
+        app.add_handler(CommandHandler("test_daily", test_daily_command))
+        app.add_handler(CommandHandler("cleanup_daily", cleanup_daily_command))
+        app.add_handler(CommandHandler("check_ids", check_ids_command))
+        app.add_handler(CommandHandler("test_report", test_report_command))
+        app.add_handler(CommandHandler("test_monthly", test_monthly_report_command))
+        app.add_handler(CommandHandler("check_doner_sales", check_doner_sales_command))
+        app.add_handler(CommandHandler("price_check", price_check_command))
+        app.add_handler(CommandHandler("cafe_token", cafe_token_command))
+        app.add_handler(CommandHandler("cashier_token", cashier_token_command))
+        app.add_handler(CommandHandler("staff", staff_command))
+        app.add_handler(CommandHandler("accounts_check", accounts_check_command))
+        app.add_handler(CommandHandler("check", check_discrepancy_command))
+        app.add_handler(CommandHandler("templates", templates_command))
+        app.add_handler(CommandHandler("edit_template", edit_template_command))
+        app.add_handler(CommandHandler("delete_template", delete_template_command))
+        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        app.add_handler(CallbackQueryHandler(handle_callback))
+        app.add_error_handler(error_handler)
+    else:
+        logger.info("ℹ️ Telegram incoming commands and messages are disabled")
 
     # Зарегистрировать фоновую задачу автосинхронизации
     from datetime import timedelta
@@ -6336,7 +6333,7 @@ def initialize_application():
 def main():
     """Run the bot (polling mode only - for local development)"""
     try:
-        app = initialize_application()
+        app = initialize_application(interactive=True)
 
         # Start bot in polling mode
         logger.info("🤖 Poster Helper Bot starting in POLLING mode...")

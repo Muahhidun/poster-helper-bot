@@ -1,8 +1,7 @@
 """Gunicorn configuration for production deployment on Railway.
 
-Uses gthread worker class (threads inside a single process) so that the
-Telegram bot asyncio event loop running in a daemon thread is shared
-across all request-handling threads.
+Uses gthread worker class (threads inside a single process) so the outbound
+Telegram notification scheduler runs exactly once alongside Flask.
 """
 import os
 import sys
@@ -16,9 +15,8 @@ if '/app' not in sys.path:
 # Bind to the port Railway injects, defaulting to 8080
 bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
 
-# Single worker process — important because the Telegram bot event loop
-# runs in a daemon thread inside this process.  Multiple workers would
-# each try to register the webhook, causing conflicts.
+# Single worker process — important because every process would otherwise
+# start its own scheduler and send duplicate reports and notifications.
 workers = 1
 
 # Use 4 threads so multiple HTTP requests can be served concurrently
@@ -43,29 +41,28 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 
-# Do NOT preload — start_server.py needs to initialize the Telegram
-# bot in the worker process (same process that serves requests).
+# Do NOT preload — start_server.py initializes Telegram notifications and
+# scheduled jobs in the worker process that also serves Flask requests.
 preload_app = False
 
 
 def post_worker_init(worker):
     """Called after gunicorn worker process initializes.
     
-    Starts the Telegram bot event loop in a background daemon thread
-    so that webhook updates can be forwarded to it.
+    Starts the outbound Telegram notification scheduler in a daemon thread.
     """
     import logging
     import threading
     import time
 
     logger = logging.getLogger("gunicorn_config")
-    logger.info("🔧 post_worker_init: starting Telegram bot thread...")
+    logger.info("🔧 post_worker_init: starting Telegram notification thread...")
 
     # Import here so the module is loaded inside the worker process
     from start_server import run_bot_loop
     bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
     bot_thread.start()
 
-    # Give the bot time to set up webhook before accepting traffic
+    # Give the notification scheduler time to initialize before serving traffic.
     time.sleep(2)
-    logger.info("✅ Telegram bot thread started, worker ready for traffic")
+    logger.info("✅ Telegram notification thread started, worker ready for traffic")

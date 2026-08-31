@@ -8,12 +8,13 @@ import hashlib
 import json
 import asyncio
 import logging
+import re
 import time as _time
 import pytz
 from pathlib import Path
 from urllib.parse import parse_qsl
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory, g, session, has_request_context
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, g, session, has_request_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from database import get_database
@@ -118,7 +119,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 # ========================================
 
 # Paths that don't require authentication
-OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health', '/telegram-webhook', '/mini-app', '/api/whatsapp/webhook')
+OPEN_PATHS = ('/login', '/static', '/favicon.ico', '/health', '/api/whatsapp/webhook')
 
 
 def get_home_for_role(role):
@@ -557,6 +558,75 @@ def resolve_supplier_name_and_id(user_id: int, text: str) -> tuple:
         logger.error(f"Error in resolving supplier: {e}")
 
     return text, None
+
+
+def find_explicit_supplier_name_and_id(user_id: int, text: str) -> Optional[tuple]:
+    """Find a supplier name explicitly written in the user's message.
+
+    This is intentionally separate from ingredient/profile inference.  The AI
+    may use products to guess a supplier only when no supplier is named.  When
+    the user writes "Алимжан помидоры", the deterministic catalogue match must
+    win even if the model guesses another vegetable supplier.
+    """
+    if not text:
+        return None
+
+    try:
+        import re
+        from rapidfuzz import fuzz
+        from matchers import get_supplier_matcher, normalize_supplier_text
+
+        matcher = get_supplier_matcher(user_id)
+        normalized_text = normalize_supplier_text(text)
+        compact_text = re.sub(r'[-‐‑–—]', '', normalized_text)
+        text_words = re.findall(r'[a-zа-яё0-9]+', compact_text)
+        matches = []
+        generic_product_words = {
+            'фарш', 'донер', 'мясо', 'лаваш', 'айран', 'багет', 'мука',
+            'молоко', 'молочный', 'мороженое', 'помидоры', 'овощи',
+        }
+
+        for supplier_id, supplier in matcher.suppliers.items():
+            supplier_name = (supplier.get('name') or '').strip()
+            normalized_name = normalize_supplier_text(supplier_name)
+            compact_name = re.sub(r'[-‐‑–—]', '', normalized_name)
+            if not compact_name:
+                continue
+
+            # A full catalogue name inside the message is the strongest signal.
+            if re.search(rf'(?<!\w){re.escape(compact_name)}(?!\w)', compact_text):
+                matches.append((3, len(compact_name), supplier_id, supplier_name))
+                continue
+
+            # For descriptive names ("Алимжан помидоры", "Богатырь мороженое")
+            # the first word is normally the distinctive supplier/brand name.
+            name_words = re.findall(r'[a-zа-яё0-9]+', compact_name)
+            distinctive = name_words[0] if name_words else ''
+            if len(distinctive) < 4 or distinctive in generic_product_words:
+                continue
+            if distinctive in text_words:
+                matches.append((2, len(distinctive), supplier_id, supplier_name))
+                continue
+            if any(len(word) >= 4 and fuzz.ratio(word, distinctive) >= 88 for word in text_words):
+                matches.append((1, len(distinctive), supplier_id, supplier_name))
+
+        if not matches:
+            return None
+
+        matches.sort(reverse=True)
+        best_strength, best_length = matches[0][:2]
+        best = [m for m in matches if m[:2] == (best_strength, best_length)]
+        supplier_ids = {m[2] for m in best}
+        if len(supplier_ids) != 1:
+            logger.info("Explicit supplier is ambiguous in message %r: %s", text, best)
+            return None
+
+        _, _, supplier_id, supplier_name = best[0]
+        logger.info("Explicit supplier in user message: %r -> %s", text, supplier_name)
+        return supplier_name, supplier_id
+    except Exception as e:
+        logger.warning("Could not detect explicit supplier in %r: %s", text, e)
+        return None
 
 
 def resolve_item_match(ing_matcher, prod_matcher, name: str, target_account: Optional[str] = None):
@@ -2296,7 +2366,14 @@ def _api_assistant_message_impl():
     actions = agent_response.get('actions', [])
 
     # Execute assistant actions via the shared engine
-    response_text, _ = execute_assistant_actions(user_id, actions, date_str, response_text)
+    explicit_supplier = find_explicit_supplier_name_and_id(user_id, message)
+    response_text, _ = execute_assistant_actions(
+        user_id,
+        actions,
+        date_str,
+        response_text,
+        explicit_supplier=explicit_supplier,
+    )
 
     # Save assistant message to database
     model_used = agent_response.get('_model_used', 'gemini-3.5-flash')
@@ -7664,30 +7741,6 @@ def api_expense_report():
 
 
 # ========================================
-# Serve Mini App static files
-# ========================================
-
-@app.route('/mini-app')
-@app.route('/mini-app/')
-@app.route('/mini-app/<path:path>')
-def serve_mini_app(path=''):
-    """Serve Mini App frontend"""
-    mini_app_dir = os.path.join(os.path.dirname(__file__), 'mini_app', 'dist')
-
-    # Check if dist exists
-    if not os.path.exists(mini_app_dir):
-        return jsonify({
-            'error': 'Mini App not built',
-            'message': 'Run "cd mini_app && npm install && npm run build" first'
-        }), 404
-
-    if path and os.path.exists(os.path.join(mini_app_dir, path)):
-        return send_from_directory(mini_app_dir, path)
-    else:
-        return send_from_directory(mini_app_dir, 'index.html')
-
-
-# ========================================
 # Cafe Shift Closing (isolated for employees)
 # ========================================
 
@@ -8267,7 +8320,7 @@ def api_cafe_employees_last():
 def api_cafe_salaries_create():
     """Create cafe salary transactions in Poster (Кассир, Сушист, Повар Сандей)"""
     from datetime import datetime, timedelta
-    from poster_client import PosterClient
+    from poster_client import PosterClient, find_existing_finance_transaction
     info = resolve_cafe_info()
     db = get_database()
     data = request.json
@@ -8317,6 +8370,7 @@ def api_cafe_salaries_create():
             povar_sandey_id = None
 
             try:
+                existing_transactions = await poster_client.get_transactions(date_str, date_str)
                 for s in salaries:
                     role = s.get('role', '')
                     name = s.get('name', '')
@@ -8357,19 +8411,38 @@ def api_cafe_salaries_create():
                         skipped.append({'role': role, 'name': name, 'amount': amount, 'reason': 'Категория не найдена в Poster'})
                         continue
 
-                    tx_id = await poster_client.create_transaction(
-                        transaction_type=0,  # expense
+                    existing = find_existing_finance_transaction(
+                        existing_transactions,
+                        transaction_type=0,
                         category_id=cat_id,
                         account_from_id=CAFE_ACCOUNT_FROM,
                         amount=amount,
-                        date=current_time,
-                        comment=name
+                        comment=name,
                     )
+                    if existing:
+                        tx_id = existing.get('transaction_id')
+                        logger.info(
+                            "⏭️ Cafe salary already exists: %s %s = %s₸ (tx_id=%s)",
+                            role,
+                            name,
+                            amount,
+                            tx_id,
+                        )
+                    else:
+                        tx_id = await poster_client.create_transaction(
+                            transaction_type=0,  # expense
+                            category_id=cat_id,
+                            account_from_id=CAFE_ACCOUNT_FROM,
+                            amount=amount,
+                            date=current_time,
+                            comment=name
+                        )
                     created.append({
                         'role': role,
                         'name': name,
                         'amount': amount,
                         'tx_id': tx_id,
+                        'already_exists': bool(existing),
                     })
                     logger.info(f"✅ Cafe salary: {role} {name} = {amount}₸, tx_id={tx_id}")
 
@@ -8511,6 +8584,11 @@ def api_cafe_transfers():
             )
             results = []
             try:
+                existing_transactions = await client.get_transactions(date, date)
+                existing_comments = {
+                    (tx.get('comment') or tx.get('description') or '').strip()
+                    for tx in existing_transactions
+                }
                 wedrink_sales = float(closing.get('wedrink_sales', 0))
                 # If there are WeDrink sales, dynamically find category ID and add expense to tasks
                 if wedrink_sales > 0:
@@ -8532,18 +8610,28 @@ def api_cafe_transfers():
                         if expense_cat_id:
                             dt = datetime.strptime(date, '%Y-%m-%d')
                             tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
-                            tx_id = await client.create_transaction(
-                                transaction_type=0, # Expense
-                                category_id=expense_cat_id,
-                                account_from_id=CAFE_ACCOUNTS['cash_left'],
-                                amount=int(round(wedrink_sales)),
-                                comment="WeDrink",
-                                date=tx_date
-                            )
-                            if tx_id:
-                                # MUST append a dict to avoid JS TypeError on frontend
-                                results.append({'name': 'Расход WeDrink', 'amount': int(round(wedrink_sales)), 'tx_id': tx_id})
-                                logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
+                            marker = f"PHB shift cafe {date} wedrink"
+                            if marker in existing_comments:
+                                results.append({
+                                    'name': 'Расход WeDrink',
+                                    'amount': int(round(wedrink_sales)),
+                                    'already_exists': True,
+                                })
+                                logger.info("[CAFE TRANSFER] WeDrink expense already exists: %s", marker)
+                            else:
+                                tx_id = await client.create_transaction(
+                                    transaction_type=0, # Expense
+                                    category_id=expense_cat_id,
+                                    account_from_id=CAFE_ACCOUNTS['cash_left'],
+                                    amount=int(round(wedrink_sales)),
+                                    comment=marker,
+                                    date=tx_date
+                                )
+                                if tx_id:
+                                    # MUST append a dict to avoid JS TypeError on frontend
+                                    results.append({'name': 'Расход WeDrink', 'amount': int(round(wedrink_sales)), 'tx_id': tx_id})
+                                    existing_comments.add(marker)
+                                    logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
                         else:
                             cat_names = [c.get('name') or c.get('category_name') for c in categories]
                             logger.error(f"[CAFE TRANSFER] Category 'Единовременный расход' not found for WeDrink expense. Available categories: {cat_names}")
@@ -8555,6 +8643,15 @@ def api_cafe_transfers():
                 tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
 
                 for t in transfers:
+                    marker = _shift_operation_marker('cafe', date, t['from'], t['to'])
+                    if marker in existing_comments:
+                        results.append({
+                            'name': t['name'],
+                            'amount': t['amount'],
+                            'already_exists': True,
+                        })
+                        logger.info("[CAFE TRANSFER] Already exists, skipping: %s", marker)
+                        continue
                     tx_id = await client.create_transaction(
                         transaction_type=2,
                         category_id=0,
@@ -8562,9 +8659,10 @@ def api_cafe_transfers():
                         account_to_id=t['to'],
                         amount=t['amount'],
                         date=tx_date,
-                        comment=''
+                        comment=marker,
                     )
                     results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
+                    existing_comments.add(marker)
                     logger.info(f"[CAFE TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}")
             finally:
                 await client.close()
@@ -8578,11 +8676,12 @@ def api_cafe_transfers():
             poster_account_id=info['poster_account_id']
         )
 
+        created_count = sum(1 for result in results if not result.get('already_exists'))
         return jsonify({
             'success': True,
-            'created_count': len(results),
+            'created_count': created_count,
             'transfers': results,
-            'message': f'{len(results)} перевод(а) создано'
+            'message': f'{created_count} перевод(а) создано'
         })
 
     except Exception as e:
@@ -8648,6 +8747,11 @@ MAIN_ACCOUNTS = {
     'wolt': 8,         # Wolt доставка
     'halyk': 10,       # Халык банк
 }
+
+
+def _shift_operation_marker(scope: str, date: str, account_from: int, account_to: int) -> str:
+    """Stable Poster comment used to make shift transfers retry-safe."""
+    return f"PHB shift {scope} {date} {account_from}>{account_to}"
 
 
 @app.route('/api/shift-closing/transfers', methods=['POST'])
@@ -8738,8 +8842,22 @@ def api_shift_closing_transfers():
             try:
                 dt = datetime.strptime(date, '%Y-%m-%d')
                 tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
+                existing_transactions = await client.get_transactions(date, date)
+                existing_comments = {
+                    (tx.get('comment') or tx.get('description') or '').strip()
+                    for tx in existing_transactions
+                }
 
                 for t in transfers:
+                    marker = _shift_operation_marker('main', date, t['from'], t['to'])
+                    if marker in existing_comments:
+                        results.append({
+                            'name': t['name'],
+                            'amount': t['amount'],
+                            'already_exists': True,
+                        })
+                        logger.info("[MAIN TRANSFER] Already exists, skipping: %s", marker)
+                        continue
                     tx_id = await client.create_transaction(
                         transaction_type=2,
                         category_id=0,
@@ -8747,9 +8865,10 @@ def api_shift_closing_transfers():
                         account_to_id=t['to'],
                         amount=t['amount'],
                         date=tx_date,
-                        comment=''
+                        comment=marker,
                     )
                     results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
+                    existing_comments.add(marker)
                     logger.info(f"[MAIN TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}")
             finally:
                 await client.close()
@@ -8760,11 +8879,12 @@ def api_shift_closing_transfers():
         # Mark as created
         db.set_transfers_created(user_id, date)
 
+        created_count = sum(1 for result in results if not result.get('already_exists'))
         return jsonify({
             'success': True,
-            'created_count': len(results),
+            'created_count': created_count,
             'transfers': results,
-            'message': f'{len(results)} перевод(а) создано'
+            'message': f'{created_count} перевод(а) создано'
         })
 
     except Exception as e:
@@ -9451,7 +9571,14 @@ def download_whatsapp_media(download_url: str, filename: str) -> str:
     return str(local_path)
 
 
-def execute_assistant_actions(user_id: int, actions: list, date_str: str, response_text: str, is_webhook: bool = False) -> tuple[str, list[str]]:
+def execute_assistant_actions(
+    user_id: int,
+    actions: list,
+    date_str: str,
+    response_text: str,
+    is_webhook: bool = False,
+    explicit_supplier: Optional[tuple] = None,
+) -> tuple[str, list[str]]:
     """Execute assistant actions (create/update drafts, search/delete receipts, update memory)
     and return updated response_text and a list of human-readable created drafts descriptions.
     """
@@ -9499,6 +9626,22 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
                 description = action.get('description', '').strip()
 
                 if expense_type == 'supply':
+                    if explicit_supplier:
+                        explicit_name, _ = explicit_supplier
+                        if description != explicit_name:
+                            logger.warning(
+                                "Overriding AI supplier '%s' with explicit user supplier '%s'",
+                                description,
+                                explicit_name,
+                            )
+                            if description:
+                                response_text = re.sub(
+                                    re.escape(description),
+                                    explicit_name,
+                                    response_text,
+                                    flags=re.IGNORECASE,
+                                )
+                        description = explicit_name
                     if _check_duplicate_supply(db, user_id, description, amount, date_str):
                         logger.warning(f"Skipping duplicate supply & expense from create_expense for '{description}' {amount}")
                         response_text = (response_text + "\n" if response_text else "") + f"⚠️ Поставка «{description}» на {amount:,.0f}₸ уже существует — пропускаю дубликат."
@@ -9507,7 +9650,7 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
                 expense_draft_id = db.create_expense_draft(
                     telegram_user_id=user_id,
                     amount=amount,
-                    description=action.get('description'),
+                    description=description,
                     expense_type=expense_type,
                     category=category,
                     source=action.get('source', 'cash'),
@@ -9624,6 +9767,22 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
             # 4. Create Supply
             elif act_type == 'create_supply':
                 supplier_name = action.get('supplier_name', 'Поставщик')
+                if explicit_supplier:
+                    explicit_name, _ = explicit_supplier
+                    if supplier_name != explicit_name:
+                        logger.warning(
+                            "Overriding AI supplier '%s' with explicit user supplier '%s'",
+                            supplier_name,
+                            explicit_name,
+                        )
+                        if supplier_name:
+                            response_text = re.sub(
+                                re.escape(str(supplier_name)),
+                                explicit_name,
+                                response_text,
+                                flags=re.IGNORECASE,
+                            )
+                    supplier_name = explicit_name
                 total_sum_val = action.get('total_sum', 0)
                 try:
                     total_sum = float(total_sum_val) if total_sum_val is not None else 0.0
@@ -9674,7 +9833,6 @@ def execute_assistant_actions(user_id: int, actions: list, date_str: str, respon
                 
                 clean_order_number = None
                 if order_number is not None:
-                    import re
                     digits = re.findall(r'\d+', str(order_number))
                     if digits:
                         clean_order_number = int(digits[0])
@@ -10165,7 +10323,15 @@ def whatsapp_webhook():
             logger.info(f"🤖 [Gemini Assistant] Response text: '{response_text}', actions: {actions}")
             
             # Execute assistant actions
-            response_text, created_drafts = execute_assistant_actions(user_id, actions, date_str, response_text, is_webhook=True)
+            explicit_supplier = find_explicit_supplier_name_and_id(user_id, message_text)
+            response_text, created_drafts = execute_assistant_actions(
+                user_id,
+                actions,
+                date_str,
+                response_text,
+                is_webhook=True,
+                explicit_supplier=explicit_supplier,
+            )
             
             # Save message to database chat history
             saved_media_urls = []

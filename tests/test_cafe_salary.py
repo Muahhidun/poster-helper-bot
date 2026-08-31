@@ -55,6 +55,7 @@ def test_cafe_salaries_create_with_helper_sushist(app_client, db):
     mock_poster_client = AsyncMock()
     mock_poster_client.create_transaction.return_value = 999
     mock_poster_client.get_categories.return_value = []
+    mock_poster_client.get_transactions.return_value = []
 
     with patch('web_app.resolve_cafe_info', return_value=mock_info), \
          patch('poster_client.PosterClient', return_value=mock_poster_client):

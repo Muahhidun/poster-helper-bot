@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, List
-from poster_client import PosterClient
+from poster_client import PosterClient, find_existing_finance_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +246,13 @@ class CashierSalaryCalculator:
                 transaction_date_str = transaction_date.strftime("%Y-%m-%d %H:%M:%S")
             else:
                 # Если дата не указана, используем текущее время
-                transaction_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                transaction_date = datetime.now()
+                transaction_date_str = transaction_date.strftime("%Y-%m-%d %H:%M:%S")
+
+            existing_transactions = await poster_client.get_transactions(
+                transaction_date.strftime("%Y%m%d"),
+                transaction_date.strftime("%Y%m%d"),
+            )
 
             # Создать транзакции для каждого кассира
             salaries = []
@@ -256,14 +262,30 @@ class CashierSalaryCalculator:
 
                 # Счёт: "Оставил в кассе" (ID=4)
                 # Категория: "Кассиры" (ID=16)
-                transaction_id = await poster_client.create_transaction(
-                    transaction_type=0,  # expense
-                    category_id=16,  # Кассиры
-                    account_from_id=4,  # Оставил в кассе
+                existing = find_existing_finance_transaction(
+                    existing_transactions,
+                    transaction_type=0,
+                    category_id=16,
+                    account_from_id=4,
                     amount=salary_per_cashier,
-                    date=transaction_date_str,
-                    comment=cashier_name  # ИМЯ В КОММЕНТАРИИ
+                    comment=cashier_name,
                 )
+                if existing:
+                    transaction_id = existing.get('transaction_id')
+                    logger.info(
+                        "⏭️ Зарплата кассира %s уже существует в Poster (ID=%s), пропускаю",
+                        cashier_name,
+                        transaction_id,
+                    )
+                else:
+                    transaction_id = await poster_client.create_transaction(
+                        transaction_type=0,  # expense
+                        category_id=16,  # Кассиры
+                        account_from_id=4,  # Оставил в кассе
+                        amount=salary_per_cashier,
+                        date=transaction_date_str,
+                        comment=cashier_name  # ИМЯ В КОММЕНТАРИИ
+                    )
 
                 salaries.append({
                     'name': cashier_name,

@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, List
-from poster_client import PosterClient
+from poster_client import PosterClient, find_existing_finance_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -227,19 +227,38 @@ class DonerSalaryCalculator:
                 transaction_date_str = transaction_date.strftime("%Y-%m-%d %H:%M:%S")
             else:
                 # Если дата не указана, используем текущее время
-                transaction_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                transaction_date = datetime.now()
+                transaction_date_str = transaction_date.strftime("%Y-%m-%d %H:%M:%S")
+
+            existing_transactions = await poster_client.get_transactions(
+                transaction_date.strftime("%Y%m%d"),
+                transaction_date.strftime("%Y%m%d"),
+            )
 
             # 1. Создать транзакцию зарплаты донерщика
             # Счёт: "Оставил в кассе" (ID=4)
             # Категория: "Донерщик" (ID=19)
-            transaction_id = await poster_client.create_transaction(
-                transaction_type=0,  # expense
-                category_id=19,  # Донерщик
-                account_from_id=4,  # Оставил в кассе
+            doner_comment = doner_name or "Донерщик"
+            existing_doner = find_existing_finance_transaction(
+                existing_transactions,
+                transaction_type=0,
+                category_id=19,
+                account_from_id=4,
                 amount=salary,
-                date=transaction_date_str,
-                comment=doner_name or ""  # ИМЯ В КОММЕНТАРИИ
+                comment=doner_comment,
             )
+            if existing_doner:
+                transaction_id = existing_doner.get('transaction_id')
+                logger.info("⏭️ Зарплата донерщика уже существует в Poster (ID=%s)", transaction_id)
+            else:
+                transaction_id = await poster_client.create_transaction(
+                    transaction_type=0,  # expense
+                    category_id=19,  # Донерщик
+                    account_from_id=4,  # Оставил в кассе
+                    amount=salary,
+                    date=transaction_date_str,
+                    comment=doner_comment  # ИМЯ В КОММЕНТАРИИ
+                )
 
             logger.info(
                 f"✅ Транзакция зарплаты донерщика {doner_name or ''} создана: "
@@ -251,14 +270,26 @@ class DonerSalaryCalculator:
             # Категория: "Донерщик" (ID=19)
             # Комментарий: "Помощник: {имя}" или просто "Помощник"
             assistant_comment = f"Помощник: {assistant_name}" if assistant_name else "Помощник"
-            assistant_transaction_id = await poster_client.create_transaction(
-                transaction_type=0,  # expense
-                category_id=19,  # Донерщик
-                account_from_id=4,  # Оставил в кассе
+            existing_assistant = find_existing_finance_transaction(
+                existing_transactions,
+                transaction_type=0,
+                category_id=19,
+                account_from_id=4,
                 amount=assistant_salary,
-                date=transaction_date_str,
-                comment=assistant_comment  # ИМЯ В КОММЕНТАРИИ
+                comment=assistant_comment,
             )
+            if existing_assistant:
+                assistant_transaction_id = existing_assistant.get('transaction_id')
+                logger.info("⏭️ Зарплата помощника уже существует в Poster (ID=%s)", assistant_transaction_id)
+            else:
+                assistant_transaction_id = await poster_client.create_transaction(
+                    transaction_type=0,  # expense
+                    category_id=19,  # Донерщик
+                    account_from_id=4,  # Оставил в кассе
+                    amount=assistant_salary,
+                    date=transaction_date_str,
+                    comment=assistant_comment  # ИМЯ В КОММЕНТАРИИ
+                )
 
             logger.info(
                 f"✅ Транзакция зарплаты помощника {assistant_name or ''} создана: "

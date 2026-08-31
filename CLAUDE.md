@@ -2,20 +2,23 @@
 
 ## Project Overview
 
-**Poster Helper Bot** — Telegram-бот и веб-приложение для управления финансовыми операциями ресторанного бизнеса через POS-систему Poster. Включает распознавание голоса, AI-парсинг, OCR накладных и React Mini App.
+**Poster Helper** — Flask-приложение для управления финансовыми операциями ресторанного бизнеса через POS-систему Poster. Telegram используется только для исходящих уведомлений и отчётов.
+
+> **Актуальный production-контур:** Flask + фоновые задачи + исходящие Telegram-уведомления. Входящие команды Telegram, webhook и Mini App отключены. Каталог `mini_app/` сохранён только как архив React-прототипа, не собирается и не публикуется.
 
 ## Tech Stack
 
 **Backend:** Python 3.11, python-telegram-bot 22.5, Flask 3.0, aiohttp, APScheduler, psycopg2/sqlite3, Pydantic
 **AI/ML:** Anthropic Claude API (парсинг), OpenAI Whisper (голос→текст), GPT-4 Vision (OCR), Google Document AI (OCR)
-**Frontend (Mini App):** React 18.2, TypeScript 5.2, Vite 5.0, TanStack Query/Table, Tailwind CSS 3.4, Radix UI, Chart.js
-**Deployment:** Docker, Railway (PostgreSQL), webhook/polling режимы
+**Frontend:** серверные HTML-шаблоны Flask
+**Archived prototype:** React 18.2, TypeScript 5.2, Vite 5.0 (не используется в production)
+**Deployment:** Docker, Railway (PostgreSQL), Gunicorn
 
 ## Project Structure
 
 ```
-├── bot.py                    # Главный Telegram-бот (~6500 строк, все команды и обработчики)
-├── start_server.py           # Запуск Flask + Telegram webhook
+├── bot.py                    # Telegram-уведомления/планировщик + архив legacy-обработчиков
+├── start_server.py           # Запуск Flask + исходящие Telegram-уведомления
 ├── config.py                 # Конфигурация (env-переменные, пути)
 ├── database.py               # Мультитенантный слой БД (~2970 строк, SQLite/PostgreSQL)
 ├── web_app.py                # Flask веб-приложение (~3570 строк, 30+ маршрутов)
@@ -45,7 +48,7 @@
 ├── shipment_templates.py     # Шаблоны поставок
 ├── price_monitoring.py       # Мониторинг цен ингредиентов
 │
-├── mini_app/                 # React Mini App
+├── mini_app/                 # Архив React Mini App (не собирается и не публикуется)
 │   ├── src/
 │   │   ├── App.tsx           # Роутинг
 │   │   ├── pages/            # Страницы (Dashboard, Expenses, Supplies, Aliases, Templates, ShiftClosing)
@@ -71,13 +74,7 @@
 # Установка Python-зависимостей
 pip install -r requirements.txt
 
-# Сборка Mini App
-cd mini_app && npm install && npm run build && cd ..
-
-# Запуск бота (polling-режим для разработки)
-python3 bot.py
-
-# Запуск сервера (бот + Flask вместе)
+# Запуск Flask и фоновых Telegram-уведомлений
 python3 start_server.py
 
 # Docker
