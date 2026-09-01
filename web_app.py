@@ -10678,29 +10678,364 @@ def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
                 pass
 
 
-def _classify_whatsapp_draft_summary(db, description: str) -> tuple[str, str]:
-    """Classify a created supply draft without changing it."""
+def _supply_draft_id_from_description(description: str) -> Optional[int]:
     match = re.search(r'черновик\s+#(\d+)', description or '', re.IGNORECASE)
-    if not match:
-        return '✅', ''
-    draft = db.get_supply_draft_with_items(int(match.group(1)))
+    return int(match.group(1)) if match else None
+
+
+def _inspect_whatsapp_supply_draft(db, draft_id: int) -> dict:
+    """Read the saved draft back from the database and validate its postconditions."""
+    draft = db.get_supply_draft_with_items(int(draft_id))
     if not draft:
-        return '⚠️', 'черновик не найден'
+        return {
+            'draft_id': int(draft_id),
+            'icon': '⚠️',
+            'status_text': 'черновик не найден',
+            'unmatched_item_ids': [],
+            'balanced': False,
+        }
     items = draft.get('items') or []
     if not items:
-        return '⚠️', 'пустой черновик'
-    unmatched = sum(1 for item in items if not item.get('poster_ingredient_id'))
-    if unmatched:
-        return '❌', f'не найдено позиций: {unmatched}'
+        return {
+            'draft_id': int(draft_id),
+            'icon': '⚠️',
+            'status_text': 'пустой черновик',
+            'unmatched_item_ids': [],
+            'balanced': False,
+        }
+    unmatched_items = [item for item in items if not item.get('poster_ingredient_id')]
+    unmatched_ids = [int(item['id']) for item in unmatched_items]
+    if unmatched_items:
+        return {
+            'draft_id': int(draft_id),
+            'icon': '❌',
+            'status_text': f'не найдено позиций: {len(unmatched_items)}',
+            'unmatched_item_ids': unmatched_ids,
+            'balanced': calculate_supply_total_mismatch(items, draft.get('total_sum')) is None,
+        }
     mismatch = calculate_supply_total_mismatch(items, draft.get('total_sum'))
     if mismatch:
         expected, actual, difference = mismatch
+        return {
+            'draft_id': int(draft_id),
+            'icon': '⚠️',
+            'status_text': (
+                f'сумма позиций {actual:,.0f} ₸, '
+                f'расход {expected:,.0f} ₸, разница {difference:+,.0f} ₸'
+            ),
+            'unmatched_item_ids': [],
+            'balanced': False,
+        }
+    return {
+        'draft_id': int(draft_id),
+        'icon': '✅',
+        'status_text': 'готов к проверке',
+        'unmatched_item_ids': [],
+        'balanced': True,
+    }
+
+
+def _classify_whatsapp_draft_summary(db, description: str) -> tuple[str, str]:
+    """Classify a created supply draft without changing it."""
+    draft_id = _supply_draft_id_from_description(description)
+    if draft_id is None:
+        return '✅', ''
+    result = _inspect_whatsapp_supply_draft(db, draft_id)
+    return result['icon'], result['status_text']
+
+
+def _build_whatsapp_job_result(db, created_drafts: list[str]) -> dict:
+    """Build authoritative structured job metadata from saved database rows."""
+    draft_ids = []
+    for description in created_drafts:
+        draft_id = _supply_draft_id_from_description(description)
+        if draft_id is not None and draft_id not in draft_ids:
+            draft_ids.append(draft_id)
+    return {
+        'supply_drafts': [
+            _inspect_whatsapp_supply_draft(db, draft_id)
+            for draft_id in draft_ids
+        ]
+    }
+
+
+def _whatsapp_candidate_options(user_id: int, item_name: str, limit: int = 3) -> list[dict]:
+    """Return safe catalogue suggestions; never select one without the user's reply."""
+    from matchers import (
+        get_ingredient_matcher,
+        get_product_matcher,
+        normalize_ingredient_text,
+        normalize_product_text,
+    )
+    from rapidfuzz import fuzz
+
+    query = normalize_ingredient_text(item_name)
+    query_tokens = set(re.findall(r'[a-zа-яё0-9]+', query))
+    cream_cheese_query = bool(
+        ('сыр' in query_tokens and any(
+            token.startswith(('творож', 'сливоч')) for token in query_tokens
+        ))
+        or re.search(r'cream\s+cheese', query)
+    )
+    options = []
+    matcher_specs = (
+        ('ingredient', get_ingredient_matcher(user_id), 'ingredients'),
+        ('product', get_product_matcher(user_id), 'products'),
+    )
+    for item_type, matcher, collection_name in matcher_specs:
+        for catalogue_item in getattr(matcher, collection_name, {}).values():
+            candidate_name = catalogue_item.get('name') or ''
+            if item_type == 'product':
+                scoring_query = normalize_product_text(item_name)
+                normalized_name = normalize_product_text(candidate_name)
+            else:
+                scoring_query = query
+                normalized_name = normalize_ingredient_text(candidate_name)
+            candidate_tokens = set(re.findall(r'[a-zа-яё0-9]+', normalized_name))
+            score = max(
+                fuzz.WRatio(scoring_query, normalized_name),
+                fuzz.token_set_ratio(scoring_query, normalized_name),
+            )
+            if query_tokens & candidate_tokens:
+                score += 4
+            # "Кремета" is the Poster catalogue wording for cream cheese.
+            # This only lifts it into the suggestions; it is never auto-picked.
+            if cream_cheese_query and 'кремет' in normalized_name:
+                score = max(score, 96)
+            account_name = catalogue_item.get('account_name') or ''
+            if item_type == 'product' and account_name in ('', 'Unknown'):
+                account_name = 'Pizzburg'
+            options.append({
+                'item_id': int(catalogue_item['id']),
+                'name': candidate_name,
+                'unit': catalogue_item.get('unit') or '',
+                'account_name': account_name,
+                'item_type': item_type,
+                'score': round(float(min(score, 100)), 1),
+            })
+
+    # One ID may exist in both Poster accounts, so account is part of identity.
+    unique = {}
+    for option in options:
+        key = (option['item_type'], option['item_id'], option['account_name'])
+        if key not in unique or unique[key]['score'] < option['score']:
+            unique[key] = option
+    ranked = sorted(
+        unique.values(),
+        key=lambda option: (
+            option['score'],
+            option['account_name'] == 'Pizzburg',
+            option['item_type'] == 'ingredient',
+        ),
+        reverse=True,
+    )
+    return ranked[:limit]
+
+
+def _prepare_whatsapp_reviews_for_batch(db, batch: dict) -> int:
+    """Queue every unmatched row found by authoritative post-validation."""
+    queued = 0
+    seen_drafts = set()
+    for job in batch.get('jobs', []):
+        try:
+            result = json.loads(job.get('result_json') or '{}')
+        except (TypeError, json.JSONDecodeError):
+            result = {}
+        draft_results = result.get('supply_drafts') or []
+        if not draft_results:
+            try:
+                descriptions = json.loads(job.get('created_drafts') or '[]')
+            except (TypeError, json.JSONDecodeError):
+                descriptions = []
+            draft_results = _build_whatsapp_job_result(db, descriptions)['supply_drafts']
+
+        for draft_result in draft_results:
+            draft_id = int(draft_result['draft_id'])
+            if draft_id in seen_drafts:
+                continue
+            seen_drafts.add(draft_id)
+            draft = db.get_supply_draft_with_items(draft_id)
+            if not draft or int(draft.get('telegram_user_id') or 0) != int(batch['telegram_user_id']):
+                continue
+            for item in draft.get('items') or []:
+                if item.get('poster_ingredient_id'):
+                    continue
+                candidates = _whatsapp_candidate_options(
+                    int(batch['telegram_user_id']),
+                    item.get('item_name') or '',
+                )
+                review_id = db.enqueue_whatsapp_review(
+                    telegram_user_id=int(batch['telegram_user_id']),
+                    chat_id=batch['chat_id'],
+                    batch_id=int(batch['id']),
+                    supply_draft_id=draft_id,
+                    supply_item_id=int(item['id']),
+                    original_item_name=item.get('item_name') or 'Неизвестная позиция',
+                    candidates_json=json.dumps(candidates, ensure_ascii=False),
+                )
+                if review_id:
+                    queued += 1
+    return queued
+
+
+def _format_whatsapp_review_prompt(review: dict) -> str:
+    if review.get('status') == 'awaiting_memory':
+        try:
+            selected = json.loads(review.get('selected_candidate_json') or '{}')
+        except (TypeError, json.JSONDecodeError):
+            selected = {}
         return (
-            '⚠️',
-            f'сумма позиций {actual:,.0f} ₸, '
-            f'расход {expected:,.0f} ₸, разница {difference:+,.0f} ₸',
+            f"✅ Выбрано: *{selected.get('name', 'позиция')}* "
+            f"({selected.get('account_name', 'Poster')}).\n\n"
+            f"Запомнить соответствие «{review['original_item_name']}» для будущих накладных?\n"
+            "1. Да, запомнить\n"
+            "2. Нет, применить только сейчас\n\n"
+            "Ответьте одной цифрой."
         )
-    return '✅', 'готов к проверке'
+
+    try:
+        candidates = json.loads(review.get('candidates_json') or '[]')
+    except (TypeError, json.JSONDecodeError):
+        candidates = []
+    lines = [
+        f"🔎 *Нужен ваш выбор: черновик #{review['supply_draft_id']}*",
+        f"В накладной: «{review['original_item_name']}»",
+        "Что это в Poster?",
+        "",
+    ]
+    for index, candidate in enumerate(candidates, 1):
+        department = candidate.get('account_name') or 'Poster'
+        item_kind = 'товар' if candidate.get('item_type') == 'product' else 'ингредиент'
+        lines.append(f"{index}. {candidate.get('name')} — {department}, {item_kind}")
+    lines.extend([
+        "0. Ни один вариант — оставить строку красной",
+        "",
+        "Ответьте одной цифрой. Команды запоминать не нужно.",
+    ])
+    return '\n'.join(lines)
+
+
+def _send_pending_whatsapp_review_prompts(db, chat_id: Optional[str] = None) -> int:
+    sent = 0
+    for review in db.get_whatsapp_reviews_needing_prompt(chat_id=chat_id):
+        if send_whatsapp_message(review['chat_id'], _format_whatsapp_review_prompt(review)):
+            db.mark_whatsapp_review_prompted(review['id'])
+            sent += 1
+    return sent
+
+
+def _whatsapp_review_draft_status(db, draft_id: int) -> str:
+    result = _inspect_whatsapp_supply_draft(db, draft_id)
+    return (
+        f"{result['icon']} Черновик #{draft_id}: {result['status_text']}.\n"
+        "В Poster пока ничего не отправлено."
+    )
+
+
+def _handle_whatsapp_review_reply(
+    db,
+    user_id: int,
+    chat_id: str,
+    message_text: str,
+    message_id: Optional[str] = None,
+) -> bool:
+    """Consume a simple numeric answer for the current review question."""
+    if not re.fullmatch(r'\s*\d+\s*', message_text or ''):
+        return False
+    review = db.get_active_whatsapp_review(user_id, chat_id)
+    if not review:
+        return False
+    if message_id and not db.reserve_whatsapp_review_message(chat_id, message_id):
+        return True
+    choice = int(message_text.strip())
+
+    if review['status'] == 'awaiting_choice':
+        try:
+            candidates = json.loads(review.get('candidates_json') or '[]')
+        except (TypeError, json.JSONDecodeError):
+            candidates = []
+        if choice == 0:
+            if not db.complete_whatsapp_review(review['id'], skipped=True):
+                return True
+            send_whatsapp_message(
+                chat_id,
+                f"Оставил «{review['original_item_name']}» красной — неверный вариант не выбран.\n"
+                + _whatsapp_review_draft_status(db, int(review['supply_draft_id'])),
+            )
+            _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+            return True
+        if choice < 1 or choice > len(candidates):
+            send_whatsapp_message(
+                chat_id,
+                f"Выберите цифру от 0 до {len(candidates)} из сообщения выше.",
+            )
+            return True
+
+        candidate = candidates[choice - 1]
+        if not db.select_whatsapp_review_candidate(
+            review['id'],
+            json.dumps(candidate, ensure_ascii=False),
+        ):
+            return True
+        accounts = db.get_accounts(user_id)
+        account_id = next((
+            account['id'] for account in accounts
+            if account['account_name'] == candidate.get('account_name')
+        ), None)
+        updated = db.update_supply_draft_item(
+            int(review['supply_item_id']),
+            telegram_user_id=user_id,
+            poster_ingredient_id=int(candidate['item_id']),
+            poster_ingredient_name=candidate['name'],
+            poster_account_id=account_id,
+            poster_account_name=candidate.get('account_name'),
+            item_type=candidate.get('item_type') or 'ingredient',
+        )
+        if not updated:
+            db.complete_whatsapp_review(review['id'], skipped=True)
+            send_whatsapp_message(chat_id, "Не удалось обновить строку. Она оставлена без изменений.")
+            return True
+        _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+        return True
+
+    if review['status'] == 'awaiting_memory':
+        if choice not in (1, 2):
+            send_whatsapp_message(chat_id, "Ответьте 1 (запомнить) или 2 (только сейчас).")
+            return True
+        try:
+            candidate = json.loads(review.get('selected_candidate_json') or '{}')
+        except (TypeError, json.JSONDecodeError):
+            candidate = {}
+        if not db.complete_whatsapp_review(review['id']):
+            return True
+        remembered = False
+        if choice == 1 and candidate:
+            from matchers import get_ingredient_matcher, get_product_matcher
+            matcher = (
+                get_product_matcher(user_id)
+                if candidate.get('item_type') == 'product'
+                else get_ingredient_matcher(user_id)
+            )
+            remembered = bool(matcher.add_alias(
+                review['original_item_name'],
+                int(candidate['item_id']),
+                notes='Явно подтверждено пользователем в WhatsApp',
+                account_name=candidate.get('account_name'),
+            ))
+        memory_text = (
+            "Соответствие запомнено для будущих накладных."
+            if remembered else
+            "Изменение применено только к этому черновику."
+        )
+        send_whatsapp_message(
+            chat_id,
+            f"✅ {memory_text}\n" + _whatsapp_review_draft_status(
+                db, int(review['supply_draft_id'])
+            ),
+        )
+        _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+        return True
+    return False
 
 
 def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
@@ -10713,6 +11048,7 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
         f"Получено: {len(jobs)} • Обработано: {completed} • Сбои обработки: {failed}",
         "",
     ]
+    has_unmatched = False
     for index, job in enumerate(jobs, 1):
         if job.get('status') == 'failed':
             lines.append(f"❌ {index}. Не удалось обработать документ. Перешлите его повторно.")
@@ -10721,12 +11057,36 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
             drafts = json.loads(job.get('created_drafts') or '[]')
         except (TypeError, json.JSONDecodeError):
             drafts = []
+        try:
+            structured_result = json.loads(job.get('result_json') or '{}')
+        except (TypeError, json.JSONDecodeError):
+            structured_result = {}
+        draft_results = {
+            int(result['draft_id']): result
+            for result in structured_result.get('supply_drafts') or []
+            if result.get('draft_id') is not None
+        }
         if drafts:
-            icon, status_text = _classify_whatsapp_draft_summary(db, drafts[0])
+            first_draft_id = _supply_draft_id_from_description(drafts[0])
+            first_result = draft_results.get(first_draft_id) if first_draft_id else None
+            if first_result:
+                icon, status_text = first_result['icon'], first_result['status_text']
+                has_unmatched = has_unmatched or bool(first_result.get('unmatched_item_ids'))
+            else:
+                icon, status_text = _classify_whatsapp_draft_summary(db, drafts[0])
+                has_unmatched = has_unmatched or icon == '❌'
             suffix = f" — {status_text}" if status_text else ''
             lines.append(f"{icon} {index}. {drafts[0]}{suffix}")
             for extra in drafts[1:]:
-                extra_icon, extra_status = _classify_whatsapp_draft_summary(db, extra)
+                extra_draft_id = _supply_draft_id_from_description(extra)
+                extra_result = draft_results.get(extra_draft_id) if extra_draft_id else None
+                if extra_result:
+                    extra_icon = extra_result['icon']
+                    extra_status = extra_result['status_text']
+                    has_unmatched = has_unmatched or bool(extra_result.get('unmatched_item_ids'))
+                else:
+                    extra_icon, extra_status = _classify_whatsapp_draft_summary(db, extra)
+                    has_unmatched = has_unmatched or extra_icon == '❌'
                 extra_suffix = f" — {extra_status}" if extra_status else ''
                 lines.append(f"   {extra_icon} {extra}{extra_suffix}")
         else:
@@ -10736,8 +11096,14 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
     lines.extend([
         "",
         "Черновики сохранены, но в Poster ещё ничего не отправлено.",
-        "Пока проверяйте их на сайте как обычно.",
     ])
+    if has_unmatched:
+        lines.append(
+            "Для красных позиций сейчас предложу варианты. "
+            "Просто отвечайте цифрой — команды запоминать не нужно."
+        )
+    else:
+        lines.append("Автопроверка пройдена. При желании можно сверить накладные на сайте.")
     return '\n'.join(lines)
 
 
@@ -10748,9 +11114,11 @@ def _send_ready_whatsapp_batch_summaries(db, settle_seconds: Optional[int] = Non
         else settle_seconds
     )
     for batch in db.get_ready_whatsapp_batches(settle):
+        _prepare_whatsapp_reviews_for_batch(db, batch)
         summary = _format_whatsapp_batch_summary(batch, db=db)
         if send_whatsapp_message(batch['chat_id'], summary):
             db.mark_whatsapp_batch_summary_sent(batch['id'])
+            _send_pending_whatsapp_review_prompts(db, chat_id=batch['chat_id'])
 
 
 def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = None) -> int:
@@ -10767,10 +11135,12 @@ def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = N
                 break
             try:
                 response_text, created_drafts = _process_whatsapp_job_payload(job)
+                structured_result = _build_whatsapp_job_result(db, created_drafts)
                 db.finish_whatsapp_job(
                     job['id'],
                     response_text,
                     json.dumps(created_drafts, ensure_ascii=False),
+                    json.dumps(structured_result, ensure_ascii=False),
                 )
             except Exception as error:
                 state = db.fail_whatsapp_job(job['id'], str(error))
@@ -10781,6 +11151,7 @@ def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = N
                 )
             processed += 1
         _send_ready_whatsapp_batch_summaries(db, settle_seconds=settle_seconds)
+        _send_pending_whatsapp_review_prompts(db)
         return processed
     finally:
         lock.release()
@@ -10848,7 +11219,23 @@ def whatsapp_webhook():
         if not _whatsapp_payload_has_content(payload):
             return 'No content to parse', 200
 
+        # A review answer is deliberately tiny and deterministic. It bypasses
+        # Gemini and the invoice queue, so "1" can only answer the exact
+        # question the bot most recently asked in this chat.
+        message_data = payload.get('messageData') or {}
+        type_message = message_data.get('typeMessage', '')
+        review_text = ''
+        if type_message == 'textMessage':
+            review_text = (message_data.get('textMessageData') or {}).get('textMessage', '')
+        elif type_message == 'extendedTextMessage':
+            review_text = (message_data.get('extendedTextMessageData') or {}).get('text', '')
+        review_text, _ = _strip_whatsapp_bot_prefix(review_text)
         message_id = _whatsapp_message_id(payload)
+        if _handle_whatsapp_review_reply(
+            db, int(user_id), chat_id, review_text, message_id=message_id
+        ):
+            return 'Review handled', 200
+
         queued = db.enqueue_whatsapp_job(
             telegram_user_id=user_id,
             chat_id=chat_id,

@@ -9,6 +9,8 @@ from tests.conftest import TEST_USER_ID
 def _reset_queue(db):
     conn = db._get_connection()
     cursor = conn.cursor()
+    cursor.execute("DELETE FROM whatsapp_review_messages")
+    cursor.execute("DELETE FROM whatsapp_reviews")
     cursor.execute("DELETE FROM whatsapp_jobs")
     cursor.execute("DELETE FROM whatsapp_batches")
     conn.commit()
@@ -191,3 +193,104 @@ def test_memory_action_requires_an_explicit_user_request(db):
         assert rule in db.get_assistant_memory(TEST_USER_ID)
     finally:
         db.save_assistant_memory(TEST_USER_ID, original_memory)
+
+
+def test_unmatched_row_is_resolved_by_numeric_choices_without_implicit_learning(db):
+    import web_app
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name='Япоша',
+        total_sum=28900,
+    )
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name='Сыр творожный RASA 66%',
+        quantity=10,
+        unit='кг',
+        price_per_unit=2890,
+    )
+    candidates = [
+        {
+            'item_id': 110,
+            'name': 'Кремета Хохланд (2,5кг)',
+            'unit': '',
+            'account_name': 'Pizzburg',
+            'item_type': 'ingredient',
+            'score': 96,
+        },
+        {
+            'item_id': 23,
+            'name': 'Кремета Хохланд 2.2кг ведро',
+            'unit': '',
+            'account_name': 'Pizzburg-cafe',
+            'item_type': 'ingredient',
+            'score': 96,
+        },
+    ]
+    try:
+        review_id = db.enqueue_whatsapp_review(
+            TEST_USER_ID,
+            'group@g.us',
+            None,
+            draft_id,
+            item_id,
+            'Сыр творожный RASA 66%',
+            json.dumps(candidates, ensure_ascii=False),
+        )
+        with patch.object(web_app, 'send_whatsapp_message', return_value=True) as send:
+            assert web_app._send_pending_whatsapp_review_prompts(db) == 1
+            assert 'Ответьте одной цифрой' in send.call_args[0][1]
+
+            assert web_app._handle_whatsapp_review_reply(
+                db, TEST_USER_ID, 'group@g.us', '1', message_id='reply-1'
+            ) is True
+            active = db.get_active_whatsapp_review(TEST_USER_ID, 'group@g.us')
+            assert active['status'] == 'awaiting_memory'
+
+            # A repeated Green-API webhook must not use the same "1" as the
+            # answer to the next question.
+            assert web_app._handle_whatsapp_review_reply(
+                db, TEST_USER_ID, 'group@g.us', '1', message_id='reply-1'
+            ) is True
+            assert db.get_active_whatsapp_review(TEST_USER_ID, 'group@g.us')['status'] == 'awaiting_memory'
+
+            assert web_app._handle_whatsapp_review_reply(
+                db, TEST_USER_ID, 'group@g.us', '2', message_id='reply-2'
+            ) is True
+
+        assert db.get_active_whatsapp_review(TEST_USER_ID, 'group@g.us') is None
+        updated = db.get_supply_draft_with_items(draft_id)['items'][0]
+        assert updated['poster_ingredient_id'] == 110
+        assert updated['poster_ingredient_name'] == 'Кремета Хохланд (2,5кг)'
+        assert updated['item_name'] == 'Сыр творожный RASA 66%'
+        aliases = db.get_ingredient_aliases(TEST_USER_ID)
+        assert not any(
+            alias['alias_text'] == 'сыр творожный rasa 66%'
+            for alias in aliases
+        )
+    finally:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM whatsapp_review_messages")
+        cursor.execute("DELETE FROM whatsapp_reviews")
+        conn.commit()
+        conn.close()
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_candidate_options_include_cross_account_cream_cheese_and_exact_fuse_tea():
+    from web_app import _whatsapp_candidate_options
+
+    cheese = _whatsapp_candidate_options(TEST_USER_ID, 'Сыр творожный RASA 66%')
+    assert [(item['item_id'], item['account_name']) for item in cheese[:2]] == [
+        (110, 'Pizzburg'),
+        (23, 'Pizzburg-cafe'),
+    ]
+
+    fuse = _whatsapp_candidate_options(TEST_USER_ID, 'Fuse Tea 1 литр')
+    assert fuse[0]['item_id'] == 55
+    assert fuse[0]['name'] == 'Фьюс чай 1л'
+    assert fuse[0]['score'] == 100

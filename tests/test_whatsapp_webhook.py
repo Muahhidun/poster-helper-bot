@@ -26,6 +26,8 @@ def clean_whatsapp_queue(db):
     """Keep durable queue rows isolated between webhook tests."""
     conn = db._get_connection()
     cursor = conn.cursor()
+    cursor.execute("DELETE FROM whatsapp_review_messages")
+    cursor.execute("DELETE FROM whatsapp_reviews")
     cursor.execute("DELETE FROM whatsapp_jobs")
     cursor.execute("DELETE FROM whatsapp_batches")
     conn.commit()
@@ -532,4 +534,3 @@ def test_whatsapp_webhook_success_audio(mock_transcribe, mock_download, mock_exe
         # Verify WhatsApp message sent
         assert mock_send_whatsapp.call_count == 2
         assert "Расход: Молоко" in mock_send_whatsapp.call_args_list[-1][0][1]
-

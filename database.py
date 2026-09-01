@@ -6683,6 +6683,7 @@ class UserDatabase:
                         status TEXT NOT NULL DEFAULT 'pending',
                         response_text TEXT,
                         created_drafts TEXT,
+                        result_json TEXT,
                         error_text TEXT,
                         attempts INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -6720,6 +6721,7 @@ class UserDatabase:
                         status TEXT NOT NULL DEFAULT 'pending',
                         response_text TEXT,
                         created_drafts TEXT,
+                        result_json TEXT,
                         error_text TEXT,
                         attempts INTEGER NOT NULL DEFAULT 0,
                         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -6731,6 +6733,81 @@ class UserDatabase:
                     )
                 """)
 
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_reviews (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        chat_id TEXT NOT NULL,
+                        batch_id INTEGER,
+                        supply_draft_id INTEGER NOT NULL,
+                        supply_item_id INTEGER NOT NULL,
+                        original_item_name TEXT NOT NULL,
+                        candidates_json TEXT NOT NULL DEFAULT '[]',
+                        selected_candidate_json TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        prompted_at TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT,
+                        UNIQUE(chat_id, supply_item_id),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                        FOREIGN KEY (batch_id) REFERENCES whatsapp_batches(id) ON DELETE SET NULL,
+                        FOREIGN KEY (supply_draft_id) REFERENCES supply_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (supply_item_id) REFERENCES supply_draft_items(id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_review_messages (
+                        chat_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL,
+                        handled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (chat_id, message_id)
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_reviews (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        chat_id TEXT NOT NULL,
+                        batch_id INTEGER,
+                        supply_draft_id INTEGER NOT NULL,
+                        supply_item_id INTEGER NOT NULL,
+                        original_item_name TEXT NOT NULL,
+                        candidates_json TEXT NOT NULL DEFAULT '[]',
+                        selected_candidate_json TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        prompted_at TIMESTAMP,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        UNIQUE(chat_id, supply_item_id),
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE,
+                        FOREIGN KEY (batch_id) REFERENCES whatsapp_batches(id) ON DELETE SET NULL,
+                        FOREIGN KEY (supply_draft_id) REFERENCES supply_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (supply_item_id) REFERENCES supply_draft_items(id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_review_messages (
+                        chat_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL,
+                        handled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (chat_id, message_id)
+                    )
+                """)
+
+            # Existing production databases already have whatsapp_jobs.
+            # Add the structured result separately so the migration remains
+            # safe for both a fresh install and an upgrade.
+            try:
+                if DB_TYPE == "sqlite":
+                    cursor.execute("ALTER TABLE whatsapp_jobs ADD COLUMN result_json TEXT")
+                else:
+                    cursor.execute("ALTER TABLE whatsapp_jobs ADD COLUMN IF NOT EXISTS result_json TEXT")
+            except Exception:
+                if DB_TYPE != "sqlite":
+                    raise
+
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_whatsapp_jobs_status
                 ON whatsapp_jobs(status, id)
@@ -6738,6 +6815,10 @@ class UserDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_whatsapp_batches_open
                 ON whatsapp_batches(telegram_user_id, chat_id, summary_sent_at, last_received_at)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_whatsapp_reviews_prompt
+                ON whatsapp_reviews(chat_id, status, id)
             """)
             # A deploy may interrupt a job after it has been claimed. Returning
             # it to pending makes the message retryable; message_id prevents a
@@ -6948,6 +7029,7 @@ class UserDatabase:
         job_id: int,
         response_text: str,
         created_drafts_json: str,
+        result_json: Optional[str] = None,
     ) -> bool:
         """Mark a claimed WhatsApp job completed and update batch counters."""
         conn = self._get_connection()
@@ -6968,10 +7050,10 @@ class UserDatabase:
                 f"""
                 UPDATE whatsapp_jobs
                 SET status = 'completed', response_text = {ph}, created_drafts = {ph},
-                    error_text = NULL, completed_at = CURRENT_TIMESTAMP
+                    result_json = {ph}, error_text = NULL, completed_at = CURRENT_TIMESTAMP
                 WHERE id = {ph}
                 """,
-                (response_text, created_drafts_json, job_id),
+                (response_text, created_drafts_json, result_json, job_id),
             )
             cursor.execute(
                 f"UPDATE whatsapp_batches SET completed_jobs = completed_jobs + 1 WHERE id = {ph}",
@@ -7086,6 +7168,217 @@ class UserDatabase:
                 """,
                 (batch_id,),
             )
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def enqueue_whatsapp_review(
+        self,
+        telegram_user_id: int,
+        chat_id: str,
+        batch_id: int,
+        supply_draft_id: int,
+        supply_item_id: int,
+        original_item_name: str,
+        candidates_json: str,
+    ) -> Optional[int]:
+        """Queue one unmatched supply row for an explicit WhatsApp choice."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor) if DB_TYPE != "sqlite" else conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            if DB_TYPE == "sqlite":
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO whatsapp_reviews
+                    (telegram_user_id, chat_id, batch_id, supply_draft_id,
+                     supply_item_id, original_item_name, candidates_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        telegram_user_id, chat_id, batch_id, supply_draft_id,
+                        supply_item_id, original_item_name, candidates_json,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO whatsapp_reviews
+                    (telegram_user_id, chat_id, batch_id, supply_draft_id,
+                     supply_item_id, original_item_name, candidates_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (chat_id, supply_item_id) DO NOTHING
+                    """,
+                    (
+                        telegram_user_id, chat_id, batch_id, supply_draft_id,
+                        supply_item_id, original_item_name, candidates_json,
+                    ),
+                )
+            cursor.execute(
+                f"SELECT id FROM whatsapp_reviews WHERE chat_id = {ph} AND supply_item_id = {ph}",
+                (chat_id, supply_item_id),
+            )
+            row = cursor.fetchone()
+            review_id = (row['id'] if hasattr(row, 'keys') else row[0]) if row else None
+            conn.commit()
+            conn.close()
+            return review_id
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def get_active_whatsapp_review(self, telegram_user_id: int, chat_id: str) -> Optional[Dict]:
+        """Return the single question currently awaiting a numeric reply."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor) if DB_TYPE != "sqlite" else conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT * FROM whatsapp_reviews
+                WHERE telegram_user_id = {ph} AND chat_id = {ph}
+                  AND status IN ('awaiting_choice', 'awaiting_memory')
+                ORDER BY id
+                LIMIT 1
+            """, (telegram_user_id, chat_id))
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception:
+            conn.close()
+            raise
+
+    def reserve_whatsapp_review_message(self, chat_id: str, message_id: str) -> bool:
+        """Deduplicate a numeric reply before it can advance review state."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute(
+                    "INSERT OR IGNORE INTO whatsapp_review_messages (chat_id, message_id) VALUES (?, ?)",
+                    (chat_id, message_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO whatsapp_review_messages (chat_id, message_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (chat_id, message_id) DO NOTHING
+                    """,
+                    (chat_id, message_id),
+                )
+            reserved = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return reserved
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def get_whatsapp_reviews_needing_prompt(self, chat_id: Optional[str] = None) -> list:
+        """Return at most one unsent review prompt per chat."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor) if DB_TYPE != "sqlite" else conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            params = []
+            chat_filter = ''
+            if chat_id is not None:
+                chat_filter = f" AND r.chat_id = {ph}"
+                params.append(chat_id)
+            cursor.execute(f"""
+                SELECT r.*
+                FROM whatsapp_reviews r
+                WHERE r.prompted_at IS NULL
+                  AND (
+                    r.batch_id IS NULL
+                    OR EXISTS (
+                      SELECT 1 FROM whatsapp_batches b
+                      WHERE b.id = r.batch_id AND b.summary_sent_at IS NOT NULL
+                    )
+                  )
+                  AND (
+                    r.status IN ('awaiting_choice', 'awaiting_memory')
+                    OR (
+                      r.status = 'pending'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM whatsapp_reviews active
+                        WHERE active.chat_id = r.chat_id
+                          AND active.status IN ('awaiting_choice', 'awaiting_memory')
+                      )
+                    )
+                  )
+                  {chat_filter}
+                ORDER BY r.id
+            """, params)
+            rows = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            first_by_chat = {}
+            for row in rows:
+                first_by_chat.setdefault(row['chat_id'], row)
+            return list(first_by_chat.values())
+        except Exception:
+            conn.close()
+            raise
+
+    def mark_whatsapp_review_prompted(self, review_id: int) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE whatsapp_reviews
+                SET status = CASE WHEN status = 'pending' THEN 'awaiting_choice' ELSE status END,
+                    prompted_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = {ph} AND status IN ('pending', 'awaiting_choice', 'awaiting_memory')
+            """, (review_id,))
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def select_whatsapp_review_candidate(self, review_id: int, candidate_json: str) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE whatsapp_reviews
+                SET selected_candidate_json = {ph}, status = 'awaiting_memory',
+                    prompted_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = {ph} AND status = 'awaiting_choice'
+            """, (candidate_json, review_id))
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def complete_whatsapp_review(self, review_id: int, skipped: bool = False) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            status = 'skipped' if skipped else 'resolved'
+            cursor.execute(f"""
+                UPDATE whatsapp_reviews
+                SET status = {ph}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = {ph} AND status IN ('awaiting_choice', 'awaiting_memory')
+            """, (status, review_id))
             changed = cursor.rowcount > 0
             conn.commit()
             conn.close()
