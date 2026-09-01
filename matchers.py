@@ -60,6 +60,20 @@ def normalize_ingredient_text(text: str) -> str:
         text = re.sub(r'\s+\d+(?:[.,]\d+)?\s*(?:кг|г|гр|л)\.?$', '', text)
     return ' '.join(text.split())
 
+
+def extract_basket_volume_ml(text: str) -> Optional[int]:
+    """Extract an explicit basket volume so 1L/2L never fall back to 800ml."""
+    normalized = normalize_text_for_matching(text)
+    if not re.search(r'\bбаскет\b', normalized):
+        return None
+    match = re.search(r'(\d+(?:[.,]\d+)?)\s*(мл|л)\b', normalized)
+    if not match:
+        return None
+    value = float(match.group(1).replace(',', '.'))
+    if match.group(2) == 'л':
+        value *= 1000
+    return int(round(value))
+
 def normalize_supplier_text(text: str) -> str:
     """Normalize supplier name by removing quotes, legal forms, and standardizing spaces."""
     if not text:
@@ -762,6 +776,21 @@ class IngredientMatcher:
 
         # Get all possible matches across all accounts
         all_matches = []
+
+        # Packaging names may share nearly all words while representing
+        # different physical sizes. When the invoice explicitly says 1L or
+        # 2L, volume is authoritative and must beat fuzzy similarity.
+        basket_volume = extract_basket_volume_ml(text)
+        if basket_volume is not None:
+            for ingredient in self.ingredients.values():
+                if extract_basket_volume_ml(ingredient['name']) == basket_volume:
+                    all_matches.append((
+                        ingredient['id'],
+                        ingredient['name'],
+                        ingredient['unit'],
+                        100,
+                        ingredient['account_name'],
+                    ))
 
         # 1. Canonical Poster names are authoritative. A stale learned alias
         # must never replace an exact catalogue item with an unrelated item.

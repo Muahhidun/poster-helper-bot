@@ -914,6 +914,11 @@ class UserDatabase:
             statements = [
                 """DELETE FROM ingredient_aliases
                    WHERE COALESCE(notes, '') LIKE 'Авто-сохранено при ручной привязке%'""",
+                """DELETE FROM ingredient_aliases
+                   WHERE COALESCE(notes, '') IN (
+                       'Auto-learned from user selection',
+                       'Auto-learned from user correction'
+                   )""",
                 """DELETE FROM supplier_aliases
                    WHERE COALESCE(notes, '') LIKE 'Авто-обучено при редактировании черновика%'""",
                 """DELETE FROM ingredient_packaging_rules

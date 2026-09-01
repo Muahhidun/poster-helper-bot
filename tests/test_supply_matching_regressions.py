@@ -60,6 +60,32 @@ def test_burger_sauce_invoice_wording_matches_catalogue_ingredient():
     assert match[4] == 'Pizzburg'
 
 
+def test_basket_volume_selects_the_correct_packaging_size(tmp_path, monkeypatch):
+    import config
+    from matchers import IngredientMatcher
+
+    (tmp_path / 'poster_ingredients.csv').write_text(
+        'ingredient_id,ingredient_name,unit,type,account_name\n'
+        '98,Крылышки 6шт упаковка (Баскет 800мл),шт,1,Pizzburg\n'
+        '181,Крылышки 12шт упаковка (Баскет 1000мл),шт,1,Pizzburg\n'
+        '182,Крылышки 24шт упаковка (Баскет 2000мл),шт,1,Pizzburg\n'
+        '302,Баскет 1000мл,шт,1,Pizzburg-cafe\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config, 'DATA_DIR', tmp_path)
+    matcher = IngredientMatcher(None)
+
+    assert matcher.match('баскет 1л')[:2] == (
+        181, 'Крылышки 12шт упаковка (Баскет 1000мл)'
+    )
+    assert matcher.match('баскет 2л')[:2] == (
+        182, 'Крылышки 24шт упаковка (Баскет 2000мл)'
+    )
+    assert matcher.match('баскет 1л', target_account='Pizzburg-cafe')[:2] == (
+        302, 'Баскет 1000мл'
+    )
+
+
 def test_packaging_metadata_reconstructs_quantity_once_after_double_ai_multiply():
     from web_app import normalize_supply_item_measurements
 
@@ -189,10 +215,16 @@ def test_manual_supply_correction_does_not_create_future_rules(db):
 
 def test_legacy_auto_learned_corrections_are_removed(db):
     alias_text = 'временный авто алиас'
+    english_alias_text = 'временный english auto alias'
     db.delete_ingredient_alias(TEST_USER_ID, alias_text)
+    db.delete_ingredient_alias(TEST_USER_ID, english_alias_text)
     db.add_ingredient_alias(
         TEST_USER_ID, alias_text, 249, 'Бургерный соус', 'ingredient',
         'Авто-сохранено при ручной привязке в Поставках',
+    )
+    db.add_ingredient_alias(
+        TEST_USER_ID, english_alias_text, 110, 'Кремета Хохланд (2,5кг)', 'ingredient',
+        'Auto-learned from user correction',
     )
     db.add_packaging_rule(
         TEST_USER_ID, 249, 'кг', 1.5, 'кг',
@@ -206,6 +238,7 @@ def test_legacy_auto_learned_corrections_are_removed(db):
     db._remove_auto_learned_corrections()
 
     assert all(a['alias_text'] != alias_text for a in db.get_ingredient_aliases(TEST_USER_ID))
+    assert all(a['alias_text'] != english_alias_text for a in db.get_ingredient_aliases(TEST_USER_ID))
     assert all(
         rule.get('notes') != 'Авто-изучено: 2 кг -> 3 кг'
         for rule in db.get_packaging_rules(TEST_USER_ID)

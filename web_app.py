@@ -10020,6 +10020,10 @@ def execute_assistant_actions(
             # 3. Add Supply Items
             elif act_type == 'add_supply_items':
                 expense_draft_id = action.get('expense_draft_id')
+                try:
+                    expense_draft_id = int(expense_draft_id)
+                except (TypeError, ValueError):
+                    raise ValueError("Не указан корректный ID расхода для поставки")
                 items = action.get('items', [])
 
                 try:
@@ -10061,6 +10065,10 @@ def execute_assistant_actions(
                                 db.update_supply_draft(supply['id'], total_sum=expense.get('amount', 0.0))
                         else:
                             logger.info(f"No new items to add to supply '{supply.get('supplier_name')}'; all incoming items already exist.")
+                            created_drafts.append(
+                                f"Поставка {supply.get('supplier_name')} уже содержит "
+                                f"все позиции (черновик #{supply['id']})"
+                            )
                     else:
                         db.clear_supply_draft_items(supply['id'])
                         _add_items_to_supply_draft(db, user_id, supply['id'], items)
@@ -10074,7 +10082,61 @@ def execute_assistant_actions(
                         if expense:
                             db.update_supply_draft(supply['id'], total_sum=expense.get('amount', 0.0))
                 else:
-                    logger.error(f"No linked supply draft found for expense_draft_id {expense_draft_id}")
+                    # Poster-synchronized supplier expenses can initially be
+                    # classified as a regular transaction and therefore have
+                    # no linked supply draft yet. Reuse that exact expense;
+                    # never create a second expense for the same receipt.
+                    expense = db.get_expense_draft(expense_draft_id)
+                    if not expense or int(expense.get('telegram_user_id') or 0) != int(user_id):
+                        raise ValueError(f"Расход #{expense_draft_id} не найден")
+                    if not items:
+                        raise ValueError(
+                            f"Для расхода #{expense_draft_id} не распознаны позиции накладной"
+                        )
+
+                    supplier_hint = action.get('supplier_name') or expense.get('description') or 'Поставщик'
+                    if explicit_supplier:
+                        supplier_hint = explicit_supplier[0]
+                    supplier_name, _ = resolve_supplier_name_and_id(user_id, supplier_hint)
+                    supplier_name = supplier_name or supplier_hint
+                    total_sum = float(expense.get('amount') or 0)
+                    if total_sum <= 0:
+                        total_sum = sum(float(item.get('sum') or 0) for item in items)
+                    source = expense.get('source') or action.get('source') or 'cash'
+
+                    if not db.update_expense_draft(
+                        expense_draft_id,
+                        telegram_user_id=user_id,
+                        expense_type='supply',
+                        description=supplier_name,
+                    ):
+                        raise ValueError(f"Не удалось пометить расход #{expense_draft_id} как поставку")
+
+                    invoice = {
+                        'supplier': supplier_name,
+                        'total_sum': total_sum,
+                        'items': items,
+                    }
+                    supply_draft_id = create_supply_draft_from_invoice(
+                        db,
+                        user_id,
+                        invoice,
+                        str(expense.get('created_at') or date_str)[:10],
+                        expense_draft_id,
+                        source,
+                    )
+                    if not supply_draft_id:
+                        raise ValueError(
+                            f"Не удалось создать поставку для расхода #{expense_draft_id}"
+                        )
+                    created_drafts.append(
+                        f"Поставка: {supplier_name} на {total_sum:,.0f}₸ "
+                        f"({len(items)} поз., черновик #{supply_draft_id})"
+                    )
+                    response_text = (
+                        (response_text + "\n" if response_text else "")
+                        + f"✅ Создан связанный черновик поставки #{supply_draft_id}."
+                    )
                     
             # 4. Create Supply
             elif act_type == 'create_supply':
@@ -10648,7 +10710,7 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
     failed = sum(1 for job in jobs if job.get('status') == 'failed')
     lines = [
         f"📋 *Пакет #{batch['id']} обработан*",
-        f"Получено: {len(jobs)} • Обработано: {completed} • Ошибки: {failed}",
+        f"Получено: {len(jobs)} • Обработано: {completed} • Сбои обработки: {failed}",
         "",
     ]
     for index, job in enumerate(jobs, 1):
