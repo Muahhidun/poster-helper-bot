@@ -1,6 +1,7 @@
 """Matching and aliasing services for categories and accounts"""
 import csv
 import logging
+import re
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 from rapidfuzz import fuzz, process
@@ -39,6 +40,16 @@ def normalize_text_for_matching(text: str) -> str:
 
     return text
 
+
+def normalize_product_text(text: str) -> str:
+    """Normalize common product spelling and unit variants for matching."""
+    text = normalize_text_for_matching(text)
+    text = re.sub(r'\b(?:fuse|fuze|фьюз|фьюс)\b', 'фьюс', text)
+    text = re.sub(r'\b(?:tea)\b', 'чай', text)
+    text = re.sub(r'\bфьюс\s+чай\b', 'фьюс', text)
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*(?:литр(?:а|ов)?|л)\b', r'\1л', text)
+    return text.replace(',', '.')
+
 def normalize_supplier_text(text: str) -> str:
     """Normalize supplier name by removing quotes, legal forms, and standardizing spaces."""
     if not text:
@@ -46,6 +57,9 @@ def normalize_supplier_text(text: str) -> str:
     import re
     # Lowercase
     t = text.lower().strip()
+    # Treat all dash variants as word separators. The same supplier is often
+    # written as "Сары-Арка" in one Poster account and "Сары Арка" in another.
+    t = re.sub(r'[-‐‑‒–—]+', ' ', t)
     # Remove quotes and common symbols
     t = re.sub(r'["\'«»“”`~!@#$%^&*()_+=]', '', t)
     # Remove common corporate prefixes/suffixes (legal forms)
@@ -67,6 +81,12 @@ def normalize_supplier_text(text: str) -> str:
     t = t.strip(' .,-()')
     # Replace multiple spaces with a single space
     t = re.sub(r'\s+', ' ', t)
+    t = re.sub(r'\b(?:сарыарка|сарарка)\b', 'сары арка', t)
+    # Normalize the colloquial supplier description "молочка" and its
+    # grammatical variants to the catalogue form.
+    t = re.sub(r'\bмолоч\w*\b', 'молочный', t)
+    t = re.sub(r'\bовощ\w*\b', 'овощи', t)
+    t = re.sub(r'\bкус\s+вкус\b', 'кусвкус', t)
     return t
 
 
@@ -593,8 +613,9 @@ class IngredientMatcher:
                 self.ingredients[(ingredient_id, account_name)] = info
 
                 # Add name for matching
-                self.names.setdefault(name.lower(), []).append((ingredient_id, account_name))
-                self._name_to_info[(name.lower(), account_name)] = info
+                normalized_name = normalize_text_for_matching(name)
+                self.names.setdefault(normalized_name, []).append((ingredient_id, account_name))
+                self._name_to_info[(normalized_name, account_name)] = info
                 self._id_entries.setdefault(ingredient_id, []).append(info)
 
         logger.info(f"✅ Loaded {len(self.ingredients)} ingredients from CSV for user {self.telegram_user_id}")
@@ -623,15 +644,17 @@ class IngredientMatcher:
 
                     # Normalize alias text (same as input text normalization)
                     alias = normalize_text_for_matching(row['alias_text'])
+                    item_id = int(row['poster_item_id'])
                     # Find candidates by ID to resolve collisions
                     candidates = list(self._id_entries.get(item_id, []))
-                    db_item_name = row.get('poster_item_name', '').strip().lower()
+                    db_item_name = normalize_text_for_matching(row.get('poster_item_name', ''))
 
                     # Filter candidates by db_item_name if known to avoid cross-account ID collisions
                     if db_item_name:
                         matched_cands = [
                             c for c in candidates
-                            if c['name'].strip().lower() == db_item_name or fuzz.ratio(c['name'].strip().lower(), db_item_name) >= 80
+                            if normalize_text_for_matching(c['name']) == db_item_name
+                            or fuzz.ratio(normalize_text_for_matching(c['name']), db_item_name) >= 80
                         ]
                         if matched_cands:
                             candidates = matched_cands
@@ -730,16 +753,17 @@ class IngredientMatcher:
         # Get all possible matches across all accounts
         all_matches = []
 
-        # 1. Check aliases first
-        if text_lower in self.aliases:
-            for ingredient_id, account_name in self.aliases[text_lower]:
+        # 1. Canonical Poster names are authoritative. A stale learned alias
+        # must never replace an exact catalogue item with an unrelated item.
+        if text_lower in self.names:
+            for ingredient_id, account_name in self.names[text_lower]:
                 ingredient = self.ingredients.get((ingredient_id, account_name))
                 if ingredient:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
-        # 2. Check exact name matches
-        if not all_matches and text_lower in self.names:
-            for ingredient_id, account_name in self.names[text_lower]:
+        # 2. Then check exact aliases.
+        if not all_matches and text_lower in self.aliases:
+            for ingredient_id, account_name in self.aliases[text_lower]:
                 ingredient = self.ingredients.get((ingredient_id, account_name))
                 if ingredient:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
@@ -843,7 +867,9 @@ class IngredientMatcher:
             acc = m[4]
             is_target = (acc == target_account) if target_account else False
             is_primary = (acc == primary_account)
-            return (is_target, is_primary, m[3])
+            # Match quality is more important than the primary department.
+            # Primary only breaks ties between equally good candidates.
+            return (is_target, m[3], is_primary)
 
         best_match = max(all_matches, key=sort_key)
         logger.info(f"✅ Found ingredient match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
@@ -1041,7 +1067,7 @@ class ProductMatcher:
 
                 # Только товары категории "Напитки" могут быть в поставках
                 # Остальные категории (Бургеры, Пиццы и т.д.) - это техкарты, они не закупаются
-                if category != 'Напитки':
+                if not category.casefold().startswith('напитки'):
                     continue
 
                 info = {
@@ -1054,8 +1080,9 @@ class ProductMatcher:
                 self.products[(product_id, account_name)] = info
 
                 # Add name for matching
-                self.names.setdefault(name.lower(), []).append((product_id, account_name))
-                self._name_to_info[(name.lower(), account_name)] = info
+                normalized_name = normalize_product_text(name)
+                self.names.setdefault(normalized_name, []).append((product_id, account_name))
+                self._name_to_info[(normalized_name, account_name)] = info
                 self._id_entries.setdefault(product_id, []).append(info)
 
         logger.info(f"✅ Loaded {len(self.products)} products from CSV for user {self.telegram_user_id}")
@@ -1086,12 +1113,21 @@ class ProductMatcher:
 
                     product_count += 1
                     # Normalize alias text (same as input text normalization)
-                    alias = normalize_text_for_matching(row['alias_text'])
+                    alias = normalize_product_text(row['alias_text'])
                     item_id = int(row['poster_item_id'])
 
                     # Find candidates by ID to resolve collisions
                     candidates = list(self._id_entries.get(item_id, []))
-                    db_item_name = row.get('poster_item_name', '').strip().lower()
+                    db_item_name = normalize_product_text(row.get('poster_item_name', ''))
+
+                    if db_item_name:
+                        matched_cands = [
+                            c for c in candidates
+                            if normalize_product_text(c['name']) == db_item_name
+                            or fuzz.ratio(normalize_product_text(c['name']), db_item_name) >= 80
+                        ]
+                        if matched_cands:
+                            candidates = matched_cands
 
                     # Also find candidates across all accounts by matching product name
                     if db_item_name and db_item_name in self.names:
@@ -1139,7 +1175,7 @@ class ProductMatcher:
                     continue
 
                 # Normalize alias text
-                alias = normalize_text_for_matching(row['alias_text'])
+                alias = normalize_product_text(row['alias_text'])
                 item_id = int(row['poster_item_id'])
 
                 candidates = self._id_entries.get(item_id, [])
@@ -1182,21 +1218,21 @@ class ProductMatcher:
             return None
 
         # Normalize text for better matching
-        text_lower = normalize_text_for_matching(text)
+        text_lower = normalize_product_text(text)
 
         # Get all possible matches across all accounts
         all_matches = []
 
-        # 1. Check aliases first
-        if text_lower in self.aliases:
-            for product_id, account_name in self.aliases[text_lower]:
+        # 1. Exact Poster catalogue name wins over any learned alias.
+        if text_lower in self.names:
+            for product_id, account_name in self.names[text_lower]:
                 product = self.products.get((product_id, account_name))
                 if product:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
-        # 2. Check exact name matches
-        if not all_matches and text_lower in self.names:
-            for product_id, account_name in self.names[text_lower]:
+        # 2. Then check exact aliases.
+        if not all_matches and text_lower in self.aliases:
+            for product_id, account_name in self.aliases[text_lower]:
                 product = self.products.get((product_id, account_name))
                 if product:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
@@ -1261,6 +1297,30 @@ class ProductMatcher:
             )
 
             for matched_name, score, _ in name_matches:
+                text_words = set(text_lower.split())
+                matched_words = set(matched_name.split())
+                common_tokens = text_words & matched_words
+
+                # A shared volume token ("1л") is not enough to identify a
+                # beverage. This previously allowed "Fuse Tea 1л" to become
+                # an unrelated drink merely because both names contained 1л.
+                meaningful_overlap = {
+                    token for token in common_tokens
+                    if len(token) >= 3 and not any(ch.isdigit() for ch in token)
+                }
+                if (
+                    text_lower != matched_name
+                    and not meaningful_overlap
+                    and score < 92
+                ):
+                    logger.info(
+                        "      ❌ Rejected unsafe product-name match: '%s' → '%s' (score=%.1f)",
+                        text_lower,
+                        matched_name,
+                        score,
+                    )
+                    continue
+
                 for product_id, account_name in self.names[matched_name]:
                     product = self.products.get((product_id, account_name))
                     if not product:
@@ -1276,7 +1336,7 @@ class ProductMatcher:
             acc = m[4]
             is_target = (acc == target_account) if target_account else False
             is_primary = (acc == primary_account)
-            return (is_target, is_primary, m[3])
+            return (is_target, m[3], is_primary)
 
         best_match = max(all_matches, key=sort_key)
         logger.info(f"✅ Found product match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
@@ -1429,6 +1489,12 @@ _account_matchers: Dict[Optional[int], AccountMatcher] = {}
 _supplier_matchers: Dict[Optional[int], SupplierMatcher] = {}
 _ingredient_matchers: Dict[Optional[int], IngredientMatcher] = {}
 _product_matchers: Dict[Optional[int], ProductMatcher] = {}
+
+
+def invalidate_item_matchers(telegram_user_id: Optional[int]) -> None:
+    """Reload learned ingredient/product aliases on the next match."""
+    _ingredient_matchers.pop(telegram_user_id, None)
+    _product_matchers.pop(telegram_user_id, None)
 
 
 def get_category_matcher(telegram_user_id: Optional[int] = None) -> CategoryMatcher:

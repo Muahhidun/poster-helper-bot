@@ -892,8 +892,96 @@ class UserDatabase:
         # Run migration for purchase sheet tables
         self._migrate_purchase_sheet()
 
+        # Explicit cross-account supplier identity table. Supplier IDs belong
+        # to one Poster account and cannot be reused in another account.
+        self._migrate_supplier_account_mappings()
+
+        # Manual draft corrections are one-off fixes, not reusable business
+        # rules. Remove rows created by the retired auto-learning behavior.
+        self._remove_auto_learned_corrections()
+
         # Clean invalid or corrupted aliases
         self._clean_invalid_aliases()
+
+    def _remove_auto_learned_corrections(self):
+        """Delete aliases, price habits, and coefficients learned from edits."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            statements = [
+                """DELETE FROM ingredient_aliases
+                   WHERE COALESCE(notes, '') LIKE 'Авто-сохранено при ручной привязке%'""",
+                """DELETE FROM supplier_aliases
+                   WHERE COALESCE(notes, '') LIKE 'Авто-обучено при редактировании черновика%'""",
+                """DELETE FROM ingredient_packaging_rules
+                   WHERE COALESCE(notes, '') LIKE 'Авто-изучено:%'""",
+                """DELETE FROM ingredient_habits
+                   WHERE COALESCE(notes, '') LIKE 'Изучено из ручного ввода цены%'""",
+            ]
+            deleted = 0
+            for statement in statements:
+                cursor.execute(statement)
+                deleted += max(cursor.rowcount or 0, 0)
+            conn.commit()
+            conn.close()
+            if deleted:
+                logger.info("Removed %s legacy auto-learned correction rows", deleted)
+        except Exception as e:
+            logger.error(f"Failed to remove auto-learned corrections: {e}")
+
+    def _migrate_supplier_account_mappings(self):
+        """Create canonical supplier-to-account ID mappings."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS supplier_account_mappings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        canonical_name TEXT NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        poster_account_name TEXT NOT NULL,
+                        poster_supplier_id INTEGER NOT NULL,
+                        poster_supplier_name TEXT NOT NULL,
+                        confidence REAL NOT NULL DEFAULT 100,
+                        source TEXT NOT NULL DEFAULT 'manual',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, canonical_name, poster_account_id),
+                        UNIQUE(telegram_user_id, poster_account_id, poster_supplier_id)
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_supplier_account_mapping_lookup
+                    ON supplier_account_mappings(telegram_user_id, poster_account_id, canonical_name)
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS supplier_account_mappings (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        canonical_name TEXT NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        poster_account_name TEXT NOT NULL,
+                        poster_supplier_id INTEGER NOT NULL,
+                        poster_supplier_name TEXT NOT NULL,
+                        confidence DOUBLE PRECISION NOT NULL DEFAULT 100,
+                        source TEXT NOT NULL DEFAULT 'manual',
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, canonical_name, poster_account_id),
+                        UNIQUE(telegram_user_id, poster_account_id, poster_supplier_id)
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_supplier_account_mapping_lookup
+                    ON supplier_account_mappings(telegram_user_id, poster_account_id, canonical_name)
+                """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to migrate supplier account mappings: {e}")
 
     def _clean_invalid_aliases(self):
         """Clean up mistakenly saved or corrupt aliases"""
@@ -3218,6 +3306,86 @@ class UserDatabase:
             return None
 
     # === Supplier Aliases Methods ===
+
+    def get_supplier_account_mappings(self, telegram_user_id: int) -> list:
+        """Return explicit canonical supplier IDs for every Poster account."""
+        conn = self._get_connection()
+        if DB_TYPE == "sqlite":
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, canonical_name, poster_account_id, poster_account_name,
+                       poster_supplier_id, poster_supplier_name, confidence, source,
+                       created_at, updated_at
+                FROM supplier_account_mappings
+                WHERE telegram_user_id = ?
+                ORDER BY canonical_name, poster_account_name
+            """, (telegram_user_id,))
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        else:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT id, canonical_name, poster_account_id, poster_account_name,
+                       poster_supplier_id, poster_supplier_name, confidence, source,
+                       created_at, updated_at
+                FROM supplier_account_mappings
+                WHERE telegram_user_id = %s
+                ORDER BY canonical_name, poster_account_name
+            """, (telegram_user_id,))
+            rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def replace_auto_supplier_account_mappings(
+        self,
+        telegram_user_id: int,
+        mappings: list,
+    ) -> bool:
+        """Replace high-confidence automatic mappings while preserving manual rows."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholder = '?' if DB_TYPE == 'sqlite' else '%s'
+            cursor.execute(
+                f"DELETE FROM supplier_account_mappings WHERE telegram_user_id = {placeholder} AND source = 'auto'",
+                (telegram_user_id,),
+            )
+
+            for mapping in mappings:
+                values = (
+                    telegram_user_id,
+                    mapping['canonical_name'],
+                    int(mapping['poster_account_id']),
+                    mapping['poster_account_name'],
+                    int(mapping['poster_supplier_id']),
+                    mapping['poster_supplier_name'],
+                    float(mapping.get('confidence', 100)),
+                    'auto',
+                )
+                if DB_TYPE == 'sqlite':
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO supplier_account_mappings (
+                            telegram_user_id, canonical_name, poster_account_id,
+                            poster_account_name, poster_supplier_id, poster_supplier_name,
+                            confidence, source, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """, values)
+                else:
+                    cursor.execute("""
+                        INSERT INTO supplier_account_mappings (
+                            telegram_user_id, canonical_name, poster_account_id,
+                            poster_account_name, poster_supplier_id, poster_supplier_name,
+                            confidence, source, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT DO NOTHING
+                    """, values)
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to replace supplier account mappings: {e}")
+            return False
 
 
     def get_supplier_aliases(self, telegram_user_id: int) -> list:

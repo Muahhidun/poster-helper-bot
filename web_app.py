@@ -560,6 +560,229 @@ def resolve_supplier_name_and_id(user_id: int, text: str) -> tuple:
     return text, None
 
 
+def build_supplier_account_mapping_rows(
+    accounts: List[Dict],
+    suppliers: List[Dict],
+) -> List[Dict]:
+    """Build one-to-one mappings only for suppliers confidently shared by accounts."""
+    from rapidfuzz import fuzz
+    from matchers import normalize_supplier_text, transliterate_latin_to_cyrillic
+
+    if len(accounts or []) < 2:
+        return []
+    primary = next((acc for acc in accounts if acc.get('is_primary')), accounts[0])
+    primary_suppliers = [
+        supplier for supplier in suppliers
+        if int(supplier.get('poster_account_id') or 0) == int(primary['id'])
+    ]
+    mapping_rows = []
+
+    for secondary in [acc for acc in accounts if int(acc['id']) != int(primary['id'])]:
+        secondary_suppliers = [
+            supplier for supplier in suppliers
+            if int(supplier.get('poster_account_id') or 0) == int(secondary['id'])
+        ]
+        candidates = []
+        for left in primary_suppliers:
+            left_name = (left.get('name') or left.get('supplier_name') or '').strip()
+            left_normalized = normalize_supplier_text(left_name)
+            left_variants = {left_normalized, transliterate_latin_to_cyrillic(left_normalized)}
+            left_words = set(re.findall(r'[a-zа-яё0-9]+', left_normalized))
+            for right in secondary_suppliers:
+                right_name = (right.get('name') or right.get('supplier_name') or '').strip()
+                right_normalized = normalize_supplier_text(right_name)
+                right_variants = {right_normalized, transliterate_latin_to_cyrillic(right_normalized)}
+                right_words = set(re.findall(r'[a-zа-яё0-9]+', right_normalized))
+                meaningful_overlap = {
+                    word for word in left_words & right_words
+                    if len(word) >= 3 and not word.isdigit()
+                }
+                score = max(
+                    max(fuzz.token_set_ratio(a, b), fuzz.WRatio(a, b))
+                    for a in left_variants for b in right_variants if a and b
+                )
+                raw_score = max(
+                    fuzz.token_set_ratio(left_name.casefold(), right_name.casefold()),
+                    fuzz.WRatio(left_name.casefold(), right_name.casefold()),
+                )
+                if not meaningful_overlap and score < 96:
+                    continue
+                if score >= 88:
+                    candidates.append((
+                        float(score), float(raw_score),
+                        int(left['id']), int(right['id']), left, right,
+                    ))
+
+        # Greedy maximum matching makes the relation one-to-one and prevents
+        # duplicate near-identical suppliers in one account from sharing an ID.
+        used_primary = set()
+        used_secondary = set()
+        for score, raw_score, left_id, right_id, left, right in sorted(
+            candidates,
+            key=lambda candidate: candidate[:4],
+            reverse=True,
+        ):
+            if left_id in used_primary or right_id in used_secondary:
+                continue
+            used_primary.add(left_id)
+            used_secondary.add(right_id)
+            canonical_name = (left.get('name') or left.get('supplier_name') or '').strip()
+            confidence = round((score * 0.75) + (raw_score * 0.25), 2)
+            for account, supplier in ((primary, left), (secondary, right)):
+                mapping_rows.append({
+                    'canonical_name': canonical_name,
+                    'poster_account_id': int(account['id']),
+                    'poster_account_name': account['account_name'],
+                    'poster_supplier_id': int(supplier['id']),
+                    'poster_supplier_name': (supplier.get('name') or supplier.get('supplier_name') or '').strip(),
+                    'confidence': confidence,
+                })
+
+    return mapping_rows
+
+
+def resolve_supplier_for_account(
+    supplier_name: str,
+    suppliers: List[Dict],
+    telegram_user_id: Optional[int] = None,
+    poster_account_id: Optional[int] = None,
+) -> Tuple[Optional[int], Optional[str]]:
+    """Resolve one business supplier to the ID used by a specific Poster account.
+
+    Supplier IDs are local to each Poster account, and spelling also differs
+    (for example, ``Сары-Арка молочный отдел (Слева)`` versus
+    ``Сары Арка молочный``). Never fall back to the first supplier: doing so
+    silently turns an unknown supplier into Metro.
+    """
+    from rapidfuzz import fuzz
+    from matchers import normalize_supplier_text, transliterate_latin_to_cyrillic
+
+    query = normalize_supplier_text(supplier_name)
+    if not query:
+        return None, None
+
+    # Prefer the explicit ID-to-ID table. Fuzzy matching below remains a safe
+    # fallback for a newly renamed supplier until the next mapping sync.
+    if telegram_user_id and poster_account_id:
+        try:
+            rows = get_database().get_supplier_account_mappings(telegram_user_id)
+            groups = {}
+            for row in rows:
+                groups.setdefault(row['canonical_name'], []).append(row)
+
+            mapped_candidates = []
+            for canonical_name, group_rows in groups.items():
+                aliases = [canonical_name] + [row['poster_supplier_name'] for row in group_rows]
+                score = max(
+                    fuzz.token_set_ratio(query, normalize_supplier_text(alias))
+                    for alias in aliases if alias
+                )
+                if score >= 90:
+                    mapped_candidates.append((score, canonical_name, group_rows))
+
+            mapped_candidates.sort(reverse=True)
+            if mapped_candidates and (
+                len(mapped_candidates) == 1
+                or mapped_candidates[0][0] > mapped_candidates[1][0]
+            ):
+                target_row = next((
+                    row for row in mapped_candidates[0][2]
+                    if int(row['poster_account_id']) == int(poster_account_id)
+                ), None)
+                if target_row:
+                    for supplier in suppliers or []:
+                        supplier_id = supplier.get('supplier_id') or supplier.get('id')
+                        if supplier_id is not None and int(supplier_id) == int(target_row['poster_supplier_id']):
+                            actual_name = (supplier.get('supplier_name') or supplier.get('name') or '').strip()
+                            return int(supplier_id), actual_name
+        except Exception as mapping_error:
+            logger.warning("Could not use supplier account mapping: %s", mapping_error)
+    query_variants = {query, transliterate_latin_to_cyrillic(query)}
+    query_words = set(re.findall(r'[a-zа-яё0-9]+', query))
+
+    candidates = []
+    for supplier in suppliers or []:
+        if str(supplier.get('delete', '0')) == '1':
+            continue
+        raw_name = (supplier.get('supplier_name') or supplier.get('name') or '').strip()
+        supplier_id = supplier.get('supplier_id') or supplier.get('id')
+        if not raw_name or supplier_id in (None, ''):
+            continue
+
+        normalized = normalize_supplier_text(raw_name)
+        variants = {normalized, transliterate_latin_to_cyrillic(normalized)}
+        if query_variants & variants:
+            return int(supplier_id), raw_name
+
+        candidate_words = set(re.findall(r'[a-zа-яё0-9]+', normalized))
+        meaningful_overlap = {
+            word for word in query_words & candidate_words
+            if len(word) >= 3 and not word.isdigit()
+        }
+        score = max(
+            max(fuzz.token_set_ratio(q, c), fuzz.WRatio(q, c))
+            for q in query_variants for c in variants if q and c
+        )
+
+        # Multi-word descriptive suppliers need at least one meaningful shared
+        # word. Single-word brands such as Япоша may match by a very high score.
+        if not meaningful_overlap and score < 92:
+            continue
+        if score >= 82:
+            candidates.append((score, len(meaningful_overlap), int(supplier_id), raw_name))
+
+    if not candidates:
+        return None, None
+
+    candidates.sort(reverse=True)
+    best = candidates[0]
+    if len(candidates) > 1 and candidates[1][0] >= best[0] - 1 and candidates[1][2] != best[2]:
+        logger.warning("Ambiguous supplier '%s' in Poster catalogue: %s", supplier_name, candidates[:2])
+        return None, None
+    return best[2], best[3]
+
+
+def resolve_finance_account_for_source(
+    finance_accounts: List[Dict],
+    source: str,
+    preferred_id: Optional[int] = None,
+) -> Tuple[Optional[int], Optional[str]]:
+    """Map the shared business account to the local ID of one Poster account."""
+    source = (source or 'cash').strip().lower()
+
+    def account_name(account):
+        return (account.get('account_name') or account.get('name') or '').strip()
+
+    def matches(name):
+        lowered = name.lower()
+        if source == 'kaspi':
+            return 'kaspi' in lowered or 'каспи' in lowered
+        if source == 'halyk':
+            return 'halyk' in lowered or 'халык' in lowered
+        return 'оставил' in lowered or 'закуп' in lowered
+
+    # Numeric IDs are not shared between Poster accounts. A preferred ID is
+    # accepted only when its name has the requested meaning in this account.
+    if preferred_id not in (None, ''):
+        for account in finance_accounts or []:
+            if int(account.get('account_id', 0)) == int(preferred_id):
+                name = account_name(account)
+                if matches(name):
+                    return int(account['account_id']), name
+
+    matches_found = []
+    for account in finance_accounts or []:
+        name = account_name(account)
+        if matches(name):
+            matches_found.append((int(account['account_id']), name))
+
+    if len(matches_found) == 1:
+        return matches_found[0]
+    if len(matches_found) > 1:
+        logger.warning("Ambiguous finance source '%s': %s", source, matches_found)
+    return None, None
+
+
 def find_explicit_supplier_name_and_id(user_id: int, text: str) -> Optional[tuple]:
     """Find a supplier name explicitly written in the user's message.
 
@@ -579,6 +802,7 @@ def find_explicit_supplier_name_and_id(user_id: int, text: str) -> Optional[tupl
         matcher = get_supplier_matcher(user_id)
         normalized_text = normalize_supplier_text(text)
         compact_text = re.sub(r'[-‐‑–—]', '', normalized_text)
+        squashed_text = re.sub(r'\s+', '', normalized_text)
         text_words = re.findall(r'[a-zа-яё0-9]+', compact_text)
         matches = []
         generic_product_words = {
@@ -590,12 +814,19 @@ def find_explicit_supplier_name_and_id(user_id: int, text: str) -> Optional[tupl
             supplier_name = (supplier.get('name') or '').strip()
             normalized_name = normalize_supplier_text(supplier_name)
             compact_name = re.sub(r'[-‐‑–—]', '', normalized_name)
+            squashed_name = re.sub(r'\s+', '', normalized_name)
             if not compact_name:
                 continue
 
             # A full catalogue name inside the message is the strongest signal.
             if re.search(rf'(?<!\w){re.escape(compact_name)}(?!\w)', compact_text):
                 matches.append((3, len(compact_name), supplier_id, supplier_name))
+                continue
+            if len(squashed_name) >= 8 and (
+                squashed_name in squashed_text
+                or fuzz.partial_ratio(squashed_name, squashed_text) >= 91
+            ):
+                matches.append((3, len(squashed_name), supplier_id, supplier_name))
                 continue
 
             # For descriptive names ("Алимжан помидоры", "Богатырь мороженое")
@@ -669,8 +900,103 @@ def resolve_item_match(ing_matcher, prod_matcher, name: str, target_account: Opt
     prod_score = prod_match[3]
     if prod_score > ing_score:
         return prod_match[0], prod_match[1], prod_match[2], 'product', prod_match[4]
-    else:
-        return ing_match[0], ing_match[1], ing_match[2], 'ingredient', ing_match[4]
+    return ing_match[0], ing_match[1], ing_match[2], 'ingredient', ing_match[4]
+
+
+def normalize_supply_item_measurements(
+    item: Dict,
+    matched_name: str,
+    matching_rule: Optional[Dict] = None,
+    default_price: Optional[float] = None,
+) -> Tuple[float, float, str, float, str, float]:
+    """Apply a packaging conversion once while preserving the invoice total.
+
+    Gemini now returns the original invoice values and the pack size whenever
+    it applies a memory rule. Those fields make the operation idempotent: even
+    if the model accidentally multiplies twice, the backend reconstructs the
+    one correct result from ``original_qty * pack_size``.
+    """
+    qty = float(item.get('qty') or 1)
+    price = float(item.get('price') or 0)
+    unit = (item.get('unit') or 'шт').strip()
+
+    original_qty_value = item.get('original_qty')
+    original_price_value = item.get('original_price')
+    parsed_qty = float(original_qty_value) if original_qty_value not in (None, '') else qty
+    parsed_price = float(original_price_value) if original_price_value not in (None, '') else price
+    parsed_unit = (item.get('original_unit') or unit).strip()
+
+    row_sum_value = item.get('sum')
+    row_sum = float(row_sum_value) if row_sum_value not in (None, '') else parsed_qty * parsed_price
+    pack_size_value = item.get('pack_size')
+    pack_size = float(pack_size_value) if pack_size_value not in (None, '') else None
+
+    if original_qty_value not in (None, '') and pack_size and pack_size > 1:
+        expected_qty = parsed_qty * pack_size
+        if expected_qty > 0:
+            target_unit = (item.get('target_unit') or unit or 'шт').strip()
+            return expected_qty, row_sum / expected_qty, target_unit, parsed_qty, parsed_unit, parsed_price
+
+    if matching_rule:
+        coefficient = float(matching_rule['coefficient'])
+        learned_price = float(default_price) if default_price not in (None, '') else None
+        already_converted = bool(
+            learned_price
+            and learned_price > 0
+            and abs(price - learned_price) / learned_price <= 0.35
+        )
+        if not already_converted and coefficient > 0:
+            return (
+                parsed_qty * coefficient,
+                parsed_price / coefficient,
+                matching_rule.get('target_unit', unit),
+                parsed_qty,
+                parsed_unit,
+                parsed_price,
+            )
+
+    # Price habits repair an unexpanded package (package price is much higher
+    # than the learned unit price). For a suspiciously low price, auto-repair
+    # only when the error is exactly another application of a pack size encoded
+    # in the canonical Poster name, e.g. (12шт) or 100шт.
+    if default_price not in (None, ''):
+        learned_price = float(default_price)
+        if learned_price > 0 and row_sum > 0:
+            calculated_qty = row_sum / learned_price
+            clean_calculated_qty = round(calculated_qty)
+            is_clean_qty = abs(calculated_qty - clean_calculated_qty) < 0.05
+            if price > learned_price * 1.5 and is_clean_qty and clean_calculated_qty > 0:
+                return float(clean_calculated_qty), learned_price, unit, parsed_qty, parsed_unit, parsed_price
+
+            pack_match = re.search(r'(?<!\d)(\d{2,3})\s*шт', matched_name or '', flags=re.IGNORECASE)
+            if price < learned_price / 1.5 and is_clean_qty and calculated_qty > 0 and pack_match:
+                canonical_pack = float(pack_match.group(1))
+                repeated_ratio = qty / calculated_qty
+                if abs(repeated_ratio - canonical_pack) < 0.05:
+                    return float(clean_calculated_qty), learned_price, unit, parsed_qty, parsed_unit, parsed_price
+
+    return qty, price, unit, parsed_qty, parsed_unit, parsed_price
+
+
+def calculate_supply_total_mismatch(
+    items: List[Dict],
+    expected_total: Optional[float],
+    tolerance: float = 2.0,
+) -> Optional[Tuple[float, float, float]]:
+    """Return expected, actual, and difference when a supply does not balance."""
+    if expected_total in (None, ''):
+        return None
+    expected = round(float(expected_total), 2)
+    if expected <= 0:
+        return None
+    actual = round(sum(
+        float(item.get('quantity') or 0) * float(item.get('price_per_unit') or 0)
+        for item in items
+    ), 2)
+    difference = round(actual - expected, 2)
+    if abs(difference) <= tolerance:
+        return None
+    return expected, actual, difference
 
 
 @app.route('/')
@@ -4303,8 +4629,11 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
     supply_draft = db.get_supply_draft_with_items(supply_draft_id)
     target_account = None
     if supply_draft:
-        target_account_id = supply_draft.get('account_id')
-        if not target_account_id and supply_draft.get('linked_expense_draft_id'):
+        # supply_draft.account_id is a finance-account ID from Poster, not our
+        # local connected-account ID. Only the linked expense can identify the
+        # intended department here.
+        target_account_id = None
+        if supply_draft.get('linked_expense_draft_id'):
             expense = db.get_expense_draft(supply_draft['linked_expense_draft_id'])
             if expense:
                 target_account_id = expense.get('poster_account_id')
@@ -4330,48 +4659,44 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
             )
             account_id = account_name_to_id.get(account_name) if account_name else None
 
-            parsed_quantity = qty
-            parsed_unit = item.get('unit', 'шт')
-            parsed_price_per_unit = price
-            target_unit = parsed_unit
+            matching_rule = None
+            default_price = None
 
             if item_id and item_type == 'ingredient':
-                matching_rule = None
                 item_acc_name = (account_name or '').strip()
+                original_unit = (item.get('original_unit') or unit).strip().lower()
 
                 if item_acc_name:
                     matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
-                                         and r['original_unit'].strip().lower() == unit
+                                         and r['original_unit'].strip().lower() == original_unit
                                          and r.get('account_name', '').strip() == item_acc_name), None)
 
                 if not matching_rule:
                     matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
-                                         and r['original_unit'].strip().lower() == unit
+                                         and r['original_unit'].strip().lower() == original_unit
                                          and not r.get('account_name', '').strip()), None)
 
-                if matching_rule:
-                    coef = float(matching_rule['coefficient'])
-                    target_unit = matching_rule.get('target_unit', 'кг')
-                    qty = parsed_quantity * coef
-                    price = parsed_price_per_unit / coef
-                    logger.info(f"⚖️ Applied packaging rule for ingredient {item_id} (account: '{matching_rule.get('account_name', '')}'): {parsed_quantity} {parsed_unit} -> {qty} {target_unit} (coef={coef})")
-                else:
-                    default_price = None
-                    if item_acc_name:
-                        default_price = habits_dict.get((item_id, item_acc_name))
-                    if default_price is None:
-                        default_price = habits_dict.get((item_id, ''))
+                if item_acc_name:
+                    default_price = habits_dict.get((item_id, item_acc_name))
+                if default_price is None:
+                    default_price = habits_dict.get((item_id, ''))
 
-                    if default_price is not None:
-                        default_price = float(default_price)
-                        total_sum_item = parsed_quantity * parsed_price_per_unit
-                        if parsed_price_per_unit > default_price * 1.5 and abs(total_sum_item / default_price - round(total_sum_item / default_price)) < 0.05:
-                            calculated_qty = round(total_sum_item / default_price)
-                            if calculated_qty > 0:
-                                qty = float(calculated_qty)
-                                price = default_price
-                                target_unit = 'кг'
-                                logger.info(f"⚖️ Habit match for ingredient {item_id} (account: '{item_acc_name}'): qty {qty} based on total {total_sum_item} and typical price {default_price}")
+            original_qty = qty
+            original_price = price
+            qty, price, target_unit, parsed_quantity, parsed_unit, parsed_price_per_unit = (
+                normalize_supply_item_measurements(
+                    item,
+                    matched_name or name,
+                    matching_rule=matching_rule,
+                    default_price=default_price,
+                )
+            )
+            if qty != original_qty or price != original_price:
+                logger.info(
+                    "⚖️ Normalized packaging for '%s': %s %s × %s -> %s %s × %s",
+                    name, parsed_quantity, parsed_unit, parsed_price_per_unit,
+                    qty, target_unit, price,
+                )
 
             db.add_supply_draft_item(
                 supply_draft_id=supply_draft_id,
@@ -6203,147 +6528,27 @@ def delete_supply_item(item_id):
 
 @app.route('/supplies/process-all', methods=['POST'])
 def process_all_supplies():
-    """Process all supply drafts - create supplies in Poster"""
+    """Process pending drafts through the same validated path as one draft."""
     db = get_database()
     drafts_raw = db.get_supply_drafts(g.user_id, status="pending")
-
     results = []
     errors = []
 
     for draft_raw in drafts_raw:
-        draft = db.get_supply_draft_with_items(draft_raw['id'])
-        if not draft:
-            continue
-
-        items = draft.get('items', [])
-        unmatched = [i for i in items if not i.get('poster_ingredient_id')]
-
-        if unmatched:
-            errors.append(f"#{draft['id']}: не привязано {len(unmatched)} товаров")
-            continue
-
         try:
-            from poster_client import PosterClient
-
-            accounts = db.get_accounts(g.user_id)
-            if not accounts:
-                errors.append(f"#{draft['id']}: нет аккаунтов Poster")
-                continue
-
-            # Group items by poster_account_id
-            items_by_account = {}
-            for item in items:
-                acc_id = item.get('poster_account_id')
-                if acc_id not in items_by_account:
-                    items_by_account[acc_id] = []
-                items_by_account[acc_id].append(item)
-
-            # Create supply for each account
-            for acc_id, acc_items in items_by_account.items():
-                account = None
-                for a in accounts:
-                    if a['id'] == acc_id:
-                        account = a
-                        break
-                if not account:
-                    account = accounts[0]
-
-
-                async def create_supply_in_poster():
-                    client = PosterClient(
-                        telegram_user_id=g.user_id,
-                        poster_token=account['poster_token'],
-                        poster_user_id=account['poster_user_id'],
-                        poster_base_url=account['poster_base_url']
-                    )
-
-                    try:
-                        suppliers = await client.get_suppliers()
-                        supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
-                        supplier_id = None
-
-                        for s in suppliers:
-                            if supplier_name.lower() in s.get('supplier_name', '').lower():
-                                supplier_id = int(s['supplier_id'])
-                                break
-
-                        if not supplier_id and suppliers:
-                            supplier_id = int(suppliers[0]['supplier_id'])
-
-                        poster_accounts = await client.get_accounts()
-                        account_id_poster = None
-
-                        for acc in poster_accounts:
-                            acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                            if 'закуп' in acc_name or 'оставил' in acc_name:
-                                account_id_poster = int(acc['account_id'])
-                                break
-
-                        if not account_id_poster and poster_accounts:
-                            account_id_poster = int(poster_accounts[0]['account_id'])
-
-                        ingredients = []
-
-                        # Get correct default storage for this account from Poster API
-                        try:
-                            storages = await client.get_storages()
-                            api_default_storage_id = int(storages[0]['storage_id']) if storages else 1
-                        except Exception:
-                            api_default_storage_id = 1
-
-                        # Use item's storage_id if available, otherwise use API default
-                        supply_storage_id = api_default_storage_id
-                        for item in acc_items:
-                            item_storage_id = item.get('storage_id')
-                            if item_storage_id:
-                                supply_storage_id = int(item_storage_id)
-                                break
-
-                        for item in acc_items:
-                            ingredients.append({
-                                'id': item['poster_ingredient_id'],
-                                'num': float(item['quantity']),
-                                'price': float(item['price_per_unit']),
-                                'type': item.get('item_type', 'ingredient')  # 'ingredient', 'semi_product', or 'product'
-                            })
-
-                        supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
-
-                        logger.info(f"Supply (batch) for {account.get('account_name', acc_id)}: "
-                                    f"{len(acc_items)} items, storage_id={supply_storage_id}, "
-                                    f"api_default={api_default_storage_id}")
-                        supply_id = await client.create_supply(
-                            supplier_id=supplier_id,
-                            storage_id=supply_storage_id,
-                            date=f"{supply_date} 12:00:00",
-                            ingredients=ingredients,
-                            account_id=account_id_poster,
-                            comment=f"Накладная от {draft.get('supplier_name', 'поставщика')}"
-                        )
-
-                        return supply_id
-                    finally:
-                        await client.close()
-
-                supply_id = run_async(create_supply_in_poster())
-
-                if supply_id:
-                    results.append({
-                        'draft_id': draft['id'],
-                        'supply_id': supply_id,
-                        'account': account.get('name', '')
-                    })
-
-            # Mark draft as processed
-            db.mark_supply_draft_processed(draft['id'])
-
-            if draft.get('linked_expense_draft_id'):
-                db.mark_drafts_processed([draft['linked_expense_draft_id']])
-
+            response = process_supply(draft_raw['id'])
+            payload = response.get_json() or {}
+            if payload.get('success'):
+                results.append({
+                    'draft_id': draft_raw['id'],
+                    'supply_id': payload.get('supply_id'),
+                    'supplies': payload.get('supplies', []),
+                })
+            else:
+                errors.append(f"#{draft_raw['id']}: {payload.get('error', 'неизвестная ошибка')}")
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            errors.append(f"#{draft['id']}: {str(e)}")
+            logger.exception("Batch supply processing failed for draft %s", draft_raw['id'])
+            errors.append(f"#{draft_raw['id']}: {str(e)}")
 
     return jsonify({
         'success': len(errors) == 0,
@@ -6462,90 +6667,15 @@ def update_supply_item(item_id):
     if 'storage_name' in data:
         update_fields['storage_name'] = data['storage_name']
     if 'quantity' in data:
-        update_fields['quantity'] = data['quantity']
+        update_fields['quantity'] = float(data['quantity'])
     if 'price_per_unit' in data:
-        update_fields['price_per_unit'] = data['price_per_unit']
-        # Recalculate total
-        if 'quantity' in update_fields:
-            update_fields['total'] = update_fields['quantity'] * update_fields['price_per_unit']
-        else:
-            update_fields['total'] = data.get('quantity', item.get('quantity', 1)) * update_fields['price_per_unit']
+        update_fields['price_per_unit'] = float(data['price_per_unit'])
+    if 'quantity' in update_fields or 'price_per_unit' in update_fields:
+        quantity = update_fields.get('quantity', float(item.get('quantity') or 0))
+        price = update_fields.get('price_per_unit', float(item.get('price_per_unit') or 0))
+        update_fields['total'] = quantity * price
 
     success = db.update_supply_draft_item(item_id, telegram_user_id=g.user_id, **update_fields) if update_fields else False
-
-    if success:
-        # Auto-update aliases and learn habits/rules
-        # 1. Alias correction
-        if 'poster_ingredient_id' in data:
-            new_id = data['poster_ingredient_id']
-            new_name = data.get('poster_ingredient_name', '')
-            original_name = item['item_name']
-
-            if new_id is not None:
-                if new_id == 0 or new_id == '':
-                    # Deleted/unbound
-                    db.delete_ingredient_alias(telegram_user_id=g.user_id, alias_text=original_name)
-                else:
-                    # Created/updated mapping
-                    db.add_ingredient_alias(
-                        telegram_user_id=g.user_id,
-                        alias_text=original_name,
-                        poster_item_id=int(new_id),
-                        poster_item_name=new_name,
-                        source='ingredient',
-                        notes='Авто-сохранено при ручной привязке в Поставках'
-                    )
-
-        # 2. Learn packaging rules or habits
-        ing_id = data.get('poster_ingredient_id') or item.get('poster_ingredient_id')
-        if ing_id and ing_id != 0 and ing_id != '':
-            # Prevent learning habits/rules for dishes (non-drink products)
-            is_item_dish = False
-            try:
-                user_items = load_items_from_csv(telegram_user_id=g.user_id, only_drinks=False)
-                matched_item = next((i for i in user_items if i['id'] == int(ing_id)), None)
-                if matched_item and matched_item['type'] == 'product':
-                    category = matched_item.get('category_name') or ''
-                    if not category.startswith('Напитки'):
-                        is_item_dish = True
-                        logger.info(f"Skipping learning rule/habit for dish product {ing_id} ({matched_item['name']})")
-            except Exception as dish_err:
-                logger.error(f"Error checking if item is a dish in learning: {dish_err}")
-
-            if not is_item_dish:
-                # Get updated item from DB to see current state
-                updated_item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
-            if updated_item:
-                qty = updated_item.get('quantity')
-                price = updated_item.get('price_per_unit')
-                parsed_qty = updated_item.get('parsed_quantity')
-                parsed_unit = updated_item.get('parsed_unit')
-                # Try to get the account name from all potential sources
-                acc_name = (
-                    updated_item.get('poster_account_name') or 
-                    data.get('poster_account_name') or 
-                    item.get('poster_account_name') or 
-                    ''
-                ).strip()
-
-                if not acc_name:
-                    try:
-                        accounts = db.get_accounts(g.user_id)
-                        primary_acc = next((a for a in accounts if a.get('is_primary')), None) or (accounts[0] if accounts else None)
-                        if primary_acc:
-                            acc_name = primary_acc['account_name']
-                    except Exception as acc_err:
-                        logger.error(f"Error resolving fallback account name: {acc_err}")
-
-                # Habit: user edited price
-                if price is not None and price > 0:
-                    db.add_ingredient_habit(
-                        telegram_user_id=g.user_id,
-                        poster_ingredient_id=int(ing_id),
-                        default_price=price,
-                        notes="Изучено из ручного ввода цены",
-                        account_name=acc_name
-                    )
 
     return jsonify({'success': success})
 
@@ -6576,6 +6706,25 @@ def process_supply(draft_id):
     if not items:
         return jsonify({'success': False, 'error': 'Нет товаров в поставке'})
 
+    expected_total = draft.get('total_sum')
+    if draft.get('linked_expense_draft_id'):
+        linked_expense = db.get_expense_draft(draft['linked_expense_draft_id'])
+        if linked_expense and linked_expense.get('amount') not in (None, ''):
+            expected_total = linked_expense['amount']
+
+    mismatch = calculate_supply_total_mismatch(items, expected_total)
+    if mismatch:
+        expected, actual, difference = mismatch
+        direction = 'больше' if difference > 0 else 'меньше'
+        return jsonify({
+            'success': False,
+            'error': (
+                f'Сумма позиций ({actual:,.2f} ₸) не совпадает с расходом '
+                f'({expected:,.2f} ₸): позиции на {abs(difference):,.2f} ₸ {direction}. '
+                'Исправьте количество или цену перед созданием поставки.'
+            )
+        })
+
     try:
         from poster_client import PosterClient
         from collections import defaultdict
@@ -6589,6 +6738,12 @@ def process_supply(draft_id):
         primary_account = next((a for a in poster_accounts if a.get('is_primary')), poster_accounts[0])
 
         async def create_supplies_in_poster():
+            from matchers import normalize_text_for_matching
+
+            draft_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
+            draft_date_api = draft_date.replace('-', '')[:8]
+            idempotency_marker = f"Poster Helper draft #{draft_id}"
+
             # 1. Fetch reference data for all accounts concurrently
             async def _get_storages_safe(client):
                 try:
@@ -6604,13 +6759,18 @@ def process_supply(draft_id):
                     poster_base_url=acc['poster_base_url']
                 )
                 try:
-                    suppliers, finance_accounts, storages, ingredients, products = await asyncio.gather(
+                    suppliers, finance_accounts, storages, ingredients, products, recent_supplies = await asyncio.gather(
                         client.get_suppliers(),
                         client.get_accounts(),
                         _get_storages_safe(client),
                         client.get_ingredients(),
-                        client.get_products()
+                        client.get_products(),
+                        client.get_supplies(date_from=draft_date_api, date_to=draft_date_api),
                     )
+                    # Reference data is fully materialized. Close the read
+                    # session now so validation errors cannot leak sessions;
+                    # create_supply will transparently open a fresh one.
+                    await client.close()
                     return acc['id'], {
                         'account': acc,
                         'client': client,
@@ -6618,10 +6778,12 @@ def process_supply(draft_id):
                         'finance_accounts': finance_accounts,
                         'storages': storages,
                         'ingredients': ingredients,
-                        'products': products
+                        'products': products,
+                        'recent_supplies': recent_supplies,
                     }
                 except Exception as e:
                     logger.error(f"Error fetching data for account {acc.get('account_name')}: {e}")
+                    await client.close()
                     return acc['id'], {
                         'account': acc,
                         'client': client,
@@ -6629,11 +6791,29 @@ def process_supply(draft_id):
                         'finance_accounts': [],
                         'storages': [],
                         'ingredients': [],
-                        'products': []
+                        'products': [],
+                        'recent_supplies': [],
                     }
 
             acc_data_results = await asyncio.gather(*[_fetch_acc_data(acc) for acc in poster_accounts])
             account_data_map = dict(acc_data_results)
+
+            live_supplier_rows = []
+            for acc_id, data in account_data_map.items():
+                for supplier in data['suppliers']:
+                    if str(supplier.get('delete', '0')) == '1':
+                        continue
+                    supplier_id = supplier.get('supplier_id') or supplier.get('id')
+                    supplier_name = supplier.get('supplier_name') or supplier.get('name') or ''
+                    if supplier_id and supplier_name.strip():
+                        live_supplier_rows.append({
+                            'id': int(supplier_id),
+                            'name': supplier_name.strip(),
+                            'poster_account_id': int(acc_id),
+                            'poster_account_name': data['account']['account_name'],
+                        })
+            mapping_rows = build_supplier_account_mapping_rows(poster_accounts, live_supplier_rows)
+            db.replace_auto_supplier_account_mappings(g.user_id, mapping_rows)
 
             # 2. Build catalog maps for each account
             catalogs = {}
@@ -6650,7 +6830,7 @@ def process_supply(draft_id):
                     poster_ing_type = str(ing.get('type', '1'))
                     item_type = 'semi_product' if poster_ing_type == '2' else 'ingredient'
                     valid_ingredients[ing_id] = (ing_name, item_type)
-                    name_to_id[ing_name.lower().strip()] = (ing_id, item_type)
+                    name_to_id[normalize_text_for_matching(ing_name)] = (ing_id, item_type)
 
                 for prod in data['products']:
                     if str(prod.get('delete', '0')) == '1':
@@ -6658,7 +6838,7 @@ def process_supply(draft_id):
                     prod_id = int(prod.get('product_id', 0))
                     prod_name = prod.get('product_name', '')
                     valid_products[prod_id] = prod_name
-                    name_to_id[prod_name.lower().strip()] = (prod_id, 'product')
+                    name_to_id[normalize_text_for_matching(prod_name)] = (prod_id, 'product')
 
                 catalogs[acc_id] = {
                     'ingredients': valid_ingredients,
@@ -6671,7 +6851,7 @@ def process_supply(draft_id):
             for item in items:
                 item_id = int(item['poster_ingredient_id'])
                 item_name = (item.get('poster_ingredient_name') or item.get('item_name') or '').strip()
-                item_name_lower = item_name.lower()
+                item_name_normalized = normalize_text_for_matching(item_name)
                 orig_acc_id = item.get('poster_account_id')
 
                 # Check which account has this item
@@ -6680,27 +6860,74 @@ def process_supply(draft_id):
                 # Option A: Check assigned account
                 if orig_acc_id and orig_acc_id in catalogs:
                     cat = catalogs[orig_acc_id]
-                    if item_id in cat['ingredients'] or item_id in cat['products'] or item_name_lower in cat['name_to_id']:
+                    if item_name_normalized in cat['name_to_id']:
                         target_acc_id = orig_acc_id
 
-                # Option B: Check primary account
-                if not target_acc_id and primary_account['id'] in catalogs:
-                    cat_prim = catalogs[primary_account['id']]
-                    if item_id in cat_prim['ingredients'] or item_id in cat_prim['products'] or item_name_lower in cat_prim['name_to_id']:
+                # If the saved account disappeared, route only by the exact
+                # canonical name. Numeric item IDs are local to each Poster
+                # account and routinely collide with unrelated ingredients.
+                if not target_acc_id:
+                    name_candidates = [
+                        acc_id for acc_id, cat in catalogs.items()
+                        if item_name_normalized in cat['name_to_id']
+                    ]
+                    if len(name_candidates) == 1:
+                        target_acc_id = name_candidates[0]
+                    elif primary_account['id'] in name_candidates:
                         target_acc_id = primary_account['id']
 
-                # Option C: Check other accounts
                 if not target_acc_id:
-                    for acc_id, cat in catalogs.items():
-                        if item_id in cat['ingredients'] or item_id in cat['products'] or item_name_lower in cat['name_to_id']:
-                            target_acc_id = acc_id
-                            break
-
-                # Fallback to primary account
-                if not target_acc_id:
-                    target_acc_id = primary_account['id']
+                    raise Exception(
+                        f"Не удалось определить отдел для позиции «{item_name}». "
+                        "Перепривяжите её к ингредиенту нужного Poster-аккаунта."
+                    )
 
                 items_by_account[target_acc_id].append(item)
+
+            # Validate every department before writing the first supply. This
+            # catches missing suppliers, accounts, storages, and catalogue
+            # entries before a two-account invoice can be only half-created.
+            for poster_account_id, account_items in items_by_account.items():
+                data = account_data_map.get(poster_account_id)
+                if not data:
+                    raise Exception(f"Не удалось загрузить данные Poster-аккаунта #{poster_account_id}")
+
+                account_name = data['account'].get('account_name', poster_account_id)
+                supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
+                supplier_id, _ = resolve_supplier_for_account(
+                    supplier_name,
+                    data['suppliers'],
+                    telegram_user_id=g.user_id,
+                    poster_account_id=poster_account_id,
+                )
+                if not supplier_id:
+                    raise Exception(
+                        f"Поставщик «{supplier_name}» не найден однозначно в аккаунте {account_name}. "
+                        "Добавьте поставщика в Poster или выберите соответствие вручную."
+                    )
+
+                finance_id, _ = resolve_finance_account_for_source(
+                    data['finance_accounts'],
+                    draft.get('source', 'cash'),
+                    preferred_id=draft.get('account_id'),
+                )
+                if not finance_id:
+                    raise Exception(
+                        f"Не найден счёт «{draft.get('source', 'cash')}» в аккаунте {account_name}."
+                    )
+                if not data['storages']:
+                    raise Exception(f"Не удалось получить склады аккаунта {account_name}.")
+
+                catalogue_names = catalogs[poster_account_id]['name_to_id']
+                missing_names = []
+                for item in account_items:
+                    canonical_name = item.get('poster_ingredient_name') or item.get('item_name') or ''
+                    if normalize_text_for_matching(canonical_name) not in catalogue_names:
+                        missing_names.append(canonical_name)
+                if missing_names:
+                    raise Exception(
+                        f"В аккаунте {account_name} не найдены ингредиенты: {', '.join(missing_names)}."
+                    )
 
             created_supplies = []
             all_price_records = []
@@ -6715,54 +6942,44 @@ def process_supply(draft_id):
                     suppliers = data['suppliers']
                     finance_accounts = data['finance_accounts']
                     storages = data['storages']
+                    recent_supplies = data['recent_supplies']
                     cat = catalogs[poster_account_id]
 
                     valid_ingredient_ids = cat['ingredients']
                     valid_product_ids = cat['products']
                     ingredient_name_to_id = cat['name_to_id']
 
-                    # Log account details for debugging
-                    token_prefix = account['poster_token'][:8] if account.get('poster_token') else 'N/A'
-                    logger.info(f"Processing supply for account '{account.get('account_name')}' "
-                               f"(db_id={poster_account_id}, base_url={account.get('poster_base_url')}, "
-                               f"token={token_prefix}...)")
+                    logger.info(
+                        "Processing supply for account '%s' (db_id=%s)",
+                        account.get('account_name'), poster_account_id,
+                    )
 
                     # Process suppliers
                     supplier_name = draft.get('supplier_name', 'Неизвестный поставщик')
-                    supplier_id = None
-                    for s in suppliers:
-                        if supplier_name.lower() in s.get('supplier_name', '').lower():
-                            supplier_id = int(s['supplier_id'])
-                            break
-                    if not supplier_id and suppliers:
-                        supplier_id = int(suppliers[0]['supplier_id'])
+                    supplier_id, resolved_supplier_name = resolve_supplier_for_account(
+                        supplier_name,
+                        suppliers,
+                        telegram_user_id=g.user_id,
+                        poster_account_id=poster_account_id,
+                    )
+                    if not supplier_id:
+                        raise Exception(
+                            f"Поставщик «{supplier_name}» не найден однозначно в аккаунте "
+                            f"{account.get('account_name')}. Поставка не создана; добавьте поставщика "
+                            "в Poster или выберите соответствие вручную."
+                        )
 
                     # Process finance accounts
-                    valid_account_ids = {int(acc['account_id']): acc for acc in finance_accounts} if finance_accounts else {}
-                    account_id = draft.get('account_id')
-                    if not account_id or int(account_id) not in valid_account_ids:
-                        account_id = None
-                        source = draft.get('source', 'cash')
-                        if source == 'kaspi':
-                            for acc in finance_accounts:
-                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                                if 'kaspi' in acc_name:
-                                    account_id = int(acc['account_id'])
-                                    break
-                        elif source == 'halyk':
-                            for acc in finance_accounts:
-                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                                if 'халык' in acc_name or 'halyk' in acc_name:
-                                    account_id = int(acc['account_id'])
-                                    break
-                        else:
-                            for acc in finance_accounts:
-                                acc_name = (acc.get('account_name') or acc.get('name', '')).lower()
-                                if 'закуп' in acc_name or 'оставил' in acc_name:
-                                    account_id = int(acc['account_id'])
-                                    break
-                    if not account_id and finance_accounts:
-                        account_id = int(finance_accounts[0]['account_id'])
+                    account_id, resolved_finance_name = resolve_finance_account_for_source(
+                        finance_accounts,
+                        draft.get('source', 'cash'),
+                        preferred_id=draft.get('account_id'),
+                    )
+                    if not account_id:
+                        raise Exception(
+                            f"Не найден счёт «{draft.get('source', 'cash')}» в аккаунте "
+                            f"{account.get('account_name')}. Поставка не создана."
+                        )
 
                     # Process storages
                     valid_storage_ids = {int(st['storage_id']) for st in storages} if storages else set()
@@ -6781,26 +6998,29 @@ def process_supply(draft_id):
                         item_id = int(item['poster_ingredient_id'])
                         item_name = item.get('poster_ingredient_name', item.get('item_name', ''))
                         item_type = item.get('item_type', 'ingredient')
+                        item_name_normalized = normalize_text_for_matching(item_name)
 
                         id_valid = False
                         if item_type in ('ingredient', 'semi_product') and item_id in valid_ingredient_ids:
-                            _, resolved_type = valid_ingredient_ids[item_id]
-                            item_type = resolved_type
-                            id_valid = True
+                            catalog_name, resolved_type = valid_ingredient_ids[item_id]
+                            if normalize_text_for_matching(catalog_name) == item_name_normalized:
+                                item_type = resolved_type
+                                id_valid = True
                         elif item_type == 'product' and item_id in valid_product_ids:
-                            id_valid = True
+                            id_valid = normalize_text_for_matching(valid_product_ids[item_id]) == item_name_normalized
                         elif item_id in valid_ingredient_ids:
-                            _, resolved_type = valid_ingredient_ids[item_id]
-                            item_type = resolved_type
-                            id_valid = True
+                            catalog_name, resolved_type = valid_ingredient_ids[item_id]
+                            if normalize_text_for_matching(catalog_name) == item_name_normalized:
+                                item_type = resolved_type
+                                id_valid = True
                         elif item_id in valid_product_ids:
-                            item_type = 'product'
-                            id_valid = True
+                            if normalize_text_for_matching(valid_product_ids[item_id]) == item_name_normalized:
+                                item_type = 'product'
+                                id_valid = True
 
                         if not id_valid:
-                            name_lower = item_name.lower().strip()
-                            if name_lower in ingredient_name_to_id:
-                                resolved_id, resolved_type = ingredient_name_to_id[name_lower]
+                            if item_name_normalized in ingredient_name_to_id:
+                                resolved_id, resolved_type = ingredient_name_to_id[item_name_normalized]
                                 logger.info(f"Resolved ingredient '{item_name}' for {account.get('account_name')}: "
                                            f"ID {item_id} -> {resolved_id} (type: {resolved_type})")
                                 item_id = resolved_id
@@ -6831,14 +7051,37 @@ def process_supply(draft_id):
                                 f"ingredient types: {ingredient_types}")
 
                     # Create supply
-                    supply_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
+                    supply_date = draft_date
+                    existing_supply = next((
+                        supply for supply in recent_supplies
+                        if str(supply.get('delete', '0')) != '1'
+                        and idempotency_marker in (supply.get('supply_comment') or '')
+                    ), None)
+                    if existing_supply:
+                        account_total = sum(
+                            float(i['quantity']) * float(i['price_per_unit'])
+                            for i in account_items
+                        )
+                        created_supplies.append({
+                            'supply_id': int(existing_supply['supply_id']),
+                            'account_name': account['account_name'],
+                            'items_count': len(account_items),
+                            'total': account_total,
+                            'already_existed': True,
+                        })
+                        logger.warning(
+                            "Reusing existing supply #%s for %s (%s)",
+                            existing_supply['supply_id'], account['account_name'], idempotency_marker,
+                        )
+                        continue
+
                     supply_id = await client.create_supply(
                         supplier_id=supplier_id,
                         storage_id=supply_storage_id,
                         date=f"{supply_date} 12:00:00",
                         ingredients=ingredients,
                         account_id=account_id,
-                        comment=f"Накладная от {supplier_name}"
+                        comment=f"{idempotency_marker}; накладная от {supplier_name}"
                     )
 
                     if supply_id:
@@ -6884,15 +7127,12 @@ def process_supply(draft_id):
                 supply_ids_str = ','.join(str(s['supply_id']) for s in created_supplies)
                 poster_txn_id = f"supply_{supply_ids_str}"
                 
-                # Calculate actual supply sum to update the linked expense draft
-                total_actual_amount = sum(s['total'] for s in created_supplies)
-                
-                # Update source, poster_transaction_id, and amount on expense draft
+                # The amount was reconciled before posting. Keep the original
+                # expense amount and only attach the created Poster supplies.
                 update_ok = db.update_expense_draft(
                     draft['linked_expense_draft_id'],
                     source=draft.get('source', 'cash'),
                     poster_transaction_id=poster_txn_id,
-                    amount=total_actual_amount
                 )
                 logger.info(f"🔗 Linked expense draft #{draft['linked_expense_draft_id']} → {poster_txn_id} (update_ok={update_ok})")
                 # Mark as in Poster (keeps it visible with green status)
@@ -6972,7 +7212,16 @@ def load_suppliers_from_csv(user_id: Optional[int] = None):
                 if live_suppliers:
                     from matchers import get_supplier_matcher
                     sm = get_supplier_matcher(target_user_id)
+                    primary_account = next(
+                        (acc for acc in poster_accounts if acc.get('is_primary')),
+                        poster_accounts[0],
+                    )
+                    # Supplier IDs collide between Poster accounts. The global
+                    # text matcher keeps only the primary catalogue; the new
+                    # mapping table translates that identity for other accounts.
                     for sup in live_suppliers:
+                        if int(sup['poster_account_id']) != int(primary_account['id']):
+                            continue
                         sm.add_supplier(sup['id'], sup['name'])
                     return live_suppliers
         except Exception as e:
@@ -7002,7 +7251,24 @@ def list_supplier_aliases():
     db = get_database()
     aliases = db.get_supplier_aliases(g.user_id)
     suppliers = load_suppliers_from_csv()
-    return render_template('supplier_aliases.html', aliases=aliases, suppliers=suppliers)
+    accounts = db.get_accounts(g.user_id)
+    if accounts and suppliers:
+        auto_mappings = build_supplier_account_mapping_rows(accounts, suppliers)
+        db.replace_auto_supplier_account_mappings(g.user_id, auto_mappings)
+
+    mapping_groups = {}
+    for mapping in db.get_supplier_account_mappings(g.user_id):
+        mapping_groups.setdefault(mapping['canonical_name'], {})[
+            int(mapping['poster_account_id'])
+        ] = mapping
+
+    return render_template(
+        'supplier_aliases.html',
+        aliases=aliases,
+        suppliers=suppliers,
+        supplier_mapping_groups=mapping_groups,
+        poster_accounts=accounts,
+    )
 
 
 @app.route('/supplier-aliases/add', methods=['POST'])

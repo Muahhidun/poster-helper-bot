@@ -7,6 +7,50 @@
     <h1>Алиасы поставщиков</h1>
     <p class="text-muted">Связь названий из Kaspi с поставщиками в Poster (например: "ИП Федорова" → "Кока-Кола")</p>
 
+    <div class="card mb-4">
+        <div class="card-header">Соответствия поставщиков между отделами</div>
+        <div class="card-body">
+            <p class="text-muted mb-3">
+                Здесь показаны только уверенно найденные пары. Поставщики, которые есть лишь в одном отделе,
+                намеренно не добавляются и не изменяются.
+            </p>
+            {% if supplier_mapping_groups %}
+            <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Общее название</th>
+                            {% for account in poster_accounts %}
+                            <th>{{ account.account_name }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for canonical_name, account_rows in supplier_mapping_groups.items() %}
+                        <tr>
+                            <td><strong>{{ canonical_name }}</strong></td>
+                            {% for account in poster_accounts %}
+                            {% set mapping = account_rows.get(account.id) %}
+                            <td>
+                                {% if mapping %}
+                                <span class="text-muted">ID {{ mapping.poster_supplier_id }}</span><br>
+                                {{ mapping.poster_supplier_name }}
+                                {% else %}
+                                <span class="text-muted">Только в другом отделе</span>
+                                {% endif %}
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info mb-0">Общие поставщики пока не найдены.</div>
+            {% endif %}
+        </div>
+    </div>
+
     <!-- Add form -->
     <div class="card mb-4">
         <div class="card-header">Добавить алиас</div>
