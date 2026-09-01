@@ -1,7 +1,6 @@
 import json
 import os
 import pytest
-import threading
 from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 from tests.conftest import TEST_USER_ID
@@ -23,21 +22,20 @@ def mock_whatsapp_config():
         yield
 
 @pytest.fixture(autouse=True)
-def patch_thread():
-    """Safely mock threading.Thread to run the WhatsApp worker synchronously without breaking flask_limiter timers"""
-    original_thread = threading.Thread
-    
-    class MockThread(original_thread):
-        def start(self):
-            target_name = getattr(self._target, '__name__', '')
-            if target_name == '_process_whatsapp_async':
-                # Run the target function synchronously in the test thread
-                self._target(*self._args, **self._kwargs)
-            else:
-                super().start()
-                
-    with patch("threading.Thread", new=MockThread):
-        yield
+def clean_whatsapp_queue(db):
+    """Keep durable queue rows isolated between webhook tests."""
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM whatsapp_jobs")
+    cursor.execute("DELETE FROM whatsapp_batches")
+    conn.commit()
+    conn.close()
+    yield
+
+
+def drain_whatsapp_queue():
+    from web_app import process_whatsapp_queue
+    return process_whatsapp_queue(settle_seconds=0)
 
 def test_whatsapp_webhook_ignored_type(app_client):
     """Webhook ignores non-message webhooks"""
@@ -135,7 +133,8 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         )
         
         assert response.status_code == 200
-        assert response.data.decode('utf-8') == 'OK'
+        assert response.data.decode('utf-8') == 'Queued'
+        assert drain_whatsapp_queue() == 1
         
         # Verify Gemini agent was called with correct message text
         mock_call_gemini.assert_called_once()
@@ -147,12 +146,12 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         assert mock_execute_actions.call_args[0][1] == [{"action": "create_expense", "amount": 500, "description": "Молоко"}]
         
         # Verify message was sent to WhatsApp
-        mock_send_whatsapp.assert_called_once()
-        sent_chat_id = mock_send_whatsapp.call_args[0][0]
-        sent_message = mock_send_whatsapp.call_args[0][1]
+        assert mock_send_whatsapp.call_count == 2  # package acknowledgement + summary
+        sent_chat_id = mock_send_whatsapp.call_args_list[-1][0][0]
+        sent_message = mock_send_whatsapp.call_args_list[-1][0][1]
         
         assert sent_chat_id == "120363000000000000@g.us"
-        assert "🤖 *Ассистент PizzBurg*" in sent_message
+        assert "📋 *Пакет #" in sent_message
         assert "Расход: Молоко" in sent_message
 
 
@@ -190,12 +189,13 @@ def test_whatsapp_webhook_success_outgoing_text(mock_execute_actions, mock_send_
         )
         
         assert response.status_code == 200
-        assert response.data.decode('utf-8') == 'OK'
+        assert response.data.decode('utf-8') == 'Queued'
+        assert drain_whatsapp_queue() == 1
         
         mock_call_gemini.assert_called_once()
         assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
         mock_execute_actions.assert_called_once()
-        mock_send_whatsapp.assert_called_once()
+        assert mock_send_whatsapp.call_count == 2
 
 @patch("web_app.send_whatsapp_message")
 @patch("web_app.execute_assistant_actions")
@@ -240,7 +240,8 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         )
         
         assert response.status_code == 200
-        assert response.data.decode('utf-8') == 'OK'
+        assert response.data.decode('utf-8') == 'Queued'
+        assert drain_whatsapp_queue() == 1
         
         # Verify media download was called
         from unittest.mock import ANY
@@ -255,8 +256,8 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         assert media_files[0]['data'] == b"dummy image data"
         
         # Verify WhatsApp message sent
-        mock_send_whatsapp.assert_called_once()
-        assert "Расход: Сливки" in mock_send_whatsapp.call_args[0][1]
+        assert mock_send_whatsapp.call_count == 2
+        assert "Расход: Сливки" in mock_send_whatsapp.call_args_list[-1][0][1]
 
 
 @patch("web_app.send_whatsapp_message")
@@ -308,7 +309,8 @@ def test_whatsapp_webhook_fallback_user(mock_execute_actions, mock_send_whatsapp
             )
             
             assert response.status_code == 200
-            assert response.data.decode('utf-8') == 'OK'
+            assert response.data.decode('utf-8') == 'Queued'
+            assert drain_whatsapp_queue() == 1
             
             # Verify action execution is called with the fallback user ID (167084307)
             mock_execute_actions.assert_called_once()
@@ -344,7 +346,8 @@ def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsa
         with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response):
             response = app_client.post('/api/whatsapp/webhook', json=payload)
             assert response.status_code == 200
-            assert response.data.decode('utf-8') == 'OK'
+            assert response.data.decode('utf-8') == 'Queued'
+            assert drain_whatsapp_queue() == 1
 
         # 2. Second group is allowed
         payload = {
@@ -358,7 +361,8 @@ def test_whatsapp_webhook_multiple_groups(mock_execute_actions, mock_send_whatsa
         with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response):
             response = app_client.post('/api/whatsapp/webhook', json=payload)
             assert response.status_code == 200
-            assert response.data.decode('utf-8') == 'OK'
+            assert response.data.decode('utf-8') == 'Queued'
+            assert drain_whatsapp_queue() == 1
 
         # 3. Third group is ignored
         payload = {
@@ -415,7 +419,8 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
             
             response = app_client.post('/api/whatsapp/webhook', json=payload)
             assert response.status_code == 200
-            assert response.data.decode('utf-8') == 'OK'
+            assert response.data.decode('utf-8') == 'Queued'
+            assert drain_whatsapp_queue() == 1
             
             # The main Gemini agent should be called
             mock_call_gemini.assert_called_once()
@@ -424,7 +429,7 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
             mock_execute_actions.assert_called_once()
             
             # Message should be sent to WhatsApp group since drafts were created
-            mock_send_whatsapp.assert_called_once()
+            assert mock_send_whatsapp.call_count == 2
 
 
 @patch("web_app.send_whatsapp_message")
@@ -455,11 +460,12 @@ def test_whatsapp_webhook_text_no_prefix_business(mock_execute_actions, mock_sen
         
         response = app_client.post('/api/whatsapp/webhook', json=payload)
         assert response.status_code == 200
-        assert response.data.decode('utf-8') == 'OK'
+        assert response.data.decode('utf-8') == 'Queued'
+        assert drain_whatsapp_queue() == 1
         
         mock_call_gemini.assert_called_once()
         mock_execute_actions.assert_called_once()
-        mock_send_whatsapp.assert_called_once()
+        assert mock_send_whatsapp.call_count == 2
 
 
 
@@ -509,7 +515,8 @@ def test_whatsapp_webhook_success_audio(mock_transcribe, mock_download, mock_exe
         )
         
         assert response.status_code == 200
-        assert response.data.decode('utf-8') == 'OK'
+        assert response.data.decode('utf-8') == 'Queued'
+        assert drain_whatsapp_queue() == 1
         
         # Verify media download was called
         from unittest.mock import ANY
@@ -523,9 +530,6 @@ def test_whatsapp_webhook_success_audio(mock_transcribe, mock_download, mock_exe
         assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
         
         # Verify WhatsApp message sent
-        mock_send_whatsapp.assert_called_once()
-        assert "Расход: Молоко" in mock_send_whatsapp.call_args[0][1]
-
-
-
+        assert mock_send_whatsapp.call_count == 2
+        assert "Расход: Молоко" in mock_send_whatsapp.call_args_list[-1][0][1]
 

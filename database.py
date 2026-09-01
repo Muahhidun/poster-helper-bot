@@ -4,7 +4,7 @@ import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Dict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -881,6 +881,9 @@ class UserDatabase:
 
         # Run migration for assistant chat history
         self._migrate_assistant_chat()
+
+        # Durable, sequential processing for bursts of WhatsApp invoices.
+        self._migrate_whatsapp_queue()
 
         # Run migration for assistant memory
         self._migrate_assistant_memory()
@@ -6642,6 +6645,450 @@ class UserDatabase:
                 pass
         except Exception as e:
             logger.error(f"❌ Failed to create assistant_chat_messages table: {e}")
+
+    def _migrate_whatsapp_queue(self):
+        """Create durable WhatsApp batches/jobs and recover interrupted jobs."""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_batches (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        chat_id TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'collecting',
+                        total_jobs INTEGER NOT NULL DEFAULT 0,
+                        completed_jobs INTEGER NOT NULL DEFAULT 0,
+                        failed_jobs INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        summary_sent_at TEXT,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_jobs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        batch_id INTEGER NOT NULL,
+                        telegram_user_id INTEGER NOT NULL,
+                        chat_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        response_text TEXT,
+                        created_drafts TEXT,
+                        error_text TEXT,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        UNIQUE(chat_id, message_id),
+                        FOREIGN KEY (batch_id) REFERENCES whatsapp_batches(id) ON DELETE CASCADE,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_batches (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        chat_id TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'collecting',
+                        total_jobs INTEGER NOT NULL DEFAULT 0,
+                        completed_jobs INTEGER NOT NULL DEFAULT 0,
+                        failed_jobs INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        summary_sent_at TIMESTAMP,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_jobs (
+                        id SERIAL PRIMARY KEY,
+                        batch_id INTEGER NOT NULL,
+                        telegram_user_id BIGINT NOT NULL,
+                        chat_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        response_text TEXT,
+                        created_drafts TEXT,
+                        error_text TEXT,
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        started_at TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        UNIQUE(chat_id, message_id),
+                        FOREIGN KEY (batch_id) REFERENCES whatsapp_batches(id) ON DELETE CASCADE,
+                        FOREIGN KEY (telegram_user_id) REFERENCES users(telegram_user_id) ON DELETE CASCADE
+                    )
+                """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_whatsapp_jobs_status
+                ON whatsapp_jobs(status, id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_whatsapp_batches_open
+                ON whatsapp_batches(telegram_user_id, chat_id, summary_sent_at, last_received_at)
+            """)
+            # A deploy may interrupt a job after it has been claimed. Returning
+            # it to pending makes the message retryable; message_id prevents a
+            # second webhook delivery from creating a second job.
+            cursor.execute("""
+                UPDATE whatsapp_jobs
+                SET status = 'pending', started_at = NULL
+                WHERE status = 'processing'
+            """)
+            conn.commit()
+            conn.close()
+            logger.info("✅ WhatsApp queue migration: tables ready")
+        except Exception as e:
+            logger.error(f"❌ WhatsApp queue migration error: {e}")
+
+    def enqueue_whatsapp_job(
+        self,
+        telegram_user_id: int,
+        chat_id: str,
+        message_id: str,
+        payload_json: str,
+        batch_window_seconds: int = 45,
+    ) -> Dict:
+        """Add one webhook to the latest quiet-window batch, idempotently."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor) if DB_TYPE != "sqlite" else conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+
+            # Several Green-API webhooks can arrive on different Gunicorn
+            # threads at the same moment. Serialize enqueueing per chat so all
+            # messages join one batch and the unique message key stays clean.
+            if DB_TYPE == "sqlite":
+                cursor.execute("BEGIN IMMEDIATE")
+            else:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"{telegram_user_id}:{chat_id}",),
+                )
+
+            cursor.execute(
+                f"SELECT id, batch_id, status FROM whatsapp_jobs WHERE chat_id = {ph} AND message_id = {ph}",
+                (chat_id, message_id),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                existing_dict = dict(existing)
+                conn.close()
+                return {
+                    'job_id': existing_dict['id'],
+                    'batch_id': existing_dict['batch_id'],
+                    'duplicate': True,
+                    'new_batch': False,
+                }
+
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=batch_window_seconds)
+            cutoff_value = cutoff.strftime('%Y-%m-%d %H:%M:%S') if DB_TYPE == "sqlite" else cutoff
+            lock_suffix = " FOR UPDATE" if DB_TYPE != "sqlite" else ""
+            cursor.execute(
+                f"""
+                SELECT id FROM whatsapp_batches
+                WHERE telegram_user_id = {ph}
+                  AND chat_id = {ph}
+                  AND summary_sent_at IS NULL
+                  AND status IN ('collecting', 'processing')
+                  AND last_received_at >= {ph}
+                ORDER BY id DESC
+                LIMIT 1{lock_suffix}
+                """,
+                (telegram_user_id, chat_id, cutoff_value),
+            )
+            batch_row = cursor.fetchone()
+            new_batch = not bool(batch_row)
+
+            if batch_row:
+                batch_id = dict(batch_row)['id']
+            elif DB_TYPE == "sqlite":
+                cursor.execute(
+                    "INSERT INTO whatsapp_batches (telegram_user_id, chat_id) VALUES (?, ?)",
+                    (telegram_user_id, chat_id),
+                )
+                batch_id = cursor.lastrowid
+            else:
+                cursor.execute(
+                    "INSERT INTO whatsapp_batches (telegram_user_id, chat_id) VALUES (%s, %s) RETURNING id",
+                    (telegram_user_id, chat_id),
+                )
+                batch_id = cursor.fetchone()['id']
+
+            if DB_TYPE == "sqlite":
+                cursor.execute(
+                    """
+                    INSERT INTO whatsapp_jobs
+                    (batch_id, telegram_user_id, chat_id, message_id, payload_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (batch_id, telegram_user_id, chat_id, message_id, payload_json),
+                )
+                job_id = cursor.lastrowid
+                cursor.execute(
+                    """
+                    UPDATE whatsapp_batches
+                    SET total_jobs = total_jobs + 1,
+                        last_received_at = CURRENT_TIMESTAMP,
+                        status = 'collecting'
+                    WHERE id = ?
+                    """,
+                    (batch_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO whatsapp_jobs
+                    (batch_id, telegram_user_id, chat_id, message_id, payload_json)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (batch_id, telegram_user_id, chat_id, message_id, payload_json),
+                )
+                job_id = cursor.fetchone()['id']
+                cursor.execute(
+                    """
+                    UPDATE whatsapp_batches
+                    SET total_jobs = total_jobs + 1,
+                        last_received_at = CURRENT_TIMESTAMP,
+                        status = 'collecting'
+                    WHERE id = %s
+                    """,
+                    (batch_id,),
+                )
+
+            conn.commit()
+            conn.close()
+            return {
+                'job_id': job_id,
+                'batch_id': batch_id,
+                'duplicate': False,
+                'new_batch': new_batch,
+            }
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def claim_next_whatsapp_job(self) -> Optional[Dict]:
+        """Atomically claim the oldest pending WhatsApp job."""
+        conn = self._get_connection()
+        try:
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("BEGIN IMMEDIATE")
+                cursor.execute("SELECT * FROM whatsapp_jobs WHERE status = 'pending' ORDER BY id LIMIT 1")
+                row = cursor.fetchone()
+                if not row:
+                    conn.commit()
+                    conn.close()
+                    return None
+                job = dict(row)
+                cursor.execute(
+                    """
+                    UPDATE whatsapp_jobs
+                    SET status = 'processing', attempts = attempts + 1,
+                        started_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (job['id'],),
+                )
+            else:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT * FROM whatsapp_jobs
+                    WHERE status = 'pending'
+                    ORDER BY id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                if not row:
+                    conn.commit()
+                    conn.close()
+                    return None
+                job = dict(row)
+                cursor.execute("""
+                    UPDATE whatsapp_jobs
+                    SET status = 'processing', attempts = attempts + 1,
+                        started_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                """, (job['id'],))
+
+            cursor.execute(
+                ("UPDATE whatsapp_batches SET status = 'processing' WHERE id = ?"
+                 if DB_TYPE == "sqlite" else
+                 "UPDATE whatsapp_batches SET status = 'processing' WHERE id = %s"),
+                (job['batch_id'],),
+            )
+            conn.commit()
+            job['attempts'] = int(job.get('attempts') or 0) + 1
+            job['status'] = 'processing'
+            conn.close()
+            return job
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def finish_whatsapp_job(
+        self,
+        job_id: int,
+        response_text: str,
+        created_drafts_json: str,
+    ) -> bool:
+        """Mark a claimed WhatsApp job completed and update batch counters."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"SELECT batch_id, status FROM whatsapp_jobs WHERE id = {ph}", (job_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return False
+            batch_id = row['batch_id'] if hasattr(row, 'keys') else row[0]
+            old_status = row['status'] if hasattr(row, 'keys') else row[1]
+            if old_status == 'completed':
+                conn.close()
+                return True
+            cursor.execute(
+                f"""
+                UPDATE whatsapp_jobs
+                SET status = 'completed', response_text = {ph}, created_drafts = {ph},
+                    error_text = NULL, completed_at = CURRENT_TIMESTAMP
+                WHERE id = {ph}
+                """,
+                (response_text, created_drafts_json, job_id),
+            )
+            cursor.execute(
+                f"UPDATE whatsapp_batches SET completed_jobs = completed_jobs + 1 WHERE id = {ph}",
+                (batch_id,),
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def fail_whatsapp_job(self, job_id: int, error_text: str, max_attempts: int = 2) -> str:
+        """Retry a failed job once, then mark it permanently failed."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"SELECT batch_id, attempts FROM whatsapp_jobs WHERE id = {ph}", (job_id,))
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return 'missing'
+            batch_id = row['batch_id'] if hasattr(row, 'keys') else row[0]
+            attempts = int((row['attempts'] if hasattr(row, 'keys') else row[1]) or 0)
+            if attempts < max_attempts:
+                cursor.execute(
+                    f"""
+                    UPDATE whatsapp_jobs
+                    SET status = 'pending', error_text = {ph}, started_at = NULL
+                    WHERE id = {ph}
+                    """,
+                    (error_text[:2000], job_id),
+                )
+                result = 'pending'
+            else:
+                cursor.execute(
+                    f"""
+                    UPDATE whatsapp_jobs
+                    SET status = 'failed', error_text = {ph}, completed_at = CURRENT_TIMESTAMP
+                    WHERE id = {ph}
+                    """,
+                    (error_text[:2000], job_id),
+                )
+                cursor.execute(
+                    f"UPDATE whatsapp_batches SET failed_jobs = failed_jobs + 1 WHERE id = {ph}",
+                    (batch_id,),
+                )
+                result = 'failed'
+            conn.commit()
+            conn.close()
+            return result
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def get_ready_whatsapp_batches(self, settle_seconds: int = 20) -> list:
+        """Return quiet batches whose jobs all reached a terminal state."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor) if DB_TYPE != "sqlite" else conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            if DB_TYPE == "sqlite":
+                cursor.execute("BEGIN IMMEDIATE")
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=settle_seconds)
+            cutoff_value = cutoff.strftime('%Y-%m-%d %H:%M:%S') if DB_TYPE == "sqlite" else cutoff
+            lock_suffix = " FOR UPDATE OF b SKIP LOCKED" if DB_TYPE != "sqlite" else ""
+            cursor.execute(f"""
+                SELECT b.*
+                FROM whatsapp_batches b
+                WHERE b.summary_sent_at IS NULL
+                  AND b.last_received_at <= {ph}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM whatsapp_jobs j
+                      WHERE j.batch_id = b.id
+                        AND j.status IN ('pending', 'processing')
+                  )
+                ORDER BY b.id
+                {lock_suffix}
+            """, (cutoff_value,))
+            batches = [dict(row) for row in cursor.fetchall()]
+            for batch in batches:
+                cursor.execute(
+                    f"UPDATE whatsapp_batches SET status = 'summarizing' WHERE id = {ph}",
+                    (batch['id'],),
+                )
+                cursor.execute(
+                    f"SELECT * FROM whatsapp_jobs WHERE batch_id = {ph} ORDER BY id",
+                    (batch['id'],),
+                )
+                batch['jobs'] = [dict(row) for row in cursor.fetchall()]
+            conn.commit()
+            conn.close()
+            return batches
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def mark_whatsapp_batch_summary_sent(self, batch_id: int) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(
+                f"""
+                UPDATE whatsapp_batches
+                SET status = 'completed', summary_sent_at = CURRENT_TIMESTAMP
+                WHERE id = {ph} AND summary_sent_at IS NULL
+                """,
+                (batch_id,),
+            )
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
 
     def _migrate_assistant_memory(self):
         """Create assistant_memory table for storing user-specific notes and rules"""

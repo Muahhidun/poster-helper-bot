@@ -2699,6 +2699,7 @@ def _api_assistant_message_impl():
         date_str,
         response_text,
         explicit_supplier=explicit_supplier,
+        allow_memory_actions=_user_explicitly_requests_memory(message),
     )
 
     # Save assistant message to database
@@ -9752,6 +9753,13 @@ def _background_capital_snapshot_sync():
         logger.error(f"[CAPITAL] Background snapshot error: {e}")
 
 
+def _scheduled_whatsapp_queue_tick():
+    """Run the queue after module initialization has defined its processor."""
+    processor = globals().get('process_whatsapp_queue')
+    if processor is not None:
+        processor()
+
+
 def start_background_sync():
     """Start background expense sync scheduler"""
     try:
@@ -9778,8 +9786,18 @@ def start_background_sync():
             name='Verified capital snapshots at 02:00 Almaty',
             replace_existing=True,
         )
+        bg_scheduler.add_job(
+            _scheduled_whatsapp_queue_tick,
+            'interval',
+            seconds=3,
+            id='whatsapp_queue',
+            name='Sequential WhatsApp invoice queue',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         bg_scheduler.start()
-        logger.info("✅ Background sync started (expenses + 02:00 capital snapshots)")
+        logger.info("✅ Background sync started (expenses + capital + WhatsApp queue)")
     except Exception as e:
         logger.error(f"Failed to start background sync: {e}")
 
@@ -9837,6 +9855,19 @@ def download_whatsapp_media(download_url: str, filename: str) -> str:
     return str(local_path)
 
 
+def _user_explicitly_requests_memory(message: str) -> bool:
+    normalized = ' '.join((message or '').lower().split())
+    phrases = (
+        'запомни',
+        'добавь правил',
+        'запиши правил',
+        'сохрани правил',
+        'всегда делай так',
+        'обнови память',
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
 def execute_assistant_actions(
     user_id: int,
     actions: list,
@@ -9844,6 +9875,7 @@ def execute_assistant_actions(
     response_text: str,
     is_webhook: bool = False,
     explicit_supplier: Optional[tuple] = None,
+    allow_memory_actions: bool = False,
 ) -> tuple[str, list[str]]:
     """Execute assistant actions (create/update drafts, search/delete receipts, update memory)
     and return updated response_text and a list of human-readable created drafts descriptions.
@@ -9936,11 +9968,16 @@ def execute_assistant_actions(
                                 except Exception:
                                     pass
                                 invoice = {'supplier': description, 'total_sum': amount, 'items': items}
-                                create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source_val)
-                                created_drafts.append(f"Поставка: {description} на {amount:,.0f}₸ ({len(items)} поз.)")
+                                supply_draft_id = create_supply_draft_from_invoice(
+                                    db, user_id, invoice, date_str, expense_draft_id, source_val
+                                )
+                                created_drafts.append(
+                                    f"Поставка: {description} на {amount:,.0f}₸ "
+                                    f"({len(items)} поз., черновик #{supply_draft_id})"
+                                )
                             else:
                                 resolved_name, resolved_id = resolve_supplier_name_and_id(user_id, description)
-                                db.create_empty_supply_draft(
+                                supply_draft_id = db.create_empty_supply_draft(
                                     telegram_user_id=user_id,
                                     supplier_name=resolved_name or description,
                                     invoice_date=date_str,
@@ -9949,7 +9986,10 @@ def execute_assistant_actions(
                                     source=source_val,
                                     supplier_id=resolved_id
                                 )
-                                created_drafts.append(f"Поставка (пустая): {resolved_name or description} на {amount:,.0f}₸")
+                                created_drafts.append(
+                                    f"Поставка (пустая): {resolved_name or description} на {amount:,.0f}₸ "
+                                    f"(черновик #{supply_draft_id})"
+                                )
                         except Exception as supply_err:
                             logger.warning(f"Failed to auto-create supply draft for expense {expense_draft_id}: {supply_err}")
                     else:
@@ -10010,7 +10050,10 @@ def execute_assistant_actions(
 
                         if new_items:
                             _add_items_to_supply_draft(db, user_id, supply['id'], new_items)
-                            created_drafts.append(f"Добавлено {len(new_items)} новых поз. в поставку {supply.get('supplier_name')}")
+                            created_drafts.append(
+                                f"Добавлено {len(new_items)} новых поз. в поставку "
+                                f"{supply.get('supplier_name')} (черновик #{supply['id']})"
+                            )
 
                             # Sync supply draft total_sum with the updated expense draft amount
                             expense = db.get_expense_draft(expense_draft_id)
@@ -10021,7 +10064,10 @@ def execute_assistant_actions(
                     else:
                         db.clear_supply_draft_items(supply['id'])
                         _add_items_to_supply_draft(db, user_id, supply['id'], items)
-                        created_drafts.append(f"Обновлено {len(items)} поз. в поставке {supply.get('supplier_name')}")
+                        created_drafts.append(
+                            f"Обновлено {len(items)} поз. в поставке "
+                            f"{supply.get('supplier_name')} (черновик #{supply['id']})"
+                        )
 
                         # Sync supply draft total_sum with the updated expense draft amount
                         expense = db.get_expense_draft(expense_draft_id)
@@ -10089,8 +10135,13 @@ def execute_assistant_actions(
                 )
 
                 invoice = {'supplier': resolved_supplier_name or supplier_name, 'total_sum': total_sum, 'items': items}
-                create_supply_draft_from_invoice(db, user_id, invoice, date_str, expense_draft_id, source)
-                created_drafts.append(f"Поставка: {resolved_supplier_name or supplier_name} на {total_sum:,.0f}₸ ({len(items)} поз.)")
+                supply_draft_id = create_supply_draft_from_invoice(
+                    db, user_id, invoice, date_str, expense_draft_id, source
+                )
+                created_drafts.append(
+                    f"Поставка: {resolved_supplier_name or supplier_name} на {total_sum:,.0f}₸ "
+                    f"({len(items)} поз., черновик #{supply_draft_id})"
+                )
                             
             # 5. Find POS Receipt
             elif act_type == 'find_pos_receipt':
@@ -10308,6 +10359,9 @@ def execute_assistant_actions(
                             
             # 7. Add to Assistant Memory
             elif act_type == 'add_to_memory':
+                if not allow_memory_actions:
+                    logger.warning("Blocked unsolicited assistant memory action")
+                    continue
                 rule_text = action.get('rule_text', '').strip()
                 if rule_text:
                     current_memory = db.get_assistant_memory(user_id) or ''
@@ -10321,6 +10375,9 @@ def execute_assistant_actions(
 
             # 8. Update Memory
             elif act_type == 'update_memory':
+                if not allow_memory_actions:
+                    logger.warning("Blocked unsolicited assistant memory replacement")
+                    continue
                 mem_text = action.get('memory_text')
                 if mem_text is not None:
                     current_memory = db.get_assistant_memory(user_id)
@@ -10356,12 +10413,322 @@ def execute_assistant_actions(
     return response_text, created_drafts
 
 
+_whatsapp_queue_lock = None
+
+
+def _get_whatsapp_queue_lock():
+    """Create the process lock lazily so imports remain lightweight in tests."""
+    global _whatsapp_queue_lock
+    if _whatsapp_queue_lock is None:
+        import threading
+        _whatsapp_queue_lock = threading.Lock()
+    return _whatsapp_queue_lock
+
+
+def _whatsapp_file_message_data(message_data: dict) -> dict:
+    return (
+        message_data.get('fileMessageData')
+        or message_data.get('imageMessageData')
+        or message_data.get('documentMessageData')
+        or message_data.get('audioMessageData')
+        or {}
+    )
+
+
+def _whatsapp_payload_has_content(payload: dict) -> bool:
+    message_data = payload.get('messageData') or {}
+    type_message = message_data.get('typeMessage', '')
+    if type_message == 'textMessage':
+        return bool((message_data.get('textMessageData') or {}).get('textMessage', '').strip())
+    if type_message == 'extendedTextMessage':
+        return bool((message_data.get('extendedTextMessageData') or {}).get('text', '').strip())
+    file_data = _whatsapp_file_message_data(message_data)
+    return bool(
+        file_data.get('downloadUrl')
+        or file_data.get('fileUrl')
+        or file_data.get('caption')
+    )
+
+
+def _whatsapp_message_id(payload: dict) -> str:
+    """Return Green-API's stable ID, with a deterministic legacy fallback."""
+    message_id = payload.get('idMessage') or (payload.get('messageData') or {}).get('idMessage')
+    if message_id:
+        return str(message_id)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return f"payload-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _strip_whatsapp_bot_prefix(message_text: str) -> tuple[str, bool]:
+    cleaned = (message_text or '').strip()
+    cleaned_lower = cleaned.lower()
+    for prefix in ('бот:', 'bot:', 'бот,', 'bot,', 'бот', 'bot', '+', '/'):
+        if cleaned_lower.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            if cleaned.startswith(',') or cleaned.startswith(':'):
+                cleaned = cleaned[1:].strip()
+            return cleaned, True
+    return cleaned, False
+
+
+def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
+    """Process one queued WhatsApp webhook and create local drafts only."""
+    payload = json.loads(job['payload_json'])
+    user_id = int(job['telegram_user_id'])
+    message_data = payload.get('messageData') or {}
+    type_message = message_data.get('typeMessage', '')
+    message_text = ''
+    media_paths = []
+    audio_path = None
+
+    if type_message == 'textMessage':
+        message_text = (message_data.get('textMessageData') or {}).get('textMessage', '')
+    elif type_message == 'extendedTextMessage':
+        message_text = (message_data.get('extendedTextMessageData') or {}).get('text', '')
+
+    is_audio = type_message == 'audioMessage'
+    file_msg_data = _whatsapp_file_message_data(message_data)
+    if file_msg_data:
+        download_url = file_msg_data.get('downloadUrl') or file_msg_data.get('fileUrl')
+        file_name = file_msg_data.get('fileName', 'attachment.jpg')
+        caption = file_msg_data.get('caption', '')
+        if caption and not message_text:
+            message_text = caption
+        if download_url:
+            safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-')
+            if not safe_filename:
+                safe_filename = 'whatsapp_file.jpg' if not is_audio else 'whatsapp_audio.ogg'
+            unique_filename = f"wa_job_{job['id']}_{safe_filename}"
+            local_path = download_whatsapp_media(download_url, unique_filename)
+            if is_audio:
+                audio_path = local_path
+            else:
+                media_paths.append(local_path)
+
+    message_text, _ = _strip_whatsapp_bot_prefix(message_text)
+
+    try:
+        if audio_path:
+            logger.info("Transcribing queued WhatsApp audio job %s", job['id'])
+            message_text = transcribe_voice_file(audio_path, user_id)
+            message_text, _ = _strip_whatsapp_bot_prefix(message_text)
+
+        from datetime import timedelta
+        date_str = (_kz_now() - timedelta(hours=2)).strftime('%Y-%m-%d')
+        db = get_database()
+        from parser_service import get_parser_service
+        parser = get_parser_service()
+
+        chat_history = db.get_assistant_chat_history(user_id, limit=6)
+        all_drafts = db.get_expense_drafts(user_id, status="all")
+        active_drafts = [
+            d for d in all_drafts
+            if d.get('created_at')
+            and get_date_in_kz_tz(d['created_at'], KZ_TZ) == date_str
+        ]
+        all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
+        for supply_draft in all_supply_drafts:
+            draft_with_items = db.get_supply_draft_with_items(supply_draft['id'])
+            if draft_with_items:
+                active_drafts.append({
+                    'id': supply_draft['id'],
+                    'type': 'supply',
+                    'supplier_name': supply_draft.get('supplier_name'),
+                    'total_sum': supply_draft.get('total_sum'),
+                    'items': draft_with_items.get('items', []),
+                })
+
+        raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+        msg_lower = (message_text or '').lower()
+        supply_keywords = {
+            "постав", "накладн", "привез", "инвойс", "счет", "счёт", "чек",
+            "продукт", "сырь", "ингредиент", "по, ", " по ", " кг", " шт",
+            " литр",
+        }
+        is_supply_related = bool(media_paths) or any(word in msg_lower for word in supply_keywords)
+        if not is_supply_related and raw_supplier_profiles:
+            for supplier, ingredients in raw_supplier_profiles.items():
+                if supplier.lower() in msg_lower or any(
+                    len(ingredient) >= 3 and ingredient in msg_lower
+                    for ingredient in ingredients
+                ):
+                    is_supply_related = True
+                    break
+
+        media_files = []
+        for path in media_paths:
+            file_ext = os.path.splitext(path.lower())[1]
+            mime_type = 'application/pdf' if file_ext == '.pdf' else 'image/jpeg'
+            with open(path, 'rb') as media_file:
+                media_files.append({'mime_type': mime_type, 'data': media_file.read()})
+
+        agent_response = run_async(parser.call_gemini_assistant_agent(
+            user_message=message_text,
+            chat_history=chat_history,
+            active_drafts=active_drafts,
+            supplier_profiles=raw_supplier_profiles if is_supply_related else {},
+            media_files=media_files,
+            assistant_memory=db.get_assistant_memory(user_id),
+        )) or {}
+
+        response_text = agent_response.get('response_text', '')
+        actions = agent_response.get('actions', [])
+        logger.info(
+            "Queued WhatsApp job %s produced %s actions",
+            job['id'], len(actions),
+        )
+        explicit_supplier = find_explicit_supplier_name_and_id(user_id, message_text)
+        response_text, created_drafts = execute_assistant_actions(
+            user_id,
+            actions,
+            date_str,
+            response_text,
+            is_webhook=True,
+            explicit_supplier=explicit_supplier,
+            allow_memory_actions=_user_explicitly_requests_memory(message_text),
+        )
+
+        saved_media_urls = []
+        for path in media_paths:
+            import shutil
+            import uuid
+            upload_dir = os.path.join(app.root_path, 'static', 'uploads', 'assistant')
+            os.makedirs(upload_dir, exist_ok=True)
+            file_ext = os.path.splitext(path)[1]
+            unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+            destination = os.path.join(upload_dir, unique_filename)
+            shutil.copy2(path, destination)
+            saved_media_urls.append(f"/static/uploads/assistant/{unique_filename}")
+
+        db.add_assistant_chat_message(user_id, 'user', message_text, saved_media_urls)
+        db.add_assistant_chat_message(
+            user_id,
+            'assistant',
+            response_text,
+            model_name=agent_response.get('_model_used', 'gemini-3.5-flash'),
+        )
+        return response_text, created_drafts
+    finally:
+        for local_path in media_paths + ([audio_path] if audio_path else []):
+            try:
+                os.unlink(local_path)
+            except Exception:
+                pass
+
+
+def _classify_whatsapp_draft_summary(db, description: str) -> tuple[str, str]:
+    """Classify a created supply draft without changing it."""
+    match = re.search(r'черновик\s+#(\d+)', description or '', re.IGNORECASE)
+    if not match:
+        return '✅', ''
+    draft = db.get_supply_draft_with_items(int(match.group(1)))
+    if not draft:
+        return '⚠️', 'черновик не найден'
+    items = draft.get('items') or []
+    if not items:
+        return '⚠️', 'пустой черновик'
+    unmatched = sum(1 for item in items if not item.get('poster_ingredient_id'))
+    if unmatched:
+        return '❌', f'не найдено позиций: {unmatched}'
+    mismatch = calculate_supply_total_mismatch(items, draft.get('total_sum'))
+    if mismatch:
+        expected, actual, difference = mismatch
+        return (
+            '⚠️',
+            f'сумма позиций {actual:,.0f} ₸, '
+            f'расход {expected:,.0f} ₸, разница {difference:+,.0f} ₸',
+        )
+    return '✅', 'готов к проверке'
+
+
+def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
+    db = db or get_database()
+    jobs = batch.get('jobs', [])
+    completed = sum(1 for job in jobs if job.get('status') == 'completed')
+    failed = sum(1 for job in jobs if job.get('status') == 'failed')
+    lines = [
+        f"📋 *Пакет #{batch['id']} обработан*",
+        f"Получено: {len(jobs)} • Обработано: {completed} • Ошибки: {failed}",
+        "",
+    ]
+    for index, job in enumerate(jobs, 1):
+        if job.get('status') == 'failed':
+            lines.append(f"❌ {index}. Не удалось обработать документ. Перешлите его повторно.")
+            continue
+        try:
+            drafts = json.loads(job.get('created_drafts') or '[]')
+        except (TypeError, json.JSONDecodeError):
+            drafts = []
+        if drafts:
+            icon, status_text = _classify_whatsapp_draft_summary(db, drafts[0])
+            suffix = f" — {status_text}" if status_text else ''
+            lines.append(f"{icon} {index}. {drafts[0]}{suffix}")
+            for extra in drafts[1:]:
+                extra_icon, extra_status = _classify_whatsapp_draft_summary(db, extra)
+                extra_suffix = f" — {extra_status}" if extra_status else ''
+                lines.append(f"   {extra_icon} {extra}{extra_suffix}")
+        else:
+            response = ' '.join((job.get('response_text') or 'Обработано без новых черновиков').split())
+            lines.append(f"⚠️ {index}. {response[:500]}")
+
+    lines.extend([
+        "",
+        "Черновики сохранены, но в Poster ещё ничего не отправлено.",
+        "Пока проверяйте их на сайте как обычно.",
+    ])
+    return '\n'.join(lines)
+
+
+def _send_ready_whatsapp_batch_summaries(db, settle_seconds: Optional[int] = None):
+    settle = (
+        config.WHATSAPP_BATCH_SETTLE_SECONDS
+        if settle_seconds is None
+        else settle_seconds
+    )
+    for batch in db.get_ready_whatsapp_batches(settle):
+        summary = _format_whatsapp_batch_summary(batch, db=db)
+        if send_whatsapp_message(batch['chat_id'], summary):
+            db.mark_whatsapp_batch_summary_sent(batch['id'])
+
+
+def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = None) -> int:
+    """Drain WhatsApp jobs sequentially; safe to call from the scheduler."""
+    lock = _get_whatsapp_queue_lock()
+    if not lock.acquire(blocking=False):
+        return 0
+    processed = 0
+    db = get_database()
+    try:
+        while processed < max_jobs:
+            job = db.claim_next_whatsapp_job()
+            if not job:
+                break
+            try:
+                response_text, created_drafts = _process_whatsapp_job_payload(job)
+                db.finish_whatsapp_job(
+                    job['id'],
+                    response_text,
+                    json.dumps(created_drafts, ensure_ascii=False),
+                )
+            except Exception as error:
+                state = db.fail_whatsapp_job(job['id'], str(error))
+                logger.error(
+                    "WhatsApp queue job %s failed (%s): %s",
+                    job['id'], state, error,
+                    exc_info=True,
+                )
+            processed += 1
+        _send_ready_whatsapp_batch_summaries(db, settle_seconds=settle_seconds)
+        return processed
+    finally:
+        lock.release()
+
+
 @app.route('/api/whatsapp/webhook', methods=['POST'])
 @limiter.limit("100 per minute")
 def whatsapp_webhook():
     """Handle incoming WhatsApp messages from Green-API"""
     from config import WHATSAPP_GROUP_ID, WHATSAPP_USER_ID_MAPPING
-    from parser_service import get_parser_service
     
     try:
         payload = request.get_json(force=True) or {}
@@ -10415,228 +10782,35 @@ def whatsapp_webhook():
                 logger.error(f"Error querying users for fallback: {db_err}")
             finally:
                 conn.close()
-            
-        message_data = payload.get('messageData', {})
-        type_message = message_data.get('typeMessage', '')
-        
-        message_text = ''
-        media_paths = []
-        
-        # 1. Parse text message
-        if type_message == 'textMessage':
-            text_data = message_data.get('textMessageData', {})
-            message_text = text_data.get('textMessage', '')
-        # 2. Parse text with file (extendedTextMessage)
-        elif type_message == 'extendedTextMessage':
-            ext_text_data = message_data.get('extendedTextMessageData', {})
-            message_text = ext_text_data.get('text', '')
-            
-        # 3. Parse and download file message
-        is_audio = (type_message == 'audioMessage')
-        file_msg_data = (
-            message_data.get('fileMessageData') or 
-            message_data.get('imageMessageData') or 
-            message_data.get('documentMessageData') or 
-            message_data.get('audioMessageData') or 
-            {}
-        )
-        audio_path = None
-        if file_msg_data:
-            download_url = file_msg_data.get('downloadUrl') or file_msg_data.get('fileUrl')
-            file_name = file_msg_data.get('fileName', 'attachment.jpg')
-            caption = file_msg_data.get('caption', '')
-            if caption and not message_text:
-                message_text = caption
-                
-            if download_url:
-                try:
-                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in '._-')
-                    if not safe_filename:
-                        safe_filename = 'whatsapp_file.jpg' if not is_audio else 'whatsapp_audio.ogg'
-                    unique_filename = f"wa_{int(_time.time())}_{safe_filename}"
-                    local_path = download_whatsapp_media(download_url, unique_filename)
-                    if is_audio:
-                        audio_path = local_path
-                    else:
-                        media_paths.append(local_path)
-                except Exception as file_err:
-                    logger.error(f"Failed to download file from WhatsApp webhook: {file_err}")
-                    send_whatsapp_message(chat_id, f"⚠️ Не удалось скачать файл: {file_name}")
-                    
-        if not message_text and not media_paths and not audio_path:
+
+        if not _whatsapp_payload_has_content(payload):
             return 'No content to parse', 200
 
-        # Check if the user explicitly addressed the bot
-        is_addressed = False
-        if message_text:
-            cleaned_lower = message_text.strip().lower()
-            # Check prefixes
-            for prefix in ('бот:', 'bot:', 'бот,', 'bot,', 'бот', 'bot', '+', '/'):
-                if cleaned_lower.startswith(prefix):
-                    is_addressed = True
-                    # Strip prefix for cleaner Gemini prompt
-                    message_text = message_text.strip()[len(prefix):].strip()
-                    if message_text.startswith(',') or message_text.startswith(':'):
-                        message_text = message_text[1:].strip()
-                    break
-            
-        logger.info(f"Processing WhatsApp message from group {chat_id} for user {user_id} (is_addressed: {is_addressed}). Text: '{message_text[:100]}', media_count: {len(media_paths)}")
-        
-        # Run parsing and database saving
-        def _process_whatsapp_async():
-            nonlocal message_text, is_addressed
-            db = get_database()
-            parser = get_parser_service()
-            
-            if audio_path:
-                try:
-                    logger.info(f"Transcribing audio file: {audio_path}")
-                    transcribed_text = transcribe_voice_file(audio_path, user_id)
-                    logger.info(f"Audio transcription success: '{transcribed_text}'")
-                    message_text = transcribed_text
-                    
-                    if message_text:
-                        cleaned_lower = message_text.strip().lower()
-                        for prefix in ('бот:', 'bot:', 'бот,', 'bot,', 'бот', 'bot', '+', '/'):
-                            if cleaned_lower.startswith(prefix):
-                                is_addressed = True
-                                message_text = message_text.strip()[len(prefix):].strip()
-                                if message_text.startswith(',') or message_text.startswith(':'):
-                                    message_text = message_text[1:].strip()
-                                break
-                except Exception as trans_err:
-                    logger.error(f"Failed to transcribe WhatsApp voice message: {trans_err}", exc_info=True)
-                    send_whatsapp_message(chat_id, f"⚠️ Не удалось распознать голосовое сообщение: {trans_err}")
-                    try:
-                        os.unlink(audio_path)
-                    except Exception:
-                        pass
-                    return
-                finally:
-                    try:
-                        os.unlink(audio_path)
-                    except Exception:
-                        pass
-            
-            # Shift Almaty time by -2 hours for business date classification
-            from datetime import timedelta
-            now_kz = _kz_now() - timedelta(hours=2)
-            date_str = now_kz.strftime('%Y-%m-%d')
-            
-            chat_history = db.get_assistant_chat_history(user_id, limit=6)
-            
-            all_drafts = db.get_expense_drafts(user_id, status="all")
-            active_drafts = [d for d in all_drafts if d.get('created_at') and get_date_in_kz_tz(d['created_at'], KZ_TZ) == date_str]
-            
-            all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
-            for sd in all_supply_drafts:
-                sd_with_items = db.get_supply_draft_with_items(sd['id'])
-                if sd_with_items:
-                    active_drafts.append({
-                        'id': sd['id'],
-                        'type': 'supply',
-                        'supplier_name': sd.get('supplier_name'),
-                        'total_sum': sd.get('total_sum'),
-                        'items': sd_with_items.get('items', [])
-                    })
-                    
-            # Smart supplier profile filtering
-            raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
-            has_files = len(media_paths) > 0
-            msg_lower = (message_text or "").lower()
-            supply_keywords = {"постав", "накладн", "привез", "инвойс", "счет", "счёт", "чек", "продукт", "сырь", "ингредиент", "по, ", " по ", " кг", " шт", " литр"}
-            has_supply_keywords = any(kw in msg_lower for kw in supply_keywords)
-            
-            is_supply_related = has_files or has_supply_keywords
-            
-            if not is_supply_related and raw_supplier_profiles:
-                for supplier, ingredients in raw_supplier_profiles.items():
-                    if supplier.lower() in msg_lower:
-                        is_supply_related = True
-                        break
-                    for ing in ingredients:
-                        if len(ing) >= 3 and ing in msg_lower:
-                            is_supply_related = True
-                            break
-                    if is_supply_related:
-                        break
-                        
-            supplier_profiles = raw_supplier_profiles if is_supply_related else {}
-            assistant_memory = db.get_assistant_memory(user_id)
-            
-            # Prepare files in format expected by agent
-            media_files = []
-            for path in media_paths:
-                file_ext = os.path.splitext(path.lower())[1]
-                mime_type = 'application/pdf' if file_ext == '.pdf' else 'image/jpeg'
-                with open(path, 'rb') as f:
-                    file_data = f.read()
-                media_files.append({'mime_type': mime_type, 'data': file_data})
+        message_id = _whatsapp_message_id(payload)
+        queued = db.enqueue_whatsapp_job(
+            telegram_user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            payload_json=json.dumps(payload, ensure_ascii=False),
+            batch_window_seconds=config.WHATSAPP_BATCH_WINDOW_SECONDS,
+        )
+        if queued['duplicate']:
+            logger.info("Ignored duplicate WhatsApp message %s", message_id)
+            return 'Duplicate', 200
 
-
-
-            agent_response = run_async(parser.call_gemini_assistant_agent(
-                user_message=message_text,
-                chat_history=chat_history,
-                active_drafts=active_drafts,
-                supplier_profiles=supplier_profiles,
-                media_files=media_files,
-                assistant_memory=assistant_memory
-            ))
-            
-            response_text = agent_response.get('response_text', '')
-            actions = agent_response.get('actions', [])
-            logger.info(f"🤖 [Gemini Assistant] Response text: '{response_text}', actions: {actions}")
-            
-            # Execute assistant actions
-            explicit_supplier = find_explicit_supplier_name_and_id(user_id, message_text)
-            response_text, created_drafts = execute_assistant_actions(
-                user_id,
-                actions,
-                date_str,
-                response_text,
-                is_webhook=True,
-                explicit_supplier=explicit_supplier,
+        logger.info(
+            "Queued WhatsApp message %s as job %s in batch %s",
+            message_id, queued['job_id'], queued['batch_id'],
+        )
+        if queued['new_batch']:
+            send_whatsapp_message(
+                chat_id,
+                f"📥 *Принял пакет #{queued['batch_id']}.*\n"
+                "Можно отправлять остальные накладные подряд. "
+                "Обработаю их по очереди и пришлю один итог.",
             )
+        return 'Queued', 200
             
-            # Save message to database chat history
-            saved_media_urls = []
-            for path in media_paths:
-                # Store in static uploads for persistence/display on dashboard
-                import uuid
-                import shutil
-                upload_dir = os.path.join(app.root_path, 'static', 'uploads', 'assistant')
-                os.makedirs(upload_dir, exist_ok=True)
-                file_ext = os.path.splitext(path)[1]
-                unique_filename = f"{uuid.uuid4().hex}{file_ext}"
-                dest_path = os.path.join(upload_dir, unique_filename)
-                shutil.copy2(path, dest_path)
-                saved_media_urls.append(f"/static/uploads/assistant/{unique_filename}")
-                
-            db.add_assistant_chat_message(user_id, 'user', message_text, saved_media_urls)
-            db.add_assistant_chat_message(user_id, 'assistant', response_text, model_name=agent_response.get('_model_used', 'gemini-3.5-flash'))
-            
-            # Send reply to WhatsApp group since it was classified as a valid business message or addressed
-            reply_parts = ["🤖 *Ассистент PizzBurg*"]
-            if response_text:
-                reply_parts.append(response_text)
-            if created_drafts:
-                drafts_str = "\n".join(f"✅ {d}" for d in created_drafts)
-                reply_parts.append(drafts_str)
-            reply_msg = "\n\n".join(reply_parts)
-            send_whatsapp_message(chat_id, reply_msg)
-            
-            for local_path in media_paths:
-                try:
-                    os.unlink(local_path)
-                except Exception:
-                    pass
-                    
-        import threading
-        thread = threading.Thread(target=_process_whatsapp_async, daemon=True)
-        thread.start()
-        
-        return 'OK', 200
     except Exception as e:
         logger.error(f"Error handling WhatsApp webhook: {e}", exc_info=True)
         return 'Error', 500
