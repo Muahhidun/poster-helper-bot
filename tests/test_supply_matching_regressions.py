@@ -50,6 +50,16 @@ def test_database_ingredient_alias_is_loaded_and_used(db):
         db.delete_ingredient_alias(TEST_USER_ID, alias)
 
 
+def test_burger_sauce_invoice_wording_matches_catalogue_ingredient():
+    from matchers import IngredientMatcher
+
+    match = IngredientMatcher(TEST_USER_ID).match('Соус Бургер-соус 1 кг.')
+
+    assert match is not None
+    assert match[:2] == (249, 'Бургерный соус')
+    assert match[4] == 'Pizzburg'
+
+
 def test_packaging_metadata_reconstructs_quantity_once_after_double_ai_multiply():
     from web_app import normalize_supply_item_measurements
 

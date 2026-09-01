@@ -50,6 +50,16 @@ def normalize_product_text(text: str) -> str:
     text = re.sub(r'(\d+(?:[.,]\d+)?)\s*(?:литр(?:а|ов)?|л)\b', r'\1л', text)
     return text.replace(',', '.')
 
+
+def normalize_ingredient_text(text: str) -> str:
+    """Normalize recurring invoice wording without broad semantic guesses."""
+    text = normalize_text_for_matching(text)
+    text = re.sub(r'\bбургер\s*[-–—]?\s*соус\b', 'бургерный соус', text)
+    text = re.sub(r'^соус\s+бургерный(?:\s+соус)?\b', 'бургерный соус', text)
+    if text.startswith('бургерный соус'):
+        text = re.sub(r'\s+\d+(?:[.,]\d+)?\s*(?:кг|г|гр|л)\.?$', '', text)
+    return ' '.join(text.split())
+
 def normalize_supplier_text(text: str) -> str:
     """Normalize supplier name by removing quotes, legal forms, and standardizing spaces."""
     if not text:
@@ -613,7 +623,7 @@ class IngredientMatcher:
                 self.ingredients[(ingredient_id, account_name)] = info
 
                 # Add name for matching
-                normalized_name = normalize_text_for_matching(name)
+                normalized_name = normalize_ingredient_text(name)
                 self.names.setdefault(normalized_name, []).append((ingredient_id, account_name))
                 self._name_to_info[(normalized_name, account_name)] = info
                 self._id_entries.setdefault(ingredient_id, []).append(info)
@@ -643,18 +653,18 @@ class IngredientMatcher:
                         continue
 
                     # Normalize alias text (same as input text normalization)
-                    alias = normalize_text_for_matching(row['alias_text'])
+                    alias = normalize_ingredient_text(row['alias_text'])
                     item_id = int(row['poster_item_id'])
                     # Find candidates by ID to resolve collisions
                     candidates = list(self._id_entries.get(item_id, []))
-                    db_item_name = normalize_text_for_matching(row.get('poster_item_name', ''))
+                    db_item_name = normalize_ingredient_text(row.get('poster_item_name', ''))
 
                     # Filter candidates by db_item_name if known to avoid cross-account ID collisions
                     if db_item_name:
                         matched_cands = [
                             c for c in candidates
-                            if normalize_text_for_matching(c['name']) == db_item_name
-                            or fuzz.ratio(normalize_text_for_matching(c['name']), db_item_name) >= 80
+                            if normalize_ingredient_text(c['name']) == db_item_name
+                            or fuzz.ratio(normalize_ingredient_text(c['name']), db_item_name) >= 80
                         ]
                         if matched_cands:
                             candidates = matched_cands
@@ -705,7 +715,7 @@ class IngredientMatcher:
                     continue
 
                 # Normalize alias text
-                alias = normalize_text_for_matching(row['alias_text'])
+                alias = normalize_ingredient_text(row['alias_text'])
                 item_id = int(row['poster_item_id'])
 
                 candidates = self._id_entries.get(item_id, [])
@@ -748,7 +758,7 @@ class IngredientMatcher:
             return None
 
         # Normalize text for better matching
-        text_lower = normalize_text_for_matching(text)
+        text_lower = normalize_ingredient_text(text)
 
         # Get all possible matches across all accounts
         all_matches = []
