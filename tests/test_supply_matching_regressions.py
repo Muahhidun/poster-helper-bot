@@ -26,7 +26,7 @@ def test_fuse_spelling_and_drink_subcategory_are_supported(tmp_path, monkeypatch
 
     assert matcher.match('Fuse Tea 1 литр')[:2] == (55, 'Фьюс чай 1л')
     assert matcher.match('Fuse Tea 1 литр', target_account='Pizzburg-cafe')[:2] == (
-        243, 'Фьюс 1л'
+        55, 'Фьюс чай 1л'
     )
 
 
@@ -72,6 +72,24 @@ def test_weighted_cheddar_does_not_match_weighted_ketchup():
     assert match[4] == 'Pizzburg'
 
 
+def test_primary_department_wins_when_ingredient_exists_in_both_accounts():
+    from matchers import IngredientMatcher
+
+    match = IngredientMatcher(TEST_USER_ID).match(
+        'салат айсберг', target_account='Pizzburg-cafe'
+    )
+
+    assert match is not None
+    assert match[:2] == (116, 'Салат листья (Айсберг)')
+    assert match[4] == 'Pizzburg'
+
+    exact_cafe_wording = IngredientMatcher(TEST_USER_ID).match(
+        'Айсберг (Салат)', target_account='Pizzburg-cafe'
+    )
+    assert exact_cafe_wording[:2] == (116, 'Салат листья (Айсберг)')
+    assert exact_cafe_wording[4] == 'Pizzburg'
+
+
 def test_basket_volume_selects_the_correct_packaging_size(tmp_path, monkeypatch):
     import config
     from matchers import IngredientMatcher
@@ -94,7 +112,7 @@ def test_basket_volume_selects_the_correct_packaging_size(tmp_path, monkeypatch)
         182, 'Крылышки 24шт упаковка (Баскет 2000мл)'
     )
     assert matcher.match('баскет 1л', target_account='Pizzburg-cafe')[:2] == (
-        302, 'Баскет 1000мл'
+        181, 'Крылышки 12шт упаковка (Баскет 1000мл)'
     )
 
 

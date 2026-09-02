@@ -58,6 +58,10 @@ def normalize_ingredient_text(text: str) -> str:
     text = re.sub(r'^соус\s+бургерный(?:\s+соус)?\b', 'бургерный соус', text)
     if text.startswith('бургерный соус'):
         text = re.sub(r'\s+\d+(?:[.,]\d+)?\s*(?:кг|г|гр|л)\.?$', '', text)
+    # Parentheses are presentation-only in Poster names. Treat their contents
+    # as ordinary words so equivalent forms such as "Айсберг (Салат)" and
+    # "Салат листья (Айсберг)" can be compared by their meaningful tokens.
+    text = re.sub(r'[()\[\]{}]+', ' ', text)
     return ' '.join(text.split())
 
 
@@ -827,14 +831,15 @@ class IngredientMatcher:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
         # 2. Then check exact aliases.
-        if not all_matches and text_lower in self.aliases:
+        if (not any(m[4] == primary_account for m in all_matches)
+                and text_lower in self.aliases):
             for ingredient_id, account_name in self.aliases[text_lower]:
                 ingredient = self.ingredients.get((ingredient_id, account_name))
                 if ingredient:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
         # 3. Fuzzy matching - search in aliases first
-        if not all_matches and self.aliases:
+        if not any(m[4] == primary_account for m in all_matches) and self.aliases:
             aliases_list = list(self.aliases.keys())
             alias_matches = process.extract(
                 text_lower,
@@ -895,7 +900,7 @@ class IngredientMatcher:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, account_name))
 
         # 4. Fuzzy matching - search in names
-        if not all_matches:
+        if not any(m[4] == primary_account for m in all_matches):
             names_list = list(self.names.keys())
             name_matches = process.extract(
                 text_lower,
@@ -967,9 +972,10 @@ class IngredientMatcher:
             acc = m[4]
             is_target = (acc == target_account) if target_account else False
             is_primary = (acc == primary_account)
-            # Match quality is more important than the primary department.
-            # Primary only breaks ties between equally good candidates.
-            return (is_target, m[3], is_primary)
+            # Business rule: if a valid matching ingredient exists in the
+            # primary Pizzburg catalogue, it always belongs there.  Cafe is a
+            # fallback only when no primary candidate passed the safety gates.
+            return (is_primary, is_target, m[3])
 
         best_match = max(all_matches, key=sort_key)
         logger.info(f"✅ Found ingredient match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
@@ -1331,14 +1337,15 @@ class ProductMatcher:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
         # 2. Then check exact aliases.
-        if not all_matches and text_lower in self.aliases:
+        if (not any(m[4] == primary_account for m in all_matches)
+                and text_lower in self.aliases):
             for product_id, account_name in self.aliases[text_lower]:
                 product = self.products.get((product_id, account_name))
                 if product:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
         # 3. Fuzzy matching - search in aliases first
-        if not all_matches and self.aliases:
+        if not any(m[4] == primary_account for m in all_matches) and self.aliases:
             aliases_list = list(self.aliases.keys())
             alias_matches = process.extract(
                 text_lower,
@@ -1386,7 +1393,7 @@ class ProductMatcher:
                     all_matches.append((product_id, product['name'], product['unit'], score, account_name))
 
         # 4. Fuzzy matching - search in names
-        if not all_matches:
+        if not any(m[4] == primary_account for m in all_matches):
             names_list = list(self.names.keys())
             name_matches = process.extract(
                 text_lower,
@@ -1436,7 +1443,8 @@ class ProductMatcher:
             acc = m[4]
             is_target = (acc == target_account) if target_account else False
             is_primary = (acc == primary_account)
-            return (is_target, m[3], is_primary)
+            # Apply the same department fallback rule to Poster products.
+            return (is_primary, is_target, m[3])
 
         best_match = max(all_matches, key=sort_key)
         logger.info(f"✅ Found product match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
