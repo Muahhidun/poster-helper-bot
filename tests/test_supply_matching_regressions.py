@@ -62,6 +62,16 @@ def test_burger_sauce_invoice_wording_matches_catalogue_ingredient():
     assert match[4] == 'Pizzburg'
 
 
+def test_weighted_cheddar_does_not_match_weighted_ketchup():
+    from matchers import IngredientMatcher
+
+    match = IngredientMatcher(TEST_USER_ID).match('чеддер весовой')
+
+    assert match is not None
+    assert match[:2] == (232, 'Чеддер сыр (весовой)')
+    assert match[4] == 'Pizzburg'
+
+
 def test_basket_volume_selects_the_correct_packaging_size(tmp_path, monkeypatch):
     import config
     from matchers import IngredientMatcher
@@ -166,6 +176,28 @@ def test_explicit_litres_are_inferred_when_ai_omits_packaging_metadata():
 
     assert values[:3] == (5, 1980, 'л')
     assert values[3:] == (1, 'шт', 9900)
+
+
+def test_pnd_glove_packages_convert_to_poster_pair_units():
+    from web_app import normalize_supply_item_measurements
+
+    values = normalize_supply_item_measurements(
+        {
+            'name': 'Перчатки полиэтиленовые одноразовые 1*100 шт.',
+            'qty': 10,
+            'price': 195,
+            'sum': 1950,
+            'unit': 'шт',
+        },
+        'Перчатки Бургер (ПНД одноразовые)',
+        matching_rule={
+            'coefficient': 50,
+            'target_unit': 'шт',
+        },
+    )
+
+    assert values[:3] == (500, 3.9, 'шт')
+    assert values[3:] == (10, 'шт', 195)
 
 
 def test_supply_invoice_date_accepts_postgresql_date_objects():

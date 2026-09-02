@@ -61,6 +61,32 @@ def normalize_ingredient_text(text: str) -> str:
     return ' '.join(text.split())
 
 
+_GENERIC_INGREDIENT_TOKENS = {
+    'вес', 'весовой', 'весовая', 'весовое', 'весовые',
+    'сыр', 'соус', 'масло', 'продукт',
+    'упаковка', 'упаковке', 'упак', 'пачка', 'ведро', 'канистра',
+    'шт', 'штук', 'кг', 'гр', 'г', 'л', 'мл',
+}
+
+
+def ingredient_distinctive_tokens(text: str) -> set:
+    """Return identifying words, excluding generic form/packaging labels."""
+    normalized = normalize_ingredient_text(text)
+    return {
+        token for token in re.findall(r'[a-zа-яё]+', normalized)
+        if token not in _GENERIC_INGREDIENT_TOKENS and len(token) >= 3
+    }
+
+
+def ingredient_form_markers(text: str) -> set:
+    """Return explicit form markers that should break fuzzy-score ties."""
+    tokens = set(re.findall(r'[a-zа-яё]+', normalize_ingredient_text(text)))
+    markers = set()
+    if any(token.startswith('весов') for token in tokens):
+        markers.add('weighted')
+    return markers
+
+
 def extract_basket_volume_ml(text: str) -> Optional[int]:
     """Extract an explicit basket volume so 1L/2L never fall back to 800ml."""
     normalized = normalize_text_for_matching(text)
@@ -822,11 +848,16 @@ class IngredientMatcher:
                 text_words = set(text_lower.split())
                 matched_words = set(matched_alias.split())
                 common_tokens = text_words & matched_words
+                distinctive_overlap = (
+                    ingredient_distinctive_tokens(text_lower)
+                    & ingredient_distinctive_tokens(matched_alias)
+                )
                 
                 # Stricter rejection for aliases 
                 is_suspicious = (
                     score < 88 and 
                     len(common_tokens) < 1 and 
+                    not distinctive_overlap and
                     len(text_words) > 0 and 
                     len(matched_words) > 0
                 )
@@ -845,7 +876,15 @@ class IngredientMatcher:
                     (len(common_tokens) / len(text_words) < 0.6 or fuzz.WRatio(text_lower, matched_alias) < 88)
                 )
 
-                if is_suspicious or is_generic_overlap or is_single_word_mismatch:
+                is_descriptor_only_overlap = (
+                    not distinctive_overlap
+                    and score < 95
+                    and len(text_words) > 1
+                    and len(matched_words) > 1
+                )
+
+                if (is_suspicious or is_generic_overlap or is_single_word_mismatch
+                        or is_descriptor_only_overlap):
                     logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
                     continue
 
@@ -870,11 +909,16 @@ class IngredientMatcher:
                 text_words = set(text_lower.split())
                 matched_words = set(matched_name.split())
                 common_tokens = text_words & matched_words
+                distinctive_overlap = (
+                    ingredient_distinctive_tokens(text_lower)
+                    & ingredient_distinctive_tokens(matched_name)
+                )
                 
                 # Stricter rejection for raw names 
                 is_suspicious = (
                     score < 85 and 
                     len(common_tokens) < 2 and 
+                    not distinctive_overlap and
                     len(text_words) > 1 and 
                     len(matched_words) > 1
                 )
@@ -887,7 +931,14 @@ class IngredientMatcher:
                     len(list(common_tokens)[0]) < 5
                 )
 
-                if is_suspicious or is_generic_overlap:
+                is_descriptor_only_overlap = (
+                    not distinctive_overlap
+                    and score < 95
+                    and len(text_words) > 1
+                    and len(matched_words) > 1
+                )
+
+                if is_suspicious or is_generic_overlap or is_descriptor_only_overlap:
                     logger.info(f"      ❌ Rejected name priority match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
                     continue
                     
@@ -895,7 +946,17 @@ class IngredientMatcher:
                     ingredient = self.ingredients.get((ingredient_id, account_name))
                     if not ingredient:
                         continue
-                    all_matches.append((ingredient['id'], ingredient['name'], ingredient['unit'], score, account_name))
+                    adjusted_score = score
+                    query_markers = ingredient_form_markers(text_lower)
+                    candidate_markers = ingredient_form_markers(matched_name)
+                    if query_markers and query_markers & candidate_markers:
+                        adjusted_score = min(100, adjusted_score + 5)
+                    elif query_markers and not candidate_markers:
+                        adjusted_score -= 2
+                    all_matches.append((
+                        ingredient['id'], ingredient['name'], ingredient['unit'],
+                        adjusted_score, account_name,
+                    ))
 
         if not all_matches:
             logger.warning(f"Ingredient not matched (priority search): '{text}'")
