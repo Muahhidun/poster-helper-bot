@@ -294,3 +294,9 @@ def test_candidate_options_include_cross_account_cream_cheese_and_exact_fuse_tea
     assert fuse[0]['item_id'] == 55
     assert fuse[0]['name'] == 'Фьюс чай 1л'
     assert fuse[0]['score'] == 100
+
+    mustard = _whatsapp_candidate_options(TEST_USER_ID, 'соус горчичный')
+    assert [(item['item_id'], item['account_name']) for item in mustard[:2]] == [
+        (280, 'Pizzburg-cafe'),
+        (130, 'Pizzburg'),
+    ]

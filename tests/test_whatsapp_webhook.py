@@ -99,6 +99,82 @@ def test_whatsapp_webhook_no_content(app_client, mock_whatsapp_config):
     assert response.status_code == 200
     assert response.data.decode('utf-8') == 'No content to parse'
 
+
+@patch("web_app.send_whatsapp_message", return_value=True)
+def test_whatsapp_webhook_handles_numeric_reply_with_quote(
+    mock_send_whatsapp, app_client, db, mock_whatsapp_config
+):
+    """A WhatsApp reply-to message must advance the active review instead of being ignored."""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name='Япоша',
+        total_sum=27900,
+    )
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name='творожный сыр',
+        quantity=10,
+        unit='кг',
+        price_per_unit=2790,
+    )
+    candidates = [{
+        'item_id': 110,
+        'name': 'Кремета Хохланд (2,5кг)',
+        'unit': '',
+        'account_name': 'Pizzburg',
+        'item_type': 'ingredient',
+        'score': 96,
+    }]
+    try:
+        review_id = db.enqueue_whatsapp_review(
+            TEST_USER_ID,
+            '120363000000000000@g.us',
+            None,
+            draft_id,
+            item_id,
+            'творожный сыр',
+            json.dumps(candidates, ensure_ascii=False),
+        )
+        db.mark_whatsapp_review_prompted(review_id)
+        payload = {
+            'typeWebhook': 'outgoingMessageReceived',
+            'idMessage': 'quoted-choice-1',
+            'senderData': {'chatId': '120363000000000000@g.us'},
+            'messageData': {
+                'typeMessage': 'quotedMessage',
+                'extendedTextMessageData': {
+                    'text': '1',
+                    'stanzaId': 'bot-question-id',
+                },
+                'quotedMessage': {
+                    'stanzaId': 'bot-question-id',
+                    'typeMessage': 'textMessage',
+                    'textMessage': 'Что это в Poster?',
+                },
+            },
+        }
+
+        response = app_client.post('/api/whatsapp/webhook', json=payload)
+
+        assert response.status_code == 200
+        assert response.data.decode('utf-8') == 'Review handled'
+        active = db.get_active_whatsapp_review(
+            TEST_USER_ID, '120363000000000000@g.us'
+        )
+        assert active['status'] == 'awaiting_memory'
+        updated = db.get_supply_draft_with_items(draft_id)['items'][0]
+        assert updated['poster_ingredient_id'] == 110
+        assert any('Запомнить соответствие' in call.args[1] for call in mock_send_whatsapp.call_args_list)
+    finally:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM whatsapp_review_messages")
+        cursor.execute("DELETE FROM whatsapp_reviews")
+        conn.commit()
+        conn.close()
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
 @patch("web_app.send_whatsapp_message")
 @patch("web_app.execute_assistant_actions")
 def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config):

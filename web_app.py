@@ -10497,13 +10497,20 @@ def _whatsapp_file_message_data(message_data: dict) -> dict:
     )
 
 
-def _whatsapp_payload_has_content(payload: dict) -> bool:
-    message_data = payload.get('messageData') or {}
+def _whatsapp_message_text(message_data: dict) -> str:
+    """Extract text from plain, extended, or quoted Green-API messages."""
     type_message = message_data.get('typeMessage', '')
     if type_message == 'textMessage':
-        return bool((message_data.get('textMessageData') or {}).get('textMessage', '').strip())
-    if type_message == 'extendedTextMessage':
-        return bool((message_data.get('extendedTextMessageData') or {}).get('text', '').strip())
+        return (message_data.get('textMessageData') or {}).get('textMessage', '')
+    if type_message in ('extendedTextMessage', 'quotedMessage'):
+        return (message_data.get('extendedTextMessageData') or {}).get('text', '')
+    return ''
+
+
+def _whatsapp_payload_has_content(payload: dict) -> bool:
+    message_data = payload.get('messageData') or {}
+    if _whatsapp_message_text(message_data).strip():
+        return True
     file_data = _whatsapp_file_message_data(message_data)
     return bool(
         file_data.get('downloadUrl')
@@ -10543,10 +10550,7 @@ def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
     media_paths = []
     audio_path = None
 
-    if type_message == 'textMessage':
-        message_text = (message_data.get('textMessageData') or {}).get('textMessage', '')
-    elif type_message == 'extendedTextMessage':
-        message_text = (message_data.get('extendedTextMessageData') or {}).get('text', '')
+    message_text = _whatsapp_message_text(message_data)
 
     is_audio = type_message == 'audioMessage'
     file_msg_data = _whatsapp_file_message_data(message_data)
@@ -10770,13 +10774,17 @@ def _whatsapp_candidate_options(user_id: int, item_name: str, limit: int = 3) ->
     from rapidfuzz import fuzz
 
     query = normalize_ingredient_text(item_name)
-    query_tokens = set(re.findall(r'[a-zа-яё0-9]+', query))
+    # Candidate search may use safe semantic normalization more broadly than
+    # automatic matching because the user still makes the final choice.
+    suggestion_query = re.sub(r'\bгорчич\w*\b', 'горчица', query)
+    query_tokens = set(re.findall(r'[a-zа-яё0-9]+', suggestion_query))
     cream_cheese_query = bool(
         ('сыр' in query_tokens and any(
             token.startswith(('творож', 'сливоч')) for token in query_tokens
         ))
         or re.search(r'cream\s+cheese', query)
     )
+    mustard_query = 'горчица' in query_tokens
     options = []
     matcher_specs = (
         ('ingredient', get_ingredient_matcher(user_id), 'ingredients'),
@@ -10789,7 +10797,7 @@ def _whatsapp_candidate_options(user_id: int, item_name: str, limit: int = 3) ->
                 scoring_query = normalize_product_text(item_name)
                 normalized_name = normalize_product_text(candidate_name)
             else:
-                scoring_query = query
+                scoring_query = suggestion_query
                 normalized_name = normalize_ingredient_text(candidate_name)
             candidate_tokens = set(re.findall(r'[a-zа-яё0-9]+', normalized_name))
             score = max(
@@ -10801,6 +10809,8 @@ def _whatsapp_candidate_options(user_id: int, item_name: str, limit: int = 3) ->
             # "Кремета" is the Poster catalogue wording for cream cheese.
             # This only lifts it into the suggestions; it is never auto-picked.
             if cream_cheese_query and 'кремет' in normalized_name:
+                score = max(score, 96)
+            if mustard_query and 'горчиц' in normalized_name:
                 score = max(score, 96)
             account_name = catalogue_item.get('account_name') or ''
             if item_type == 'product' and account_name in ('', 'Unknown'):
@@ -10907,8 +10917,9 @@ def _format_whatsapp_review_prompt(review: dict) -> str:
         department = candidate.get('account_name') or 'Poster'
         item_kind = 'товар' if candidate.get('item_type') == 'product' else 'ингредиент'
         lines.append(f"{index}. {candidate.get('name')} — {department}, {item_kind}")
+    none_choice = len(candidates) + 1
     lines.extend([
-        "0. Ни один вариант — оставить строку красной",
+        f"{none_choice}. Ни один вариант — оставить строку красной",
         "",
         "Ответьте одной цифрой. Команды запоминать не нужно.",
     ])
@@ -10918,6 +10929,13 @@ def _format_whatsapp_review_prompt(review: dict) -> str:
 def _send_pending_whatsapp_review_prompts(db, chat_id: Optional[str] = None) -> int:
     sent = 0
     for review in db.get_whatsapp_reviews_needing_prompt(chat_id=chat_id):
+        if review.get('status') == 'pending':
+            candidates = _whatsapp_candidate_options(
+                int(review['telegram_user_id']), review['original_item_name']
+            )
+            candidates_json = json.dumps(candidates, ensure_ascii=False)
+            if db.update_pending_whatsapp_review_candidates(review['id'], candidates_json):
+                review['candidates_json'] = candidates_json
         if send_whatsapp_message(review['chat_id'], _format_whatsapp_review_prompt(review)):
             db.mark_whatsapp_review_prompted(review['id'])
             sent += 1
@@ -10954,7 +10972,8 @@ def _handle_whatsapp_review_reply(
             candidates = json.loads(review.get('candidates_json') or '[]')
         except (TypeError, json.JSONDecodeError):
             candidates = []
-        if choice == 0:
+        none_choice = len(candidates) + 1
+        if choice in (0, none_choice):
             if not db.complete_whatsapp_review(review['id'], skipped=True):
                 return True
             send_whatsapp_message(
@@ -10967,7 +10986,7 @@ def _handle_whatsapp_review_reply(
         if choice < 1 or choice > len(candidates):
             send_whatsapp_message(
                 chat_id,
-                f"Выберите цифру от 0 до {len(candidates)} из сообщения выше.",
+                f"Выберите цифру от 1 до {none_choice} из сообщения выше.",
             )
             return True
 
@@ -11223,12 +11242,7 @@ def whatsapp_webhook():
         # Gemini and the invoice queue, so "1" can only answer the exact
         # question the bot most recently asked in this chat.
         message_data = payload.get('messageData') or {}
-        type_message = message_data.get('typeMessage', '')
-        review_text = ''
-        if type_message == 'textMessage':
-            review_text = (message_data.get('textMessageData') or {}).get('textMessage', '')
-        elif type_message == 'extendedTextMessage':
-            review_text = (message_data.get('extendedTextMessageData') or {}).get('text', '')
+        review_text = _whatsapp_message_text(message_data)
         review_text, _ = _strip_whatsapp_bot_prefix(review_text)
         message_id = _whatsapp_message_id(payload)
         if _handle_whatsapp_review_reply(

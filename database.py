@@ -7348,6 +7348,28 @@ class UserDatabase:
             conn.close()
             raise
 
+    def update_pending_whatsapp_review_candidates(
+        self, review_id: int, candidates_json: str
+    ) -> bool:
+        """Refresh suggestions before a pending question is first shown."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE whatsapp_reviews
+                SET candidates_json = {ph}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = {ph} AND status = 'pending' AND prompted_at IS NULL
+            """, (candidates_json, review_id))
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
     def select_whatsapp_review_candidate(self, review_id: int, candidate_json: str) -> bool:
         conn = self._get_connection()
         try:
