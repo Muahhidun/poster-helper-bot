@@ -128,6 +128,44 @@ def test_packaging_metadata_fixes_double_tortilla_conversion():
     assert unit == 'шт'
 
 
+def test_current_invoice_pack_size_overrides_stale_memory_metadata():
+    from web_app import normalize_supply_item_measurements
+
+    qty, price, unit, parsed_qty, parsed_unit, parsed_price = (
+        normalize_supply_item_measurements({
+            'name': 'Майонез Pechagin Professional 67% ведро 10 кг',
+            'qty': 19.2,
+            'price': 1229.17,
+            'sum': 23600,
+            'unit': 'кг',
+            'original_qty': 2,
+            'original_unit': 'шт',
+            'original_price': 11800,
+            'pack_size': 9.6,
+            'target_unit': 'кг',
+            'packaging_applied': True,
+        }, 'Майонез')
+    )
+
+    assert (qty, price, unit) == (20, 1180, 'кг')
+    assert (parsed_qty, parsed_unit, parsed_price) == (2, 'шт', 11800)
+
+
+def test_explicit_litres_are_inferred_when_ai_omits_packaging_metadata():
+    from web_app import normalize_supply_item_measurements
+
+    values = normalize_supply_item_measurements({
+        'name': 'Оливковое масло Olive Oil Карлсон 5 л',
+        'qty': 1,
+        'price': 9900,
+        'sum': 9900,
+        'unit': 'шт',
+    }, 'Оливковое масло 5л')
+
+    assert values[:3] == (5, 1980, 'л')
+    assert values[3:] == (1, 'шт', 9900)
+
+
 def test_already_normalized_item_is_not_changed_without_a_rule():
     from web_app import normalize_supply_item_measurements
 

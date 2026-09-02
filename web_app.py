@@ -931,11 +931,63 @@ def normalize_supply_item_measurements(
     pack_size_value = item.get('pack_size')
     pack_size = float(pack_size_value) if pack_size_value not in (None, '') else None
 
-    if original_qty_value not in (None, '') and pack_size and pack_size > 1:
-        expected_qty = parsed_qty * pack_size
+    # The current invoice is the source of truth.  A remembered pack size may
+    # describe an older delivery (for example, mayonnaise buckets changed from
+    # 9.6 kg to 10 kg), so an explicit size in the current item name must win.
+    explicit_metric_packs = [
+        (float(value.replace(',', '.')), measure.lower())
+        for value, measure in re.findall(
+            r'(?<!\d)(\d+(?:[.,]\d+)?)\s*(кг|kg|л|l)(?![а-яa-z])',
+            item.get('name') or '',
+            flags=re.IGNORECASE,
+        )
+    ]
+    metric_unit_aliases = {'kg': 'кг', 'кг': 'кг', 'l': 'л', 'л': 'л'}
+    count_units = {
+        'шт', 'штук', 'штука', 'штуки', 'уп', 'уп.', 'упак', 'упаковка',
+        'пачка', 'пачки', 'ведро', 'ведра', 'канистра', 'канистры',
+    }
+
+    if original_qty_value not in (None, '') and pack_size and pack_size > 0:
+        target_unit = (item.get('target_unit') or unit or 'шт').strip().lower()
+        normalized_target = metric_unit_aliases.get(target_unit)
+        explicit_same_unit = next((
+            size for size, measure in explicit_metric_packs
+            if metric_unit_aliases.get(measure) == normalized_target
+        ), None)
+        effective_pack_size = explicit_same_unit or pack_size
+        expected_qty = parsed_qty * effective_pack_size
         if expected_qty > 0:
-            target_unit = (item.get('target_unit') or unit or 'шт').strip()
-            return expected_qty, row_sum / expected_qty, target_unit, parsed_qty, parsed_unit, parsed_price
+            return (
+                expected_qty,
+                row_sum / expected_qty,
+                normalized_target or target_unit,
+                parsed_qty,
+                parsed_unit,
+                parsed_price,
+            )
+
+    # Gemini occasionally reads the size correctly in the name but forgets to
+    # emit packaging metadata.  Infer only an unambiguous kg/l size and only
+    # when the invoice quantity is explicitly a count, preventing a second
+    # multiplication of an already-normalized row.
+    if (
+        original_qty_value in (None, '')
+        and len(explicit_metric_packs) == 1
+        and parsed_unit.lower() in count_units
+    ):
+        explicit_pack_size, explicit_measure = explicit_metric_packs[0]
+        expected_qty = parsed_qty * explicit_pack_size
+        if expected_qty > 0:
+            target_unit = metric_unit_aliases[explicit_measure]
+            return (
+                expected_qty,
+                row_sum / expected_qty,
+                target_unit,
+                parsed_qty,
+                parsed_unit,
+                parsed_price,
+            )
 
     if matching_rule:
         coefficient = float(matching_rule['coefficient'])
