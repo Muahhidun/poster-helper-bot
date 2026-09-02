@@ -219,7 +219,8 @@ def logout():
 @app.route('/health')
 def health_check():
     """Health check endpoint for Railway / load balancer"""
-    return 'ok', 200
+    revision = os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('GIT_COMMIT') or 'local'
+    return 'ok', 200, {'X-App-Commit': revision[:12]}
 
 
 @app.before_request
