@@ -55,6 +55,26 @@ def _kz_business_today():
     from datetime import timedelta
     return _kz_now() - timedelta(hours=2)
 
+
+def normalize_supply_invoice_date(value) -> str:
+    """Return a supply date as YYYY-MM-DD for both SQLite and PostgreSQL.
+
+    SQLite returns DATE columns as strings while psycopg2 returns
+    ``datetime.date`` objects.  Keeping this conversion at the API boundary
+    prevents type-specific date handling from breaking Poster submission.
+    """
+    if value in (None, ''):
+        return _kz_now().strftime('%Y-%m-%d')
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y-%m-%d')
+
+    raw = str(value).strip()
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw[:10]):
+        return raw[:10]
+    if re.fullmatch(r'\d{8}', raw):
+        return f'{raw[:4]}-{raw[4:6]}-{raw[6:8]}'
+    raise ValueError(f'Некорректная дата накладной: {raw}')
+
 def run_async(coro):
     """Run an async coroutine from sync Flask code.
     Creates a new event loop, runs the coroutine, and cleans up."""
@@ -6793,7 +6813,7 @@ def process_supply(draft_id):
         async def create_supplies_in_poster():
             from matchers import normalize_text_for_matching
 
-            draft_date = draft.get('invoice_date') or datetime.now().strftime('%Y-%m-%d')
+            draft_date = normalize_supply_invoice_date(draft.get('invoice_date'))
             draft_date_api = draft_date.replace('-', '')[:8]
             idempotency_marker = f"Poster Helper draft #{draft_id}"
 

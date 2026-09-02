@@ -1,5 +1,7 @@
 """Regression tests for item matching and exactly-once packaging."""
 
+from datetime import date, datetime
+
 from tests.conftest import TEST_USER_ID
 
 
@@ -164,6 +166,15 @@ def test_explicit_litres_are_inferred_when_ai_omits_packaging_metadata():
 
     assert values[:3] == (5, 1980, 'л')
     assert values[3:] == (1, 'шт', 9900)
+
+
+def test_supply_invoice_date_accepts_postgresql_date_objects():
+    from web_app import normalize_supply_invoice_date
+
+    assert normalize_supply_invoice_date(date(2026, 9, 2)) == '2026-09-02'
+    assert normalize_supply_invoice_date(datetime(2026, 9, 2, 14, 30)) == '2026-09-02'
+    assert normalize_supply_invoice_date('2026-09-02') == '2026-09-02'
+    assert normalize_supply_invoice_date('20260902') == '2026-09-02'
 
 
 def test_already_normalized_item_is_not_changed_without_a_rule():
