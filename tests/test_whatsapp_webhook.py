@@ -28,6 +28,7 @@ def clean_whatsapp_queue(db):
     cursor = conn.cursor()
     cursor.execute("DELETE FROM whatsapp_review_messages")
     cursor.execute("DELETE FROM whatsapp_reviews")
+    cursor.execute("DELETE FROM whatsapp_draft_actions")
     cursor.execute("DELETE FROM whatsapp_jobs")
     cursor.execute("DELETE FROM whatsapp_batches")
     conn.commit()

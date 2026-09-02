@@ -11,6 +11,7 @@ def _reset_queue(db):
     cursor = conn.cursor()
     cursor.execute("DELETE FROM whatsapp_review_messages")
     cursor.execute("DELETE FROM whatsapp_reviews")
+    cursor.execute("DELETE FROM whatsapp_draft_actions")
     cursor.execute("DELETE FROM whatsapp_jobs")
     cursor.execute("DELETE FROM whatsapp_batches")
     conn.commit()
@@ -300,3 +301,174 @@ def test_candidate_options_include_cross_account_cream_cheese_and_exact_fuse_tea
         (280, 'Pizzburg-cafe'),
         (130, 'Pizzburg'),
     ]
+
+
+def _create_ready_supply_draft(db, supplier_name: str, amount: float) -> int:
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name=supplier_name,
+        invoice_date='2026-09-02',
+        total_sum=amount,
+        source='kaspi',
+    )
+    db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name='Масло',
+        quantity=5,
+        unit='л',
+        price_per_unit=amount / 5,
+        poster_ingredient_id=77,
+        poster_ingredient_name='Оливковое масло 5л',
+        poster_account_id=1,
+        poster_account_name='Pizzburg',
+    )
+    return draft_id
+
+
+def test_ready_drafts_are_previewed_and_answered_one_at_a_time(db):
+    import web_app
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    first_id = _create_ready_supply_draft(db, 'Япоша', 9900)
+    second_id = _create_ready_supply_draft(db, 'Идея', 5000)
+    try:
+        db.enqueue_whatsapp_draft_action(TEST_USER_ID, 'group@g.us', None, first_id)
+        db.enqueue_whatsapp_draft_action(TEST_USER_ID, 'group@g.us', None, second_id)
+        with patch.object(web_app, 'send_whatsapp_message', return_value=True) as send:
+            assert web_app._send_next_whatsapp_prompt(db, 'group@g.us') == 1
+            first_prompt = send.call_args.args[1]
+            assert f'черновика #{first_id}' in first_prompt
+            assert 'Оливковое масло 5л — 5 л × 1 980 = 9 900 ₸ [Pizzburg]' in first_prompt
+            assert '1. ✅ Создать поставку в Poster' in first_prompt
+
+            assert web_app._handle_whatsapp_draft_action_reply(
+                db, TEST_USER_ID, 'group@g.us', '2', message_id='keep-first'
+            ) is True
+            assert any(
+                f'черновика #{second_id}' in call.args[1]
+                for call in send.call_args_list
+            )
+    finally:
+        db.delete_supply_draft(first_id, telegram_user_id=TEST_USER_ID)
+        db.delete_supply_draft(second_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_draft_is_posted_only_after_explicit_choice_and_duplicate_is_ignored(db):
+    import web_app
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    draft_id = _create_ready_supply_draft(db, 'Япоша', 9900)
+    try:
+        action_id = db.enqueue_whatsapp_draft_action(
+            TEST_USER_ID, 'group@g.us', None, draft_id
+        )
+        db.mark_whatsapp_draft_action_prompted(action_id)
+        poster_result = {
+            'success': True,
+            'supply_id': 123,
+            'supplies': [{'account_name': 'Pizzburg', 'supply_id': 123}],
+        }
+        with patch.object(
+            web_app, '_process_supply_draft_for_user', return_value=poster_result
+        ) as process, patch.object(
+            web_app, 'send_whatsapp_message', return_value=True
+        ) as send:
+            assert web_app._handle_whatsapp_draft_action_reply(
+                db, TEST_USER_ID, 'group@g.us', '1', message_id='create-once'
+            ) is True
+            process.assert_called_once_with(draft_id, TEST_USER_ID)
+            assert 'поставка #123' in send.call_args_list[0].args[1]
+            assert db.is_whatsapp_interaction_message_handled(
+                'group@g.us', 'create-once'
+            ) is True
+            assert web_app._handle_whatsapp_draft_action_reply(
+                db, TEST_USER_ID, 'group@g.us', '1', message_id='create-once'
+            ) is False
+
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status FROM whatsapp_draft_actions WHERE id = ?", (action_id,)
+        )
+        assert cursor.fetchone()[0] == 'created'
+        conn.close()
+    finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_unmatched_draft_is_never_offered_for_poster_submission(db):
+    import web_app
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name='Тест',
+        total_sum=1000,
+    )
+    db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name='Неизвестная позиция',
+        quantity=1,
+        price_per_unit=1000,
+    )
+    try:
+        action_id = db.enqueue_whatsapp_draft_action(
+            TEST_USER_ID, 'group@g.us', None, draft_id
+        )
+        with patch.object(web_app, 'send_whatsapp_message', return_value=True) as send:
+            assert web_app._send_pending_whatsapp_draft_action_prompts(
+                db, 'group@g.us'
+            ) == 0
+            assert 'В Poster ничего не отправлено' in send.call_args.args[1]
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status FROM whatsapp_draft_actions WHERE id = ?", (action_id,)
+        )
+        assert cursor.fetchone()[0] == 'blocked'
+        conn.close()
+    finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_new_review_waits_until_current_draft_decision_is_answered(db):
+    import web_app
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    ready_id = _create_ready_supply_draft(db, 'Япоша', 9900)
+    unmatched_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID, supplier_name='Идея', total_sum=1000
+    )
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=unmatched_id,
+        item_name='Новый соус',
+        quantity=1,
+        price_per_unit=1000,
+    )
+    try:
+        action_id = db.enqueue_whatsapp_draft_action(
+            TEST_USER_ID, 'group@g.us', None, ready_id
+        )
+        db.mark_whatsapp_draft_action_prompted(action_id)
+        db.enqueue_whatsapp_review(
+            TEST_USER_ID, 'group@g.us', None, unmatched_id, item_id,
+            'Новый соус', '[]',
+        )
+        with patch.object(web_app, 'send_whatsapp_message', return_value=True) as send:
+            assert web_app._send_next_whatsapp_prompt(db, 'group@g.us') == 0
+            send.assert_not_called()
+
+            assert web_app._handle_whatsapp_draft_action_reply(
+                db, TEST_USER_ID, 'group@g.us', '2', message_id='keep-before-review'
+            ) is True
+            assert any(
+                'Что это в Poster?' in call.args[1]
+                for call in send.call_args_list
+            )
+    finally:
+        db.delete_supply_draft(ready_id, telegram_user_id=TEST_USER_ID)
+        db.delete_supply_draft(unmatched_id, telegram_user_id=TEST_USER_ID)

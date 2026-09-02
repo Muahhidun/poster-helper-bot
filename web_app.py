@@ -6754,8 +6754,7 @@ def update_supply_item(item_id):
 
 
 
-@app.route('/supplies/process/<int:draft_id>', methods=['POST'])
-def process_supply(draft_id):
+def _process_supply_draft_for_user(draft_id: int, user_id: int) -> dict:
     """Process supply draft - create supply in Poster (multi-account support)
 
     Items can have different poster_account_id, so we create separate supplies for each account.
@@ -6763,21 +6762,21 @@ def process_supply(draft_id):
     db = get_database()
     draft = db.get_supply_draft_with_items(draft_id)
 
-    if not draft:
-        return jsonify({'success': False, 'error': 'Черновик не найден'})
+    if not draft or int(draft.get('telegram_user_id') or 0) != int(user_id):
+        return {'success': False, 'error': 'Черновик не найден'}
 
     # Check all items have matched ingredients
     items = draft.get('items', [])
     unmatched = [i for i in items if not i.get('poster_ingredient_id')]
 
     if unmatched:
-        return jsonify({
+        return {
             'success': False,
             'error': f'Не все товары привязаны к ингредиентам ({len(unmatched)} из {len(items)})'
-        })
+        }
 
     if not items:
-        return jsonify({'success': False, 'error': 'Нет товаров в поставке'})
+        return {'success': False, 'error': 'Нет товаров в поставке'}
 
     expected_total = draft.get('total_sum')
     if draft.get('linked_expense_draft_id'):
@@ -6789,22 +6788,22 @@ def process_supply(draft_id):
     if mismatch:
         expected, actual, difference = mismatch
         direction = 'больше' if difference > 0 else 'меньше'
-        return jsonify({
+        return {
             'success': False,
             'error': (
                 f'Сумма позиций ({actual:,.2f} ₸) не совпадает с расходом '
                 f'({expected:,.2f} ₸): позиции на {abs(difference):,.2f} ₸ {direction}. '
                 'Исправьте количество или цену перед созданием поставки.'
             )
-        })
+        }
 
     try:
         from poster_client import PosterClient
         from collections import defaultdict
 
-        poster_accounts = db.get_accounts(g.user_id)
+        poster_accounts = db.get_accounts(user_id)
         if not poster_accounts:
-            return jsonify({'success': False, 'error': 'Нет подключенных аккаунтов Poster'})
+            return {'success': False, 'error': 'Нет подключенных аккаунтов Poster'}
 
         # Build account lookup
         accounts_by_id = {acc['id']: acc for acc in poster_accounts}
@@ -6826,7 +6825,7 @@ def process_supply(draft_id):
 
             async def _fetch_acc_data(acc):
                 client = PosterClient(
-                    telegram_user_id=g.user_id,
+                    telegram_user_id=user_id,
                     poster_token=acc['poster_token'],
                     poster_user_id=acc['poster_user_id'],
                     poster_base_url=acc['poster_base_url']
@@ -6886,7 +6885,7 @@ def process_supply(draft_id):
                             'poster_account_name': data['account']['account_name'],
                         })
             mapping_rows = build_supplier_account_mapping_rows(poster_accounts, live_supplier_rows)
-            db.replace_auto_supplier_account_mappings(g.user_id, mapping_rows)
+            db.replace_auto_supplier_account_mappings(user_id, mapping_rows)
 
             # 2. Build catalog maps for each account
             catalogs = {}
@@ -6970,7 +6969,7 @@ def process_supply(draft_id):
                 supplier_id, _ = resolve_supplier_for_account(
                     supplier_name,
                     data['suppliers'],
-                    telegram_user_id=g.user_id,
+                    telegram_user_id=user_id,
                     poster_account_id=poster_account_id,
                 )
                 if not supplier_id:
@@ -7032,7 +7031,7 @@ def process_supply(draft_id):
                     supplier_id, resolved_supplier_name = resolve_supplier_for_account(
                         supplier_name,
                         suppliers,
-                        telegram_user_id=g.user_id,
+                        telegram_user_id=user_id,
                         poster_account_id=poster_account_id,
                     )
                     if not supplier_id:
@@ -7215,22 +7214,28 @@ def process_supply(draft_id):
 
             # Save price history to database
             if all_price_records:
-                db.bulk_add_price_history(g.user_id, all_price_records)
+                db.bulk_add_price_history(user_id, all_price_records)
 
             # Format response
             supply_ids = [s['supply_id'] for s in created_supplies]
-            return jsonify({
+            return {
                 'success': True,
                 'supply_id': supply_ids[0] if len(supply_ids) == 1 else supply_ids,
                 'supplies': created_supplies
-            })
+            }
         else:
-            return jsonify({'success': False, 'error': 'Не удалось создать поставку'})
+            return {'success': False, 'error': 'Не удалось создать поставку'}
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)})
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/supplies/process/<int:draft_id>', methods=['POST'])
+def process_supply(draft_id):
+    """Web endpoint for the shared supply-posting implementation."""
+    return jsonify(_process_supply_draft_for_user(draft_id, g.user_id))
 
 
 # ========================================
@@ -10939,6 +10944,12 @@ def _prepare_whatsapp_reviews_for_batch(db, batch: dict) -> int:
             draft = db.get_supply_draft_with_items(draft_id)
             if not draft or int(draft.get('telegram_user_id') or 0) != int(batch['telegram_user_id']):
                 continue
+            db.enqueue_whatsapp_draft_action(
+                telegram_user_id=int(batch['telegram_user_id']),
+                chat_id=batch['chat_id'],
+                batch_id=int(batch['id']),
+                supply_draft_id=draft_id,
+            )
             for item in draft.get('items') or []:
                 if item.get('poster_ingredient_id'):
                     continue
@@ -11053,7 +11064,7 @@ def _handle_whatsapp_review_reply(
                 f"Оставил «{review['original_item_name']}» красной — неверный вариант не выбран.\n"
                 + _whatsapp_review_draft_status(db, int(review['supply_draft_id'])),
             )
-            _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+            _send_next_whatsapp_prompt(db, chat_id=chat_id)
             return True
         if choice < 1 or choice > len(candidates):
             send_whatsapp_message(
@@ -11086,7 +11097,7 @@ def _handle_whatsapp_review_reply(
             db.complete_whatsapp_review(review['id'], skipped=True)
             send_whatsapp_message(chat_id, "Не удалось обновить строку. Она оставлена без изменений.")
             return True
-        _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+        _send_next_whatsapp_prompt(db, chat_id=chat_id)
         return True
 
     if review['status'] == 'awaiting_memory':
@@ -11124,9 +11135,153 @@ def _handle_whatsapp_review_reply(
                 db, int(review['supply_draft_id'])
             ),
         )
-        _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+        _send_next_whatsapp_prompt(db, chat_id=chat_id)
         return True
     return False
+
+
+def _format_whatsapp_money(value) -> str:
+    amount = float(value or 0)
+    if amount.is_integer():
+        return f"{amount:,.0f}".replace(',', ' ')
+    return f"{amount:,.2f}".replace(',', ' ').rstrip('0').rstrip('.')
+
+
+def _format_whatsapp_draft_action_prompt(draft: dict) -> str:
+    """Render a complete but compact invoice preview before Poster submission."""
+    source_names = {'cash': 'Наличка', 'kaspi': 'Kaspi Pay', 'halyk': 'Halyk'}
+    items = draft.get('items') or []
+    lines = [
+        f"📦 *Проверка черновика #{draft['id']}*",
+        f"Поставщик: *{draft.get('supplier_name') or 'Не указан'}*",
+        f"Дата: {normalize_supply_invoice_date(draft.get('invoice_date'))}",
+        f"Счёт: {source_names.get(draft.get('source'), draft.get('source') or 'Наличка')}",
+        f"Сумма: *{_format_whatsapp_money(draft.get('total_sum'))} ₸*",
+        "",
+    ]
+    for index, item in enumerate(items, 1):
+        department = item.get('poster_account_name') or 'отдел не определён'
+        quantity = _format_whatsapp_money(item.get('quantity'))
+        unit = item.get('unit') or ''
+        price = _format_whatsapp_money(item.get('price_per_unit'))
+        total = _format_whatsapp_money(
+            float(item.get('quantity') or 0) * float(item.get('price_per_unit') or 0)
+        )
+        name = item.get('poster_ingredient_name') or item.get('item_name') or 'Без названия'
+        lines.append(
+            f"{index}. {name} — {quantity} {unit} × {price} = {total} ₸ [{department}]"
+        )
+    lines.extend([
+        "",
+        "1. ✅ Создать поставку в Poster",
+        "2. ✏️ Оставить черновик для проверки или исправления на сайте",
+        "",
+        "Ответьте одной цифрой.",
+    ])
+    return '\n'.join(lines)
+
+
+def _send_pending_whatsapp_draft_action_prompts(
+    db, chat_id: Optional[str] = None
+) -> int:
+    """Send at most one actionable draft preview per chat."""
+    sent = 0
+    # Invalid/deleted drafts are completed without asking an unsafe question;
+    # continue until the next genuinely actionable draft is found.
+    while True:
+        actions = db.get_whatsapp_draft_actions_needing_prompt(chat_id=chat_id)
+        if not actions:
+            break
+        action = actions[0]
+        draft = db.get_supply_draft_with_items(int(action['supply_draft_id']))
+        if not draft:
+            db.finish_whatsapp_draft_action(action['id'], 'blocked', 'Черновик не найден')
+            continue
+        if draft.get('status') == 'processed':
+            db.finish_whatsapp_draft_action(action['id'], 'created', 'Уже создан на сайте')
+            continue
+        inspection = _inspect_whatsapp_supply_draft(db, int(action['supply_draft_id']))
+        if inspection['icon'] != '✅':
+            reason = inspection['status_text']
+            db.finish_whatsapp_draft_action(action['id'], 'blocked', reason)
+            send_whatsapp_message(
+                action['chat_id'],
+                f"⚠️ Черновик #{action['supply_draft_id']} оставлен на сайте: {reason}. "
+                "В Poster ничего не отправлено.",
+            )
+            continue
+        if send_whatsapp_message(
+            action['chat_id'], _format_whatsapp_draft_action_prompt(draft)
+        ):
+            db.mark_whatsapp_draft_action_prompted(action['id'])
+            sent += 1
+        break
+    return sent
+
+
+def _send_next_whatsapp_prompt(db, chat_id: Optional[str] = None) -> int:
+    """Prioritize ingredient questions, then ask whether to post each draft."""
+    review_sent = _send_pending_whatsapp_review_prompts(db, chat_id=chat_id)
+    if review_sent:
+        return review_sent
+    return _send_pending_whatsapp_draft_action_prompts(db, chat_id=chat_id)
+
+
+def _handle_whatsapp_draft_action_reply(
+    db,
+    user_id: int,
+    chat_id: str,
+    message_text: str,
+    message_id: Optional[str] = None,
+) -> bool:
+    """Create a validated draft in Poster only after an explicit numeric reply."""
+    if not re.fullmatch(r'\s*\d+\s*', message_text or ''):
+        return False
+    action = db.get_active_whatsapp_draft_action(user_id, chat_id)
+    if not action:
+        return False
+    if message_id and not db.reserve_whatsapp_review_message(chat_id, message_id):
+        return True
+    choice = int(message_text.strip())
+    if choice not in (1, 2):
+        send_whatsapp_message(chat_id, "Ответьте 1 (создать) или 2 (оставить на сайте).")
+        return True
+
+    draft_id = int(action['supply_draft_id'])
+    if choice == 2:
+        if db.choose_whatsapp_draft_action(action['id'], 'kept'):
+            send_whatsapp_message(
+                chat_id,
+                f"✏️ Черновик #{draft_id} оставлен на сайте. В Poster ничего не отправлено.",
+            )
+        _send_next_whatsapp_prompt(db, chat_id=chat_id)
+        return True
+
+    if not db.choose_whatsapp_draft_action(action['id'], 'processing'):
+        return True
+    result = _process_supply_draft_for_user(draft_id, user_id)
+    if result.get('success'):
+        supplies = result.get('supplies') or []
+        details = ', '.join(
+            f"{s.get('account_name')}: поставка #{s.get('supply_id')}"
+            for s in supplies
+        ) or f"поставка #{result.get('supply_id')}"
+        result_text = f"Создано: {details}"
+        db.finish_whatsapp_draft_action(action['id'], 'created', result_text)
+        send_whatsapp_message(
+            chat_id,
+            f"✅ Черновик #{draft_id} отправлен в Poster. {result_text}.",
+        )
+    else:
+        error = result.get('error') or 'Неизвестная ошибка Poster'
+        db.finish_whatsapp_draft_action(action['id'], 'failed', error)
+        send_whatsapp_message(
+            chat_id,
+            f"❌ Черновик #{draft_id} не отправлен в Poster: {error}\n"
+            "Он сохранён на сайте — данные не потеряны.",
+        )
+    _send_next_whatsapp_prompt(db, chat_id=chat_id)
+    return True
 
 
 def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
@@ -11194,7 +11349,10 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
             "Просто отвечайте цифрой — команды запоминать не нужно."
         )
     else:
-        lines.append("Автопроверка пройдена. При желании можно сверить накладные на сайте.")
+        lines.append(
+            "Автопроверка пройдена. Сейчас пришлю черновики по одному — "
+            "их можно создать в Poster или оставить для проверки на сайте."
+        )
     return '\n'.join(lines)
 
 
@@ -11209,7 +11367,7 @@ def _send_ready_whatsapp_batch_summaries(db, settle_seconds: Optional[int] = Non
         summary = _format_whatsapp_batch_summary(batch, db=db)
         if send_whatsapp_message(batch['chat_id'], summary):
             db.mark_whatsapp_batch_summary_sent(batch['id'])
-            _send_pending_whatsapp_review_prompts(db, chat_id=batch['chat_id'])
+            _send_next_whatsapp_prompt(db, chat_id=batch['chat_id'])
 
 
 def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = None) -> int:
@@ -11242,7 +11400,7 @@ def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = N
                 )
             processed += 1
         _send_ready_whatsapp_batch_summaries(db, settle_seconds=settle_seconds)
-        _send_pending_whatsapp_review_prompts(db)
+        _send_next_whatsapp_prompt(db)
         return processed
     finally:
         lock.release()
@@ -11317,10 +11475,19 @@ def whatsapp_webhook():
         review_text = _whatsapp_message_text(message_data)
         review_text, _ = _strip_whatsapp_bot_prefix(review_text)
         message_id = _whatsapp_message_id(payload)
+        if (
+            re.fullmatch(r'\s*\d+\s*', review_text or '')
+            and db.is_whatsapp_interaction_message_handled(chat_id, message_id)
+        ):
+            return 'Interaction already handled', 200
         if _handle_whatsapp_review_reply(
             db, int(user_id), chat_id, review_text, message_id=message_id
         ):
             return 'Review handled', 200
+        if _handle_whatsapp_draft_action_reply(
+            db, int(user_id), chat_id, review_text, message_id=message_id
+        ):
+            return 'Draft action handled', 200
 
         queued = db.enqueue_whatsapp_job(
             telegram_user_id=user_id,
