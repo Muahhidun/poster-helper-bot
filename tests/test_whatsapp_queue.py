@@ -495,3 +495,34 @@ def test_unanswered_draft_question_can_be_resurfaced_after_new_batch(db):
             assert f'черновика #{draft_id}' in send.call_args.args[1]
     finally:
         db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_whatsapp_prompt_can_only_be_claimed_once(db):
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    draft_id = _create_ready_supply_draft(db, 'Идея', 5000)
+    unmatched_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID, supplier_name='Тест', total_sum=1000
+    )
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=unmatched_id,
+        item_name='Неизвестная позиция',
+        quantity=1,
+        price_per_unit=1000,
+    )
+    try:
+        action_id = db.enqueue_whatsapp_draft_action(
+            TEST_USER_ID, 'group@g.us', None, draft_id
+        )
+        review_id = db.enqueue_whatsapp_review(
+            TEST_USER_ID, 'other-group@g.us', None, unmatched_id, item_id,
+            'Неизвестная позиция', '[]',
+        )
+
+        assert db.mark_whatsapp_draft_action_prompted(action_id) is True
+        assert db.mark_whatsapp_draft_action_prompted(action_id) is False
+        assert db.mark_whatsapp_review_prompted(review_id) is True
+        assert db.mark_whatsapp_review_prompted(review_id) is False
+    finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+        db.delete_supply_draft(unmatched_id, telegram_user_id=TEST_USER_ID)

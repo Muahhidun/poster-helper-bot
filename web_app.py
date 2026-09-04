@@ -11020,9 +11020,21 @@ def _send_pending_whatsapp_review_prompts(db, chat_id: Optional[str] = None) -> 
             candidates_json = json.dumps(candidates, ensure_ascii=False)
             if db.update_pending_whatsapp_review_candidates(review['id'], candidates_json):
                 review['candidates_json'] = candidates_json
-        if send_whatsapp_message(review['chat_id'], _format_whatsapp_review_prompt(review)):
-            db.mark_whatsapp_review_prompted(review['id'])
+        # Claim before the network call. The webhook thread and scheduler can
+        # reach this function simultaneously after a numeric reply.
+        if not db.mark_whatsapp_review_prompted(review['id']):
+            continue
+        try:
+            delivered = send_whatsapp_message(
+                review['chat_id'], _format_whatsapp_review_prompt(review)
+            )
+        except Exception:
+            db.requeue_whatsapp_review_prompt(review['id'])
+            raise
+        if delivered:
             sent += 1
+        else:
+            db.requeue_whatsapp_review_prompt(review['id'])
     return sent
 
 
@@ -11211,11 +11223,21 @@ def _send_pending_whatsapp_draft_action_prompts(
                 "В Poster ничего не отправлено.",
             )
             continue
-        if send_whatsapp_message(
-            action['chat_id'], _format_whatsapp_draft_action_prompt(draft)
-        ):
-            db.mark_whatsapp_draft_action_prompted(action['id'])
+        # Reserve the prompt before sending so two concurrent callers cannot
+        # emit identical approval messages.
+        if not db.mark_whatsapp_draft_action_prompted(action['id']):
+            break
+        try:
+            delivered = send_whatsapp_message(
+                action['chat_id'], _format_whatsapp_draft_action_prompt(draft)
+            )
+        except Exception:
+            db.requeue_whatsapp_draft_action_prompt(action['id'])
+            raise
+        if delivered:
             sent += 1
+        else:
+            db.requeue_whatsapp_draft_action_prompt(action['id'])
         break
     return sent
 

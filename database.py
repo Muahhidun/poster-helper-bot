@@ -7435,6 +7435,7 @@ class UserDatabase:
             raise
 
     def mark_whatsapp_review_prompted(self, review_id: int) -> bool:
+        """Atomically claim a review prompt before sending it."""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -7444,7 +7445,30 @@ class UserDatabase:
                 SET status = CASE WHEN status = 'pending' THEN 'awaiting_choice' ELSE status END,
                     prompted_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = {ph} AND status IN ('pending', 'awaiting_choice', 'awaiting_memory')
+                WHERE id = {ph}
+                  AND prompted_at IS NULL
+                  AND status IN ('pending', 'awaiting_choice', 'awaiting_memory')
+            """, (review_id,))
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def requeue_whatsapp_review_prompt(self, review_id: int) -> bool:
+        """Release a claimed review prompt when WhatsApp delivery fails."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE whatsapp_reviews
+                SET prompted_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = {ph}
+                  AND status IN ('awaiting_choice', 'awaiting_memory')
             """, (review_id,))
             changed = cursor.rowcount > 0
             conn.commit()
@@ -7626,6 +7650,7 @@ class UserDatabase:
             raise
 
     def mark_whatsapp_draft_action_prompted(self, action_id: int) -> bool:
+        """Atomically claim a draft prompt before sending it."""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -7635,6 +7660,27 @@ class UserDatabase:
                 SET status = 'awaiting_choice', prompted_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = {ph} AND status = 'pending' AND prompted_at IS NULL
+            """, (action_id,))
+            changed = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
+    def requeue_whatsapp_draft_action_prompt(self, action_id: int) -> bool:
+        """Release a claimed draft prompt when WhatsApp delivery fails."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE whatsapp_draft_actions
+                SET status = 'pending', prompted_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = {ph} AND status = 'awaiting_choice'
             """, (action_id,))
             changed = cursor.rowcount > 0
             conn.commit()
