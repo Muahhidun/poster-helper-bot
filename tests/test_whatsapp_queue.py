@@ -472,3 +472,26 @@ def test_new_review_waits_until_current_draft_decision_is_answered(db):
     finally:
         db.delete_supply_draft(ready_id, telegram_user_id=TEST_USER_ID)
         db.delete_supply_draft(unmatched_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_unanswered_draft_question_can_be_resurfaced_after_new_batch(db):
+    import web_app
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    _reset_queue(db)
+    draft_id = _create_ready_supply_draft(db, 'Кус Вкус', 76287)
+    try:
+        action_id = db.enqueue_whatsapp_draft_action(
+            TEST_USER_ID, 'group@g.us', None, draft_id
+        )
+        db.mark_whatsapp_draft_action_prompted(action_id)
+        assert db.get_active_whatsapp_draft_action(TEST_USER_ID, 'group@g.us')
+
+        assert db.requeue_active_whatsapp_prompt('group@g.us') is True
+        assert db.get_active_whatsapp_draft_action(TEST_USER_ID, 'group@g.us') is None
+
+        with patch.object(web_app, 'send_whatsapp_message', return_value=True) as send:
+            assert web_app._send_next_whatsapp_prompt(db, 'group@g.us') == 1
+            assert f'черновика #{draft_id}' in send.call_args.args[1]
+    finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)

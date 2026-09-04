@@ -6868,13 +6868,20 @@ class UserDatabase:
                 SET status = 'pending', started_at = NULL
                 WHERE status = 'processing'
             """)
+            # An unanswered prompt must survive a restart visibly. Requeue it
+            # once so the user is not left with a silent, blocked conversation.
+            cursor.execute("""
+                UPDATE whatsapp_reviews
+                SET prompted_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE status IN ('awaiting_choice', 'awaiting_memory')
+            """)
             # Poster submission is idempotent by the draft marker. If a deploy
             # interrupted an approval, ask again instead of leaving it stuck.
             cursor.execute("""
                 UPDATE whatsapp_draft_actions
                 SET status = 'pending', prompted_at = NULL,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE status = 'processing'
+                WHERE status IN ('awaiting_choice', 'processing')
             """)
             conn.commit()
             conn.close()
@@ -7345,6 +7352,34 @@ class UserDatabase:
             conn.close()
             return handled
         except Exception:
+            conn.close()
+            raise
+
+    def requeue_active_whatsapp_prompt(self, chat_id: str) -> bool:
+        """Make an unanswered question visible again after a newer batch summary."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                UPDATE whatsapp_reviews
+                SET prompted_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE chat_id = {ph}
+                  AND status IN ('awaiting_choice', 'awaiting_memory')
+            """, (chat_id,))
+            changed = cursor.rowcount > 0
+            cursor.execute(f"""
+                UPDATE whatsapp_draft_actions
+                SET status = 'pending', prompted_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE chat_id = {ph} AND status = 'awaiting_choice'
+            """, (chat_id,))
+            changed = cursor.rowcount > 0 or changed
+            conn.commit()
+            conn.close()
+            return changed
+        except Exception:
+            conn.rollback()
             conn.close()
             raise
 

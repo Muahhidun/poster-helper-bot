@@ -11367,8 +11367,11 @@ def _send_ready_whatsapp_batch_summaries(db, settle_seconds: Optional[int] = Non
         _prepare_whatsapp_reviews_for_batch(db, batch)
         summary = _format_whatsapp_batch_summary(batch, db=db)
         if send_whatsapp_message(batch['chat_id'], summary):
-            db.mark_whatsapp_batch_summary_sent(batch['id'])
-            _send_next_whatsapp_prompt(db, chat_id=batch['chat_id'])
+            if db.mark_whatsapp_batch_summary_sent(batch['id']):
+                # A previous unanswered question may be far above in the chat.
+                # Resurface it so it cannot silently block this new batch.
+                db.requeue_active_whatsapp_prompt(batch['chat_id'])
+                _send_next_whatsapp_prompt(db, chat_id=batch['chat_id'])
 
 
 def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = None) -> int:
