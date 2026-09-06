@@ -395,7 +395,7 @@
             <div class="info-alert-box d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center gap-2">
                     <span>💡</span>
-                    <span>Здесь показаны правила перевода штук/упаковок в базовые единицы (например, 1 шт соуса терияки -> 0.23 кг). Правила создаются автоматически, когда вы редактируете количество в черновиках.</span>
+                    <span>Здесь показаны подтверждённые вами правила перевода упаковок в базовые единицы. Сайт предлагает сохранить правило после изменения фасовки, но без вашего согласия ничего не запоминает.</span>
                 </div>
                 <button id="delete-selected-rules-btn" class="btn btn-danger btn-sm d-none flex-shrink-0" onclick="deleteSelectedRules()">
                     🗑️ Удалить выбранные (<span id="selected-rules-count">0</span>)
@@ -409,7 +409,8 @@
                                 <th style="width: 3%;"><input type="checkbox" id="select-all-rules" class="form-check-input select-all-checkbox"></th>
                                 <th style="width: 5%;">ID</th>
                                 <th style="width: 27%;">Ингредиент</th>
-                                <th style="width: 15%;">Отдел</th>
+                                <th style="width: 12%;">Отдел</th>
+                                <th style="width: 15%;">Поставщик</th>
                                 <th style="width: 15%;">Исходная упаковка</th>
                                 <th style="width: 15%;">Коэффициент (кг/ед)</th>
                                 <th style="width: 10%;">Примечание</th>
@@ -430,6 +431,13 @@
                                             <span class="text-muted small">—</span>
                                         {% endif %}
                                     </td>
+                                    <td>
+                                        {% if rule.supplier_name %}
+                                            <span class="badge-premium secondary-badge">{{ rule.supplier_name }}</span>
+                                        {% else %}
+                                            <span class="text-muted small">Все</span>
+                                        {% endif %}
+                                    </td>
                                     <td><span class="badge-premium secondary-badge">{{ rule.original_unit }}</span></td>
                                     <td><span class="fw-bold text-success">{{ rule.coefficient }}</span> {{ rule.target_unit }}</td>
                                     <td><span class="text-muted small">{{ rule.notes if rule.notes else '-' }}</span></td>
@@ -440,7 +448,7 @@
                                 {% endfor %}
                             {% else %}
                                 <tr>
-                                    <td colspan="8" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
+                                    <td colspan="9" class="text-center text-muted py-4">Нет сохраненных правил фасовки.</td>
                                 </tr>
                             {% endif %}
                         </tbody>

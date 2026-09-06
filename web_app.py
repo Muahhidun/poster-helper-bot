@@ -4692,7 +4692,7 @@ def api_create_expense(validated=None):
 def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
     """Process items through the full pipeline (matching + packaging rules + price habits)
     and add them to an existing supply draft. Shared by all supply-creation paths."""
-    from matchers import get_ingredient_matcher, get_product_matcher
+    from matchers import get_ingredient_matcher, get_product_matcher, normalize_supplier_text
 
     ing_matcher = get_ingredient_matcher(user_id)
     prod_matcher = get_product_matcher(user_id)
@@ -4701,6 +4701,9 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
 
     # Get target account for matching priority
     supply_draft = db.get_supply_draft_with_items(supply_draft_id)
+    supplier_key = normalize_supplier_text(
+        (supply_draft or {}).get('supplier_name') or ''
+    )
     target_account = None
     if supply_draft:
         # supply_draft.account_id is a finance-account ID from Poster, not our
@@ -4741,14 +4744,25 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
                 original_unit = (item.get('original_unit') or unit).strip().lower()
 
                 if item_acc_name:
+                    # A confirmed supplier-specific rule is the safest and most
+                    # precise rule. Legacy rules with no supplier remain global.
                     matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
                                          and r['original_unit'].strip().lower() == original_unit
-                                         and r.get('account_name', '').strip() == item_acc_name), None)
+                                         and r.get('account_name', '').strip() == item_acc_name
+                                         and normalize_supplier_text(r.get('supplier_name') or '') == supplier_key
+                                         and supplier_key), None)
+
+                if not matching_rule and item_acc_name:
+                    matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
+                                         and r['original_unit'].strip().lower() == original_unit
+                                         and r.get('account_name', '').strip() == item_acc_name
+                                         and not (r.get('supplier_name') or '').strip()), None)
 
                 if not matching_rule:
                     matching_rule = next((r for r in rules if r['poster_ingredient_id'] == item_id
                                          and r['original_unit'].strip().lower() == original_unit
-                                         and not r.get('account_name', '').strip()), None)
+                                         and not r.get('account_name', '').strip()
+                                         and not (r.get('supplier_name') or '').strip()), None)
 
                 if item_acc_name:
                     default_price = habits_dict.get((item_id, item_acc_name))
@@ -6714,6 +6728,117 @@ def delete_supply(draft_id):
     return jsonify({'success': success})
 
 
+def _supply_item_learning_context(db, user_id: int, item_id: int):
+    """Return an owned draft item together with its parent draft."""
+    item = db.get_supply_draft_item(item_id, telegram_user_id=user_id)
+    if not item:
+        return None, None
+    draft = db.get_supply_draft_with_items(item['supply_draft_id'])
+    if not draft or int(draft.get('telegram_user_id') or 0) != int(user_id):
+        return None, None
+    return item, draft
+
+
+def _normalized_poster_unit(unit: str) -> str:
+    value = (unit or '').strip().lower()
+    aliases = {
+        'kg': 'кг', 'kilogram': 'кг', 'килограмм': 'кг',
+        'l': 'л', 'lt': 'л', 'liter': 'л', 'литр': 'л',
+        'pcs': 'шт', 'pc': 'шт', 'piece': 'шт', 'штука': 'шт',
+    }
+    return aliases.get(value, value or 'кг')
+
+
+def _infer_packaging_target_unit(item: dict, ingredient_info: Optional[dict], coefficient: float) -> str:
+    """Infer Poster's base unit when the cached catalogue has no unit column."""
+    explicit_unit = (ingredient_info or {}).get('unit') or ''
+    if explicit_unit.strip():
+        return _normalized_poster_unit(explicit_unit)
+
+    name = ' '.join(filter(None, [
+        (ingredient_info or {}).get('name'),
+        item.get('poster_ingredient_name'),
+    ])).casefold()
+    if re.search(r'(?:\d|\s)(?:кг|kg|гр|г\b)', name):
+        return 'кг'
+    if re.search(r'(?:\d|\s)(?:мл|ml|л\b|l\b)', name):
+        return 'л'
+    if re.search(r'шт|колец|перчат|порц|лист', name):
+        return 'шт'
+
+    # Fractional conversions almost always represent a package converted to
+    # kilograms in this workflow. Multipliers usually convert to pieces.
+    return 'кг' if coefficient < 1 else _normalized_poster_unit(item.get('unit') or 'шт')
+
+
+def _packaging_learning_suggestion(db, user_id: int, item_id: int):
+    """Infer a possible packaging rule only from a value-preserving edit."""
+    from matchers import get_ingredient_matcher, normalize_supplier_text
+
+    item, draft = _supply_item_learning_context(db, user_id, item_id)
+    if not item or (item.get('item_type') or 'ingredient') != 'ingredient':
+        return None
+    if not item.get('poster_ingredient_id'):
+        return None
+
+    try:
+        parsed_qty = float(item.get('parsed_quantity') or 0)
+        parsed_price = float(item.get('parsed_price_per_unit') or 0)
+        current_qty = float(item.get('quantity') or 0)
+        current_price = float(item.get('price_per_unit') or 0)
+    except (TypeError, ValueError):
+        return None
+    if min(parsed_qty, parsed_price, current_qty, current_price) <= 0:
+        return None
+
+    source_total = parsed_qty * parsed_price
+    current_total = current_qty * current_price
+    tolerance = max(2.0, abs(source_total) * 0.005)
+    coefficient = current_qty / parsed_qty
+    if abs(source_total - current_total) > tolerance or abs(coefficient - 1.0) < 0.0001:
+        return None
+
+    supplier_name = (draft.get('supplier_name') or '').strip()
+    supplier_key = normalize_supplier_text(supplier_name)
+    if not supplier_key or supplier_key in {'не указан', 'неизвестный поставщик'}:
+        return None
+
+    account_name = (item.get('poster_account_name') or '').strip()
+    original_unit = (item.get('parsed_unit') or item.get('unit') or 'шт').strip().lower()
+    ingredient_id = int(item['poster_ingredient_id'])
+    ingredient_name = item.get('poster_ingredient_name') or item.get('item_name') or str(ingredient_id)
+
+    matcher = get_ingredient_matcher(user_id)
+    ingredient_info = matcher.get_ingredient_info(ingredient_id, account_name=account_name)
+    target_unit = _infer_packaging_target_unit(item, ingredient_info, coefficient)
+
+    for rule in db.get_packaging_rules(user_id):
+        if (
+            int(rule['poster_ingredient_id']) == ingredient_id
+            and (rule.get('account_name') or '').strip() == account_name
+            and normalize_supplier_text(rule.get('supplier_name') or '') == supplier_key
+            and (rule.get('original_unit') or '').strip().lower() == original_unit
+            and abs(float(rule.get('coefficient') or 0) - coefficient) < 0.0001
+        ):
+            return None
+
+    coefficient_text = f"{coefficient:.3f}".rstrip('0').rstrip('.').replace('.', ',')
+    return {
+        'kind': 'packaging',
+        'item_id': item_id,
+        'ingredient_name': ingredient_name,
+        'supplier_name': supplier_name,
+        'account_name': account_name,
+        'original_unit': original_unit,
+        'coefficient': coefficient,
+        'target_unit': target_unit,
+        'prompt': (
+            f"Сохранить правило фасовки для «{ingredient_name}» у поставщика "
+            f"«{supplier_name}»: 1 {original_unit} = {coefficient_text} {target_unit}?"
+        ),
+    }
+
+
 @app.route('/supplies/update-item/<int:item_id>', methods=['POST'])
 def update_supply_item(item_id):
     """Update supply draft item (ingredient matching, quantity, price, poster_account_id)"""
@@ -6751,7 +6876,87 @@ def update_supply_item(item_id):
 
     success = db.update_supply_draft_item(item_id, telegram_user_id=g.user_id, **update_fields) if update_fields else False
 
-    return jsonify({'success': success})
+    alias_suggestion = None
+    if success and 'poster_ingredient_id' in update_fields:
+        updated_item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
+        raw_name = (updated_item or {}).get('item_name') or ''
+        poster_name = (updated_item or {}).get('poster_ingredient_name') or ''
+        if raw_name.strip() and poster_name.strip() and raw_name.strip().casefold() != poster_name.strip().casefold():
+            alias_suggestion = {
+                'kind': 'alias',
+                'item_id': item_id,
+                'prompt': f"Запомнить соответствие «{raw_name}» → «{poster_name}» для будущих накладных?",
+            }
+
+    packaging_suggestion = None
+    if success and ('quantity' in update_fields or 'price_per_unit' in update_fields):
+        packaging_suggestion = _packaging_learning_suggestion(db, g.user_id, item_id)
+
+    return jsonify({
+        'success': success,
+        'alias_learning_suggestion': alias_suggestion,
+        'packaging_learning_suggestion': packaging_suggestion,
+    })
+
+
+@app.route('/supplies/learn-item/<int:item_id>', methods=['POST'])
+def learn_supply_item(item_id):
+    """Persist only a rule explicitly confirmed by the user on the site."""
+    from matchers import get_ingredient_matcher, get_product_matcher
+
+    db = get_database()
+    data = request.get_json() or {}
+    kind = (data.get('kind') or '').strip().lower()
+    item, draft = _supply_item_learning_context(db, g.user_id, item_id)
+    if not item:
+        return jsonify({'success': False, 'error': 'Позиция не найдена'}), 404
+
+    if kind == 'alias':
+        alias_text = (item.get('item_name') or '').strip()
+        poster_item_id = item.get('poster_ingredient_id')
+        poster_item_name = (item.get('poster_ingredient_name') or '').strip()
+        account_name = (item.get('poster_account_name') or '').strip()
+        if not alias_text or not poster_item_id or not poster_item_name:
+            return jsonify({'success': False, 'error': 'Сначала выберите ингредиент Poster'}), 400
+        matcher = (
+            get_product_matcher(g.user_id)
+            if (item.get('item_type') or 'ingredient') == 'product'
+            else get_ingredient_matcher(g.user_id)
+        )
+        success = matcher.add_alias(
+            alias_text,
+            int(poster_item_id),
+            notes='Явно подтверждено пользователем на сайте',
+            account_name=account_name,
+        )
+        return jsonify({
+            'success': bool(success),
+            'message': f'Соответствие «{alias_text}» → «{poster_item_name}» сохранено.' if success else 'Не удалось сохранить соответствие',
+        })
+
+    if kind == 'packaging':
+        suggestion = _packaging_learning_suggestion(db, g.user_id, item_id)
+        if not suggestion:
+            return jsonify({
+                'success': False,
+                'error': 'Не удалось безопасно определить фасовку: исходная и исправленная суммы должны совпадать.',
+            }), 400
+        success = db.add_packaging_rule(
+            g.user_id,
+            int(item['poster_ingredient_id']),
+            suggestion['original_unit'],
+            suggestion['coefficient'],
+            target_unit=suggestion['target_unit'],
+            notes='Явно подтверждено пользователем на сайте',
+            account_name=suggestion['account_name'],
+            supplier_name=suggestion['supplier_name'],
+        )
+        return jsonify({
+            'success': bool(success),
+            'message': 'Правило фасовки сохранено и будет применяться к следующим накладным этого поставщика.' if success else 'Не удалось сохранить правило фасовки',
+        })
+
+    return jsonify({'success': False, 'error': 'Неизвестный тип правила'}), 400
 
 
 
@@ -10917,7 +11122,9 @@ def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
             response_text,
             is_webhook=True,
             explicit_supplier=explicit_supplier,
-            allow_memory_actions=_user_explicitly_requests_memory(message_text),
+            # WhatsApp is ingestion-only. Reusable aliases and packaging rules
+            # are learned only after an explicit confirmation on the website.
+            allow_memory_actions=False,
         )
 
         saved_media_urls = []
@@ -11501,11 +11708,10 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
     completed = sum(1 for job in jobs if job.get('status') == 'completed')
     failed = sum(1 for job in jobs if job.get('status') == 'failed')
     lines = [
-        f"📋 *Пакет #{batch['id']} обработан*",
+        "📋 *Накладные обработаны*",
         f"Получено: {len(jobs)} • Обработано: {completed} • Сбои обработки: {failed}",
         "",
     ]
-    has_unmatched = False
     for index, job in enumerate(jobs, 1):
         if job.get('status') == 'failed':
             lines.append(f"❌ {index}. Не удалось обработать документ. Перешлите его повторно.")
@@ -11528,10 +11734,8 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
             first_result = draft_results.get(first_draft_id) if first_draft_id else None
             if first_result:
                 icon, status_text = first_result['icon'], first_result['status_text']
-                has_unmatched = has_unmatched or bool(first_result.get('unmatched_item_ids'))
             else:
                 icon, status_text = _classify_whatsapp_draft_summary(db, drafts[0])
-                has_unmatched = has_unmatched or icon == '❌'
             suffix = f" — {status_text}" if status_text else ''
             lines.append(f"{icon} {index}. {drafts[0]}{suffix}")
             for extra in drafts[1:]:
@@ -11540,10 +11744,8 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
                 if extra_result:
                     extra_icon = extra_result['icon']
                     extra_status = extra_result['status_text']
-                    has_unmatched = has_unmatched or bool(extra_result.get('unmatched_item_ids'))
                 else:
                     extra_icon, extra_status = _classify_whatsapp_draft_summary(db, extra)
-                    has_unmatched = has_unmatched or extra_icon == '❌'
                 extra_suffix = f" — {extra_status}" if extra_status else ''
                 lines.append(f"   {extra_icon} {extra}{extra_suffix}")
         else:
@@ -11553,17 +11755,9 @@ def _format_whatsapp_batch_summary(batch: dict, db=None) -> str:
     lines.extend([
         "",
         "Черновики сохранены, но в Poster ещё ничего не отправлено.",
+        "Проверьте красные позиции, алиасы и фасовки на сайте. "
+        "Там же можно создать поставки после проверки.",
     ])
-    if has_unmatched:
-        lines.append(
-            "Для красных позиций сейчас предложу варианты. "
-            "Просто отвечайте цифрой — команды запоминать не нужно."
-        )
-    else:
-        lines.append(
-            "Автопроверка пройдена. Сейчас пришлю черновики по одному — "
-            "их можно создать в Poster или оставить для проверки на сайте."
-        )
     return '\n'.join(lines)
 
 
@@ -11574,14 +11768,9 @@ def _send_ready_whatsapp_batch_summaries(db, settle_seconds: Optional[int] = Non
         else settle_seconds
     )
     for batch in db.get_ready_whatsapp_batches(settle):
-        _prepare_whatsapp_reviews_for_batch(db, batch)
         summary = _format_whatsapp_batch_summary(batch, db=db)
         if send_whatsapp_message(batch['chat_id'], summary):
-            if db.mark_whatsapp_batch_summary_sent(batch['id']):
-                # A previous unanswered question may be far above in the chat.
-                # Resurface it so it cannot silently block this new batch.
-                db.requeue_active_whatsapp_prompt(batch['chat_id'])
-                _send_next_whatsapp_prompt(db, chat_id=batch['chat_id'])
+            db.mark_whatsapp_batch_summary_sent(batch['id'])
 
 
 def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = None) -> int:
@@ -11614,7 +11803,6 @@ def process_whatsapp_queue(max_jobs: int = 25, settle_seconds: Optional[int] = N
                 )
             processed += 1
         _send_ready_whatsapp_batch_summaries(db, settle_seconds=settle_seconds)
-        _send_next_whatsapp_prompt(db)
         return processed
     finally:
         lock.release()
@@ -11682,26 +11870,14 @@ def whatsapp_webhook():
         if not _whatsapp_payload_has_content(payload):
             return 'No content to parse', 200
 
-        # A review answer is deliberately tiny and deterministic. It bypasses
-        # Gemini and the invoice queue, so "1" can only answer the exact
-        # question the bot most recently asked in this chat.
+        # Interactive corrections and Poster posting are intentionally website-only.
+        # Ignore legacy numeric answers instead of treating them as new invoices.
         message_data = payload.get('messageData') or {}
         review_text = _whatsapp_message_text(message_data)
         review_text, _ = _strip_whatsapp_bot_prefix(review_text)
         message_id = _whatsapp_message_id(payload)
-        if (
-            re.fullmatch(r'\s*\d+\s*', review_text or '')
-            and db.is_whatsapp_interaction_message_handled(chat_id, message_id)
-        ):
-            return 'Interaction already handled', 200
-        if _handle_whatsapp_review_reply(
-            db, int(user_id), chat_id, review_text, message_id=message_id
-        ):
-            return 'Review handled', 200
-        if _handle_whatsapp_draft_action_reply(
-            db, int(user_id), chat_id, review_text, message_id=message_id
-        ):
-            return 'Draft action handled', 200
+        if re.fullmatch(r'\s*\d+\s*', review_text or ''):
+            return 'Numeric interaction disabled; use website', 200
 
         queued = db.enqueue_whatsapp_job(
             telegram_user_id=user_id,
@@ -11718,13 +11894,6 @@ def whatsapp_webhook():
             "Queued WhatsApp message %s as job %s in batch %s",
             message_id, queued['job_id'], queued['batch_id'],
         )
-        if queued['new_batch']:
-            send_whatsapp_message(
-                chat_id,
-                f"📥 *Принял пакет #{queued['batch_id']}.*\n"
-                "Можно отправлять остальные накладные подряд. "
-                "Обработаю их по очереди и пришлю один итог.",
-            )
         return 'Queued', 200
             
     except Exception as e:

@@ -321,6 +321,17 @@ h2 {
 const items = {{ items|tojson }};
 let searchTimeout = null;
 
+async function confirmAndSaveLearning(suggestion) {
+    if (!suggestion || !confirm(suggestion.prompt)) return;
+    const response = await fetch(`/supplies/learn-item/${suggestion.item_id}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kind: suggestion.kind})
+    });
+    const result = await response.json();
+    if (!result.success) alert(result.error || 'Не удалось сохранить правило');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Ingredient search with keyboard navigation
     document.querySelectorAll('.ingredient-search').forEach(input => {
@@ -348,7 +359,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     resultsDiv.innerHTML = '<div class="search-result-item text-muted">Ничего не найдено</div>';
                 } else {
                     resultsDiv.innerHTML = currentMatches.map((item, i) =>
-                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}" data-account-id="${item.poster_account_id || ''}" data-account-name="${item.poster_account_name || ''}" data-index="${i}">
+                        `<div class="search-result-item" data-id="${item.id}" data-name="${item.name}" data-account-id="${item.poster_account_id || ''}" data-account-name="${item.poster_account_name || ''}" data-item-type="${item.type || 'ingredient'}" data-index="${i}">
                             ${item.name}
                             ${item.poster_account_name ? `<small class="text-muted">(${item.poster_account_name})</small>` : ''}
                         </div>`
@@ -399,6 +410,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const ingredientName = resultItem.dataset.name;
             const accountId = resultItem.dataset.accountId ? parseInt(resultItem.dataset.accountId) : null;
             const accountName = resultItem.dataset.accountName || '';
+            const itemType = resultItem.dataset.itemType || 'ingredient';
 
             // Update on server
             const response = await fetch(`/supplies/update-item/${itemId}`, {
@@ -408,11 +420,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     poster_ingredient_id: ingredientId,
                     poster_ingredient_name: ingredientName,
                     poster_account_id: accountId,
-                    poster_account_name: accountName
+                    poster_account_name: accountName,
+                    item_type: itemType
                 })
             });
 
-            if (response.ok) {
+            const result = await response.json();
+            if (response.ok && result.success) {
                 // Update UI - show account name if available
                 const cell = inputEl.parentElement;
                 const displayName = accountName ? `${ingredientName} <small>(${accountName})</small>` : ingredientName;
@@ -431,6 +445,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // Check if all items are matched
                 checkAllMatched();
+                await confirmAndSaveLearning(result.alias_learning_suggestion);
             }
         }
 
@@ -462,7 +477,7 @@ document.addEventListener('DOMContentLoaded', function() {
             row.querySelector('.item-total').textContent = total.toLocaleString('ru-RU') + '₸';
 
             // Update on server
-            await fetch(`/supplies/update-item/${itemId}`, {
+            const response = await fetch(`/supplies/update-item/${itemId}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -470,9 +485,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     price_per_unit: price
                 })
             });
+            const result = await response.json();
 
             // Update grand total
             updateGrandTotal();
+            await confirmAndSaveLearning(result.packaging_learning_suggestion);
         });
     });
 

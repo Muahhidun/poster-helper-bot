@@ -76,6 +76,26 @@ def test_department_specific_packaging_rules(db):
     assert abs(rules_by_acc["Pizzburg Cafe"]["coefficient"] - 1.2) < 0.001
 
 
+def test_supplier_specific_packaging_rules_can_coexist(db):
+    """The same ingredient may have different packaging for different suppliers."""
+    assert db.add_packaging_rule(
+        TEST_USER_ID, 8888, "шт", 0.5, "кг", "Идея", "Pizzburg",
+        supplier_name="Идея",
+    )
+    assert db.add_packaging_rule(
+        TEST_USER_ID, 8888, "шт", 5.0, "кг", "Курдамир", "Pizzburg",
+        supplier_name="Курдамир",
+    )
+
+    rules = [
+        rule for rule in db.get_packaging_rules(TEST_USER_ID)
+        if rule['poster_ingredient_id'] == 8888
+    ]
+    by_supplier = {rule['supplier_name']: rule for rule in rules}
+    assert abs(by_supplier['Идея']['coefficient'] - 0.5) < 0.001
+    assert abs(by_supplier['Курдамир']['coefficient'] - 5.0) < 0.001
+
+
 def test_department_specific_habits(db):
     """Test that price habits with different account names can coexist and be retrieved correctly"""
     # Add habits for the same ingredient id but different departments

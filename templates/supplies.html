@@ -900,6 +900,25 @@ const supplyItems = {};  // { draftId: [items] }
 // Last supply items by supplier (for autofill)
 const lastSupplyByDraft = {};  // { draftId: { supplierId, supplierName, items: [] } }
 
+async function confirmAndSaveLearning(suggestion) {
+    if (!suggestion || !confirm(suggestion.prompt)) return;
+    try {
+        const response = await fetch(`/supplies/learn-item/${suggestion.item_id}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({kind: suggestion.kind})
+        });
+        const result = await response.json();
+        if (result.success) {
+            showToast(result.message || 'Правило сохранено', 'success');
+        } else {
+            showToast(result.error || 'Не удалось сохранить правило', 'error');
+        }
+    } catch (error) {
+        showToast('Не удалось сохранить правило: ' + error.message, 'error');
+    }
+}
+
 // Initial load of items for each draft
 {% for draft in drafts %}
 supplyItems[{{ draft.id }}] = {{ (draft['items'] or [])|tojson|safe }};
@@ -1494,6 +1513,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const result = await response.json();
                 if (result.success) {
+                    const aliasSuggestion = result.alias_learning_suggestion;
                     // Update local arrays
                     if (supplyItems[draftId]) {
                         const idx = supplyItems[draftId].findIndex(i => i.id === mappingItemId);
@@ -1526,6 +1546,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     renderItems(parseInt(draftId));
                     updateTotals();
+                    await confirmAndSaveLearning(aliasSuggestion);
                 }
                 return;
             }
@@ -1740,15 +1761,21 @@ function renderItems(draftId) {
             }
 
             // Update server
-            await fetch(`/supplies/update-item/${itemId}`, {
+            const response = await fetch(`/supplies/update-item/${itemId}`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ quantity: qty, price_per_unit: price })
             });
+            const result = await response.json();
+            if (!result.success) {
+                showToast(result.error || 'Не удалось сохранить строку', 'error');
+                return;
+            }
 
             // Update totals
             updateItemsTotal(draftId);
             updateTotals();
+            await confirmAndSaveLearning(result.packaging_learning_suggestion);
         });
 
         // Smart field navigation with Enter and Tab

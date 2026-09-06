@@ -2,6 +2,8 @@
 
 from datetime import date, datetime
 
+import pytest
+
 from tests.conftest import TEST_USER_ID
 
 
@@ -309,6 +311,143 @@ def test_manual_supply_correction_does_not_create_future_rules(db):
             for habit in db.get_ingredient_habits(TEST_USER_ID)
         )
     finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_site_explicitly_confirms_alias_and_supplier_packaging_rule(db):
+    from web_app import app
+
+    raw_name = 'тестовая охотничья колбаска фасовка'
+    supplier_name = 'Идея тест'
+    db.delete_ingredient_alias(TEST_USER_ID, raw_name)
+    for rule in db.get_packaging_rules(TEST_USER_ID):
+        if rule['poster_ingredient_id'] == 249 and rule.get('supplier_name') == supplier_name:
+            db.delete_packaging_rule_by_id(rule['id'], TEST_USER_ID)
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name=supplier_name,
+        total_sum=2800,
+    )
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name=raw_name,
+        quantity=2,
+        unit='кг',
+        price_per_unit=1400,
+        poster_ingredient_id=249,
+        poster_ingredient_name='Бургерный соус',
+        poster_account_name='Pizzburg',
+        item_type='ingredient',
+        parsed_quantity=2,
+        parsed_unit='шт',
+        parsed_price_per_unit=1400,
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session['telegram_user_id'] = TEST_USER_ID
+        session['web_user_id'] = 1
+        session['role'] = 'owner'
+
+    try:
+        mapping_response = client.post(f'/supplies/update-item/{item_id}', json={
+            'poster_ingredient_id': 249,
+            'poster_ingredient_name': 'Бургерный соус',
+            'poster_account_name': 'Pizzburg',
+            'item_type': 'ingredient',
+        })
+        mapping_data = mapping_response.get_json()
+        assert mapping_data['success'] is True
+        assert mapping_data['alias_learning_suggestion']['kind'] == 'alias'
+        assert all(
+            alias['alias_text'] != raw_name
+            for alias in db.get_ingredient_aliases(TEST_USER_ID)
+        )
+
+        alias_response = client.post(
+            f'/supplies/learn-item/{item_id}', json={'kind': 'alias'}
+        )
+        assert alias_response.get_json()['success'] is True
+        assert any(
+            alias['alias_text'] == raw_name
+            and alias['notes'] == 'Явно подтверждено пользователем на сайте'
+            for alias in db.get_ingredient_aliases(TEST_USER_ID)
+        )
+
+        edit_response = client.post(f'/supplies/update-item/{item_id}', json={
+            'quantity': 1,
+            'price_per_unit': 2800,
+        })
+        edit_data = edit_response.get_json()
+        suggestion = edit_data['packaging_learning_suggestion']
+        assert suggestion['kind'] == 'packaging'
+        assert suggestion['coefficient'] == pytest.approx(0.5)
+        assert not any(
+            rule['poster_ingredient_id'] == 249
+            and rule.get('supplier_name') == supplier_name
+            for rule in db.get_packaging_rules(TEST_USER_ID)
+        )
+
+        learn_response = client.post(
+            f'/supplies/learn-item/{item_id}', json={'kind': 'packaging'}
+        )
+        assert learn_response.get_json()['success'] is True
+        saved_rule = next(
+            rule for rule in db.get_packaging_rules(TEST_USER_ID)
+            if rule['poster_ingredient_id'] == 249
+            and rule.get('supplier_name') == supplier_name
+        )
+        assert saved_rule['account_name'] == 'Pizzburg'
+        assert saved_rule['original_unit'] == 'шт'
+        assert saved_rule['coefficient'] == pytest.approx(0.5)
+    finally:
+        db.delete_ingredient_alias(TEST_USER_ID, raw_name)
+        for rule in db.get_packaging_rules(TEST_USER_ID):
+            if rule['poster_ingredient_id'] == 249 and rule.get('supplier_name') == supplier_name:
+                db.delete_packaging_rule_by_id(rule['id'], TEST_USER_ID)
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_whatsapp_draft_pipeline_uses_only_matching_supplier_packaging_rule(db):
+    from web_app import _add_items_to_supply_draft
+
+    supplier_name = 'Идея scoped test'
+    other_supplier = 'Другой scoped test'
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    for rule in db.get_packaging_rules(TEST_USER_ID):
+        if rule['poster_ingredient_id'] == 249 and rule.get('supplier_name') in {supplier_name, other_supplier}:
+            db.delete_packaging_rule_by_id(rule['id'], TEST_USER_ID)
+    db.add_packaging_rule(
+        TEST_USER_ID, 249, 'шт', 0.5, 'кг', 'supplier A', 'Pizzburg',
+        supplier_name=supplier_name,
+    )
+    db.add_packaging_rule(
+        TEST_USER_ID, 249, 'шт', 5.0, 'кг', 'supplier B', 'Pizzburg',
+        supplier_name=other_supplier,
+    )
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name=supplier_name,
+        total_sum=2800,
+    )
+    try:
+        _add_items_to_supply_draft(db, TEST_USER_ID, draft_id, [{
+            'name': 'Бургерный соус',
+            'qty': 2,
+            'price': 1400,
+            'sum': 2800,
+            'unit': 'шт',
+        }])
+        saved = db.get_supply_draft_with_items(draft_id)['items'][0]
+        assert saved['poster_ingredient_id'] == 249
+        assert saved['poster_account_name'] == 'Pizzburg'
+        assert saved['quantity'] == pytest.approx(1)
+        assert saved['price_per_unit'] == pytest.approx(2800)
+    finally:
+        for rule in db.get_packaging_rules(TEST_USER_ID):
+            if rule['poster_ingredient_id'] == 249 and rule.get('supplier_name') in {supplier_name, other_supplier}:
+                db.delete_packaging_rule_by_id(rule['id'], TEST_USER_ID)
         db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
 
 

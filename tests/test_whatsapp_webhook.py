@@ -105,7 +105,7 @@ def test_whatsapp_webhook_no_content(app_client, mock_whatsapp_config):
 def test_whatsapp_webhook_handles_numeric_reply_with_quote(
     mock_send_whatsapp, app_client, db, mock_whatsapp_config
 ):
-    """A WhatsApp reply-to message must advance the active review instead of being ignored."""
+    """Legacy numeric review replies are inert because corrections are website-only."""
     db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
     draft_id = db.create_empty_supply_draft(
         telegram_user_id=TEST_USER_ID,
@@ -159,14 +159,14 @@ def test_whatsapp_webhook_handles_numeric_reply_with_quote(
         response = app_client.post('/api/whatsapp/webhook', json=payload)
 
         assert response.status_code == 200
-        assert response.data.decode('utf-8') == 'Review handled'
+        assert response.data.decode('utf-8') == 'Numeric interaction disabled; use website'
         active = db.get_active_whatsapp_review(
             TEST_USER_ID, '120363000000000000@g.us'
         )
-        assert active['status'] == 'awaiting_memory'
+        assert active['status'] == 'awaiting_choice'
         updated = db.get_supply_draft_with_items(draft_id)['items'][0]
-        assert updated['poster_ingredient_id'] == 110
-        assert any('Запомнить соответствие' in call.args[1] for call in mock_send_whatsapp.call_args_list)
+        assert updated['poster_ingredient_id'] is None
+        mock_send_whatsapp.assert_not_called()
     finally:
         conn = db._get_connection()
         cursor = conn.cursor()
@@ -225,12 +225,12 @@ def test_whatsapp_webhook_success_text(mock_execute_actions, mock_send_whatsapp,
         assert mock_execute_actions.call_args[0][1] == [{"action": "create_expense", "amount": 500, "description": "Молоко"}]
         
         # Verify message was sent to WhatsApp
-        assert mock_send_whatsapp.call_count == 2  # package acknowledgement + summary
+        assert mock_send_whatsapp.call_count == 1  # one compact summary only
         sent_chat_id = mock_send_whatsapp.call_args_list[-1][0][0]
         sent_message = mock_send_whatsapp.call_args_list[-1][0][1]
         
         assert sent_chat_id == "120363000000000000@g.us"
-        assert "📋 *Пакет #" in sent_message
+        assert "📋 *Накладные обработаны*" in sent_message
         assert "Расход: Молоко" in sent_message
 
 
@@ -274,7 +274,7 @@ def test_whatsapp_webhook_success_outgoing_text(mock_execute_actions, mock_send_
         mock_call_gemini.assert_called_once()
         assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
         mock_execute_actions.assert_called_once()
-        assert mock_send_whatsapp.call_count == 2
+        assert mock_send_whatsapp.call_count == 1
 
 @patch("web_app.send_whatsapp_message")
 @patch("web_app.execute_assistant_actions")
@@ -335,7 +335,7 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         assert media_files[0]['data'] == b"dummy image data"
         
         # Verify WhatsApp message sent
-        assert mock_send_whatsapp.call_count == 2
+        assert mock_send_whatsapp.call_count == 1
         assert "Расход: Сливки" in mock_send_whatsapp.call_args_list[-1][0][1]
 
 
@@ -508,7 +508,7 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
             mock_execute_actions.assert_called_once()
             
             # Message should be sent to WhatsApp group since drafts were created
-            assert mock_send_whatsapp.call_count == 2
+            assert mock_send_whatsapp.call_count == 1
 
 
 @patch("web_app.send_whatsapp_message")
@@ -544,7 +544,7 @@ def test_whatsapp_webhook_text_no_prefix_business(mock_execute_actions, mock_sen
         
         mock_call_gemini.assert_called_once()
         mock_execute_actions.assert_called_once()
-        assert mock_send_whatsapp.call_count == 2
+        assert mock_send_whatsapp.call_count == 1
 
 
 
@@ -609,5 +609,5 @@ def test_whatsapp_webhook_success_audio(mock_transcribe, mock_download, mock_exe
         assert mock_call_gemini.call_args.kwargs['user_message'] == "Расход молоко 500"
         
         # Verify WhatsApp message sent
-        assert mock_send_whatsapp.call_count == 2
+        assert mock_send_whatsapp.call_count == 1
         assert "Расход: Молоко" in mock_send_whatsapp.call_args_list[-1][0][1]
