@@ -9957,9 +9957,9 @@ def _find_prepared_expense_for_supply(
 ):
     """Find one unused expense prepared by the owner for an incoming invoice.
 
-    A WhatsApp invoice is not allowed to create its own expense. The expense
-    entered on the site is the source of truth for the account and amount; the
-    assistant only supplies the supplier/items needed to fill its supply draft.
+    The expense entered on the site is preferred and is the source of truth for
+    the account and amount. The returned status distinguishes a genuinely
+    missing expense (a new one may be created) from an ambiguous match.
     """
     from matchers import normalize_supplier_text
     from rapidfuzz import fuzz
@@ -10034,7 +10034,7 @@ def _find_prepared_expense_for_supply(
         candidates.append((score, amount_diff, int(expense['id']), expense, linked[0] if linked else None))
 
     if not candidates:
-        return None, None
+        return None, None, 'missing'
 
     candidates.sort(key=lambda row: (-row[0], row[1], row[2]))
     best = candidates[0]
@@ -10042,8 +10042,8 @@ def _find_prepared_expense_for_supply(
         second = candidates[1]
         # Do not guess between two practically equivalent prepared expenses.
         if abs(best[0] - second[0]) < 5.0 and abs(best[1] - second[1]) <= 1.0:
-            return None, None
-    return best[3], best[4]
+            return None, None, 'ambiguous'
+    return best[3], best[4], 'matched'
 
 
 def execute_assistant_actions(
@@ -10367,7 +10367,7 @@ def execute_assistant_actions(
                             + "⚠️ В накладной не распознаны позиции. Подготовленный расход не изменяю."
                         )
                         continue
-                    prepared_expense, prepared_supply = _find_prepared_expense_for_supply(
+                    prepared_expense, prepared_supply, match_status = _find_prepared_expense_for_supply(
                         db=db,
                         user_id=user_id,
                         supplier_name=resolved_supplier_name or supplier_name,
@@ -10376,16 +10376,16 @@ def execute_assistant_actions(
                         source=source,
                         date_str=date_str,
                     )
-                    if not prepared_expense:
+                    if match_status == 'ambiguous':
                         display_supplier = resolved_supplier_name or supplier_name
                         response_text = (
                             (response_text + "\n" if response_text else "")
-                            + f"⚠️ Не нашёл один подходящий подготовленный расход для накладной "
-                              f"«{display_supplier}» на {invoice_total:,.0f}₸. Новый расход не создаю. "
-                              "Проверьте расход на сайте и отправьте накладную повторно."
+                            + f"⚠️ Для накладной «{display_supplier}» на {invoice_total:,.0f}₸ "
+                              "нашлось несколько похожих расходов. Новый дубликат не создаю — "
+                              "уточните нужный расход на сайте."
                         )
                         logger.warning(
-                            "Webhook supply was not linked: supplier=%s invoice_total=%s items_total=%s date=%s",
+                            "Webhook supply match is ambiguous: supplier=%s invoice_total=%s items_total=%s date=%s",
                             display_supplier,
                             invoice_total,
                             items_total,
@@ -10393,57 +10393,58 @@ def execute_assistant_actions(
                         )
                         continue
 
-                    prepared_source = prepared_expense.get('source') or source or 'cash'
-                    prepared_date = normalize_supply_invoice_date(prepared_expense.get('created_at') or date_str)
-                    display_supplier = resolved_supplier_name or supplier_name
-                    from matchers import normalize_supplier_text
-                    if normalize_supplier_text(display_supplier or '') in {
-                        '', 'поставщик', 'не указан', 'неизвестный поставщик'
-                    }:
-                        display_supplier = prepared_expense.get('description') or 'Поставщик'
+                    if prepared_expense:
+                        prepared_source = prepared_expense.get('source') or source or 'cash'
+                        prepared_date = normalize_supply_invoice_date(prepared_expense.get('created_at') or date_str)
+                        display_supplier = resolved_supplier_name or supplier_name
+                        from matchers import normalize_supplier_text
+                        if normalize_supplier_text(display_supplier or '') in {
+                            '', 'поставщик', 'не указан', 'неизвестный поставщик'
+                        }:
+                            display_supplier = prepared_expense.get('description') or 'Поставщик'
 
-                    if prepared_supply:
-                        supply_draft_id = prepared_supply['id']
-                        db.clear_supply_draft_items(supply_draft_id)
-                        if not db.update_supply_draft(
-                            supply_draft_id,
-                            telegram_user_id=user_id,
-                            supplier_name=display_supplier,
-                            supplier_id=resolved_supplier_id,
-                            invoice_date=prepared_date,
-                            total_sum=total_sum,
-                            source=prepared_source,
-                        ):
-                            raise ValueError(f"Не удалось обновить черновик поставки #{supply_draft_id}")
-                        _add_items_to_supply_draft(db, user_id, supply_draft_id, items)
-                    else:
-                        invoice = {
-                            'supplier': display_supplier,
-                            'total_sum': total_sum,
-                            'items': items,
-                        }
-                        supply_draft_id = create_supply_draft_from_invoice(
-                            db,
-                            user_id,
-                            invoice,
-                            prepared_date,
-                            prepared_expense['id'],
-                            prepared_source,
-                        )
-                        if not supply_draft_id:
-                            raise ValueError(
-                                f"Не удалось создать поставку для расхода #{prepared_expense['id']}"
+                        if prepared_supply:
+                            supply_draft_id = prepared_supply['id']
+                            db.clear_supply_draft_items(supply_draft_id)
+                            if not db.update_supply_draft(
+                                supply_draft_id,
+                                telegram_user_id=user_id,
+                                supplier_name=display_supplier,
+                                supplier_id=resolved_supplier_id,
+                                invoice_date=prepared_date,
+                                total_sum=total_sum,
+                                source=prepared_source,
+                            ):
+                                raise ValueError(f"Не удалось обновить черновик поставки #{supply_draft_id}")
+                            _add_items_to_supply_draft(db, user_id, supply_draft_id, items)
+                        else:
+                            invoice = {
+                                'supplier': display_supplier,
+                                'total_sum': total_sum,
+                                'items': items,
+                            }
+                            supply_draft_id = create_supply_draft_from_invoice(
+                                db,
+                                user_id,
+                                invoice,
+                                prepared_date,
+                                prepared_expense['id'],
+                                prepared_source,
                             )
+                            if not supply_draft_id:
+                                raise ValueError(
+                                    f"Не удалось создать поставку для расхода #{prepared_expense['id']}"
+                                )
 
-                    created_drafts.append(
-                        f"Поставка: {display_supplier} на {total_sum:,.0f}₸ "
-                        f"({len(items)} поз., черновик #{supply_draft_id})"
-                    )
-                    response_text = (
-                        (response_text + "\n" if response_text else "")
-                        + f"✅ Накладная связана с подготовленным расходом #{prepared_expense['id']}."
-                    )
-                    continue
+                        created_drafts.append(
+                            f"Поставка: {display_supplier} на {total_sum:,.0f}₸ "
+                            f"({len(items)} поз., черновик #{supply_draft_id})"
+                        )
+                        response_text = (
+                            (response_text + "\n" if response_text else "")
+                            + f"✅ Накладная связана с подготовленным расходом #{prepared_expense['id']}."
+                        )
+                        continue
 
                 if _check_duplicate_supply(db, user_id, resolved_supplier_name or supplier_name, total_sum, date_str):
                     logger.warning(f"Skipping duplicate supply for '{supplier_name}' with sum {total_sum}")

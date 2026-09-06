@@ -239,8 +239,8 @@ def test_webhook_create_supply_reuses_prepared_expense_and_its_account(db):
     assert any(f"черновик #{supply_id}" in item for item in created_drafts)
 
 
-def test_webhook_create_supply_without_prepared_expense_creates_nothing(db):
-    """A model action cannot invent an expense when no prepared row matches."""
+def test_webhook_create_supply_without_prepared_expense_creates_both_drafts(db):
+    """An unpaid invoice may create its own expense and linked supply draft."""
     db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
     actions = [{
         "action": "create_supply",
@@ -259,7 +259,58 @@ def test_webhook_create_supply_without_prepared_expense_creates_nothing(db):
             is_webhook=True,
         )
 
-    assert db.get_expense_drafts(TEST_USER_ID, status="all") == []
-    assert db.get_supply_drafts(TEST_USER_ID, status="all") == []
+    expenses = db.get_expense_drafts(TEST_USER_ID, status="all")
+    assert len(expenses) == 1
+    assert expenses[0]['description'] == 'Япоша'
+    assert expenses[0]['amount'] == 36000
+    assert expenses[0]['source'] == 'kaspi'
+
+    supplies = db.get_supply_drafts(TEST_USER_ID, status="all")
+    assert len(supplies) == 1
+    assert supplies[0]['linked_expense_draft_id'] == expenses[0]['id']
+    assert len(db.get_supply_draft_with_items(supplies[0]['id'])['items']) == 1
+    assert any(f"черновик #{supplies[0]['id']}" in item for item in created_drafts)
+
+
+def test_webhook_create_supply_does_not_duplicate_ambiguous_prepared_expenses(db):
+    """Two equally suitable prepared rows require clarification, not a third expense."""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    for _ in range(2):
+        expense_id = db.create_expense_draft(
+            telegram_user_id=TEST_USER_ID,
+            amount=36000,
+            description="Япоша",
+            expense_type="supply",
+            category="Прочее",
+            source="kaspi",
+            created_at="2026-09-06",
+        )
+        db.create_empty_supply_draft(
+            telegram_user_id=TEST_USER_ID,
+            supplier_name="Япоша",
+            invoice_date="2026-09-06",
+            total_sum=36000,
+            linked_expense_draft_id=expense_id,
+            source="kaspi",
+        )
+
+    actions = [{
+        "action": "create_supply",
+        "supplier_name": "Япоша",
+        "total_sum": 36000,
+        "source": "kaspi",
+        "items": [{"name": "Фри", "qty": 25, "price": 1440, "sum": 36000}],
+    }]
+    with patch("web_app.resolve_supplier_name_and_id", return_value=("Япоша", 25)):
+        response_text, created_drafts = execute_assistant_actions(
+            user_id=TEST_USER_ID,
+            actions=actions,
+            date_str="2026-09-06",
+            response_text="Распознал накладную.",
+            is_webhook=True,
+        )
+
+    assert len(db.get_expense_drafts(TEST_USER_ID, status="all")) == 2
+    assert len(db.get_supply_drafts(TEST_USER_ID, status="all")) == 2
     assert created_drafts == []
-    assert "Новый расход не создаю" in response_text
+    assert "несколько похожих расходов" in response_text
