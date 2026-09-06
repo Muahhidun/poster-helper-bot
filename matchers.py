@@ -17,14 +17,6 @@ logger = logging.getLogger(__name__)
 # contain old ones, so they must never participate in automatic matching.
 CORRUPTED_AUTO_SUPPLIER_ALIAS_NOTE = "Авто-обучено при редактировании черновика"
 
-# Legal names printed on invoices do not always match the operational supplier
-# names used in Poster. These are verified business identities, not guesses
-# from the contents of one invoice.
-VERIFIED_SUPPLIER_HEADER_ALIASES = {
-    'Идея': ('ип ержанова', 'ержанова'),
-    'Кус Вкус': ('ип пастухова', 'пастухова'),
-}
-
 
 def normalize_text_for_matching(text: str) -> str:
     """
@@ -62,9 +54,6 @@ def normalize_product_text(text: str) -> str:
 def normalize_ingredient_text(text: str) -> str:
     """Normalize recurring invoice wording without broad semantic guesses."""
     text = normalize_text_for_matching(text)
-    # Poster contains the historical typo "Оливкое масло" while invoices use
-    # the correct spelling "Оливковое масло".
-    text = re.sub(r'\bоливкое\b', 'оливковое', text)
     text = re.sub(r'\bбургер\s*[-–—]?\s*соус\b', 'бургерный соус', text)
     text = re.sub(r'^соус\s+бургерный(?:\s+соус)?\b', 'бургерный соус', text)
     if text.startswith('бургерный соус'):
@@ -445,22 +434,6 @@ class SupplierMatcher:
                         if norm_alias:
                             self.normalized_aliases[norm_alias] = supplier_id
                             self.canonical_normalized_aliases[norm_alias] = supplier_id
-
-        suppliers_by_name = {
-            normalize_supplier_text(supplier['name']): supplier_id
-            for supplier_id, supplier in self.suppliers.items()
-        }
-        for canonical_name, aliases in VERIFIED_SUPPLIER_HEADER_ALIASES.items():
-            supplier_id = suppliers_by_name.get(normalize_supplier_text(canonical_name))
-            if not supplier_id:
-                continue
-            for alias in aliases:
-                alias_clean = alias.strip().lower()
-                self.aliases[alias_clean] = supplier_id
-                self.canonical_aliases[alias_clean] = supplier_id
-                normalized_alias = normalize_supplier_text(alias_clean)
-                self.normalized_aliases[normalized_alias] = supplier_id
-                self.canonical_normalized_aliases[normalized_alias] = supplier_id
 
         logger.info(f"Loaded {len(self.suppliers)} suppliers with {len(self.aliases)} aliases ({len(self.normalized_aliases)} normalized) for user {self.telegram_user_id}")
 
@@ -857,18 +830,16 @@ class IngredientMatcher:
                 if ingredient:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
-        has_exact_catalogue_match = text_lower in self.names
-
-        # 2. Then check exact aliases. An exact Poster catalogue name in any
-        # department is authoritative; a database alias must not override it.
-        if not has_exact_catalogue_match and text_lower in self.aliases:
+        # 2. Then check exact aliases.
+        if (not any(m[4] == primary_account for m in all_matches)
+                and text_lower in self.aliases):
             for ingredient_id, account_name in self.aliases[text_lower]:
                 ingredient = self.ingredients.get((ingredient_id, account_name))
                 if ingredient:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
 
         # 3. Fuzzy matching - search in aliases first
-        if not has_exact_catalogue_match and not all_matches and self.aliases:
+        if not any(m[4] == primary_account for m in all_matches) and self.aliases:
             aliases_list = list(self.aliases.keys())
             alias_matches = process.extract(
                 text_lower,
@@ -929,10 +900,7 @@ class IngredientMatcher:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, account_name))
 
         # 4. Fuzzy matching - search in names
-        # Always inspect catalogue names as well. This lets an exact Café name
-        # be compared with a semantically identical Pizzburg name, while the
-        # score-first selector below still rejects weaker unrelated matches.
-        if self.names:
+        if not any(m[4] == primary_account for m in all_matches):
             names_list = list(self.names.keys())
             name_matches = process.extract(
                 text_lower,
@@ -975,15 +943,7 @@ class IngredientMatcher:
                     and len(matched_words) > 1
                 )
 
-                is_single_word_mismatch = (
-                    len(matched_words) == 1
-                    and len(text_words) > 1
-                    and not distinctive_overlap
-                    and score < 95
-                )
-
-                if (is_suspicious or is_generic_overlap or is_descriptor_only_overlap
-                        or is_single_word_mismatch):
+                if is_suspicious or is_generic_overlap or is_descriptor_only_overlap:
                     logger.info(f"      ❌ Rejected name priority match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
                     continue
                     
@@ -992,11 +952,6 @@ class IngredientMatcher:
                     if not ingredient:
                         continue
                     adjusted_score = score
-                    if distinctive_overlap:
-                        adjusted_score = max(
-                            adjusted_score,
-                            fuzz.token_set_ratio(text_lower, matched_name),
-                        )
                     query_markers = ingredient_form_markers(text_lower)
                     candidate_markers = ingredient_form_markers(matched_name)
                     if query_markers and query_markers & candidate_markers:
@@ -1017,13 +972,10 @@ class IngredientMatcher:
             acc = m[4]
             is_target = (acc == target_account) if target_account else False
             is_primary = (acc == primary_account)
-            distinctive_overlap = len(
-                ingredient_distinctive_tokens(text_lower)
-                & ingredient_distinctive_tokens(m[1])
-            )
-            # Match quality is authoritative. Pizzburg wins only between
-            # equally good semantic candidates for the same item.
-            return (m[3], distinctive_overlap > 0, distinctive_overlap, is_primary, is_target)
+            # Business rule: if a valid matching ingredient exists in the
+            # primary Pizzburg catalogue, it always belongs there.  Cafe is a
+            # fallback only when no primary candidate passed the safety gates.
+            return (is_primary, is_target, m[3])
 
         best_match = max(all_matches, key=sort_key)
         logger.info(f"✅ Found ingredient match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
@@ -1384,18 +1336,16 @@ class ProductMatcher:
                 if product:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
-        has_exact_catalogue_match = text_lower in self.names
-
-        # 2. Then check exact aliases, unless a Poster catalogue name itself
-        # is already exact in either department.
-        if not has_exact_catalogue_match and text_lower in self.aliases:
+        # 2. Then check exact aliases.
+        if (not any(m[4] == primary_account for m in all_matches)
+                and text_lower in self.aliases):
             for product_id, account_name in self.aliases[text_lower]:
                 product = self.products.get((product_id, account_name))
                 if product:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
 
         # 3. Fuzzy matching - search in aliases first
-        if not has_exact_catalogue_match and not all_matches and self.aliases:
+        if not any(m[4] == primary_account for m in all_matches) and self.aliases:
             aliases_list = list(self.aliases.keys())
             alias_matches = process.extract(
                 text_lower,
@@ -1443,7 +1393,7 @@ class ProductMatcher:
                     all_matches.append((product_id, product['name'], product['unit'], score, account_name))
 
         # 4. Fuzzy matching - search in names
-        if self.names:
+        if not any(m[4] == primary_account for m in all_matches):
             names_list = list(self.names.keys())
             name_matches = process.extract(
                 text_lower,
@@ -1482,16 +1432,7 @@ class ProductMatcher:
                     product = self.products.get((product_id, account_name))
                     if not product:
                         continue
-                    adjusted_score = score
-                    if meaningful_overlap:
-                        adjusted_score = max(
-                            adjusted_score,
-                            fuzz.token_set_ratio(text_lower, matched_name),
-                        )
-                    all_matches.append((
-                        product['id'], product['name'], product['unit'],
-                        adjusted_score, account_name,
-                    ))
+                    all_matches.append((product['id'], product['name'], product['unit'], score, account_name))
 
         if not all_matches:
             logger.warning(f"Product not matched (priority search): '{text}'")
@@ -1502,13 +1443,8 @@ class ProductMatcher:
             acc = m[4]
             is_target = (acc == target_account) if target_account else False
             is_primary = (acc == primary_account)
-            query_tokens = set(re.findall(r'[a-zа-яё]+', text_lower))
-            candidate_tokens = set(re.findall(r'[a-zа-яё]+', normalize_product_text(m[1])))
-            meaningful_overlap = len({
-                token for token in query_tokens & candidate_tokens
-                if len(token) >= 3
-            })
-            return (m[3], meaningful_overlap > 0, meaningful_overlap, is_primary, is_target)
+            # Apply the same department fallback rule to Poster products.
+            return (is_primary, is_target, m[3])
 
         best_match = max(all_matches, key=sort_key)
         logger.info(f"✅ Found product match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")

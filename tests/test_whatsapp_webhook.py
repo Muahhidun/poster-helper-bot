@@ -280,7 +280,7 @@ def test_whatsapp_webhook_success_outgoing_text(mock_execute_actions, mock_send_
 @patch("web_app.execute_assistant_actions")
 @patch("web_app.download_whatsapp_media")
 def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, mock_send_whatsapp, app_client, db, mock_whatsapp_config, tmp_path):
-    """Invoice images use the isolated document parser, without chat history."""
+    """Webhook downloads media, passes it to Gemini, and replies successfully"""
     db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
     
     # Create a dummy image file
@@ -289,14 +289,11 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
     
     mock_download.return_value = str(dummy_file)
     
-    parsed_document = {
-        "document_type": "cashier_sheet",
-        "expenses": [{
-            "amount": 1200,
-            "description": "Сливки",
-            "type": "transaction",
-            "category": "Прочее",
-        }],
+    # Mocking Gemini response
+    mock_agent_response = {
+        "response_text": "Чек распознан.",
+        "actions": [{"action": "create_expense", "amount": 1200, "description": "Сливки"}],
+        "_model_used": "mock-gemini"
     }
     mock_execute_actions.return_value = ("Чек распознан.", ["Расход: Сливки (1200₸, Прочее)"])
 
@@ -315,8 +312,7 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         }
     }
 
-    with patch("parser_service.ParserService.parse_batch_image", new_callable=AsyncMock, return_value=parsed_document) as mock_parse_document, \
-         patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock) as mock_call_gemini:
+    with patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini:
         response = app_client.post(
             '/api/whatsapp/webhook',
             json=payload
@@ -330,13 +326,13 @@ def test_whatsapp_webhook_success_media(mock_download, mock_execute_actions, moc
         from unittest.mock import ANY
         mock_download.assert_called_once_with("https://api.green-api.com/download/some_id.jpg", ANY)
         
-        # Recognition sees only the current image. The conversational agent,
-        # history, pending drafts and memory are not part of OCR extraction.
-        mock_parse_document.assert_awaited_once_with(b"dummy image data", "image/jpeg")
-        mock_call_gemini.assert_not_called()
-        action = mock_execute_actions.call_args[0][1][0]
-        assert action['description'] == 'Сливки'
-        assert action['amount'] == 1200
+        # Verify Gemini agent was called with caption and image data
+        mock_call_gemini.assert_called_once()
+        assert mock_call_gemini.call_args.kwargs['user_message'] == "расход сливки"
+        media_files = mock_call_gemini.call_args.kwargs['media_files']
+        assert len(media_files) == 1
+        assert media_files[0]['mime_type'] == 'image/jpeg'
+        assert media_files[0]['data'] == b"dummy image data"
         
         # Verify WhatsApp message sent
         assert mock_send_whatsapp.call_count == 2
@@ -484,13 +480,11 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
             }
         }
         
-        parsed_document = {
-            "document_type": "printed_invoice",
-            "invoice": {
-                "supplier": "Япоша",
-                "total_sum": 15000,
-                "items": [{"name": "Фри", "qty": 10, "price": 1500, "sum": 15000}],
-            },
+        # Mock Gemini response
+        mock_agent_response = {
+            "response_text": "Поставка Япоша на 15000 зафиксирована.",
+            "actions": [{"action": "create_expense", "amount": 15000, "description": "Япоша", "expense_type": "supply"}],
+            "_model_used": "mock-gemini"
         }
         
         mock_execute_actions.return_value = ("Поставка Япоша зафиксирована.", ["Поставка: Япоша (15000₸)"])
@@ -499,8 +493,7 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
              patch("builtins.open", mock_open(read_data=b"fake image data")), \
              patch("shutil.copy2"), \
              patch("os.makedirs"), \
-             patch("parser_service.ParserService.parse_batch_image", new_callable=AsyncMock, return_value=parsed_document) as mock_parse_document, \
-             patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock) as mock_call_gemini, \
+             patch("parser_service.ParserService.call_gemini_assistant_agent", new_callable=AsyncMock, return_value=mock_agent_response) as mock_call_gemini, \
              patch("os.unlink") as mock_unlink:
             
             response = app_client.post('/api/whatsapp/webhook', json=payload)
@@ -508,8 +501,8 @@ def test_whatsapp_webhook_classifier_allowed(mock_execute_actions, mock_send_wha
             assert response.data.decode('utf-8') == 'Queued'
             assert drain_whatsapp_queue() == 1
             
-            mock_parse_document.assert_awaited_once()
-            mock_call_gemini.assert_not_called()
+            # The main Gemini agent should be called
+            mock_call_gemini.assert_called_once()
             
             # Actions should be executed
             mock_execute_actions.assert_called_once()

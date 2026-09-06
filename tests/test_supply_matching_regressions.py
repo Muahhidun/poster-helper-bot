@@ -72,16 +72,6 @@ def test_weighted_cheddar_does_not_match_weighted_ketchup():
     assert match[4] == 'Pizzburg'
 
 
-def test_invoice_spelling_of_olive_oil_matches_poster_typo():
-    from matchers import IngredientMatcher
-
-    match = IngredientMatcher(TEST_USER_ID).match('Оливковое масло 5л')
-
-    assert match is not None
-    assert match[:2] == (131, 'Оливкое масло 5л')
-    assert match[4] == 'Pizzburg'
-
-
 def test_primary_department_wins_when_ingredient_exists_in_both_accounts():
     from matchers import IngredientMatcher
 

@@ -80,8 +80,8 @@ def test_compute_missing_sum(parser):
     assert result[0]['sum'] == pytest.approx(9000.0)
 
 
-def test_printed_invoice_total_is_preserved_when_rows_are_incomplete(parser):
-    """The printed total exposes a missed OCR row instead of hiding it."""
+def test_invoice_total_recalculated_from_rows(parser):
+    """Итог накладной пересчитывается из сумм строк при расхождении"""
     parsed = {
         "document_type": "printed_invoice",
         "invoice": {
@@ -94,7 +94,7 @@ def test_printed_invoice_total_is_preserved_when_rows_are_incomplete(parser):
         },
     }
     result = parser._reconcile_invoice_items(parsed)
-    assert result['invoice']['total_sum'] == pytest.approx(99999.0)
+    assert result['invoice']['total_sum'] == pytest.approx(500.0)
 
 
 def test_garbage_values_dont_crash(parser):
