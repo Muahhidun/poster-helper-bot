@@ -175,3 +175,91 @@ def test_add_supply_items_creates_missing_supply_for_synced_expense(db):
     assert supply['items'][0]['poster_ingredient_id'] is None
     assert any(f"черновик #{supply['id']}" in item for item in created_drafts)
     assert f"черновик поставки #{supply['id']}" in response_text
+
+
+def test_webhook_create_supply_reuses_prepared_expense_and_its_account(db):
+    """An invoice fills the owner's prepared expense instead of creating another one."""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    expense_id = db.create_expense_draft(
+        telegram_user_id=TEST_USER_ID,
+        amount=27624,
+        description="Кюрдамир",
+        expense_type="supply",
+        category="Прочее",
+        source="cash",
+        created_at="2026-09-06",
+    )
+    supply_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name="Кюрдамир",
+        invoice_date="2026-09-06",
+        total_sum=27624,
+        linked_expense_draft_id=expense_id,
+        source="cash",
+    )
+    actions = [{
+        "action": "create_supply",
+        "supplier_name": "Не указан",
+        "total_sum": 27624,
+        # Deliberately wrong model guess: the prepared expense must win.
+        "source": "kaspi",
+        "items": [
+            {"name": "Шампиньоны", "qty": 2.66, "price": 2200, "sum": 5852},
+            {"name": "Остальные товары", "qty": 1, "price": 20772, "sum": 20772},
+        ],
+    }]
+
+    with patch("web_app.resolve_supplier_name_and_id", return_value=("Не указан", None)), \
+         patch("matchers.get_ingredient_matcher") as ingredient_matcher, \
+         patch("matchers.get_product_matcher") as product_matcher:
+        ingredient_matcher.return_value.match.return_value = None
+        product_matcher.return_value.match.return_value = None
+        response_text, created_drafts = execute_assistant_actions(
+            user_id=TEST_USER_ID,
+            actions=actions,
+            date_str="2026-09-06",
+            response_text="Распознал накладную.",
+            is_webhook=True,
+        )
+
+    expenses = db.get_expense_drafts(TEST_USER_ID, status="all")
+    assert [expense['id'] for expense in expenses] == [expense_id]
+    assert db.get_expense_draft(expense_id)['amount'] == 27624
+    assert db.get_expense_draft(expense_id)['source'] == 'cash'
+
+    supplies = db.get_supply_drafts(TEST_USER_ID, status="all")
+    assert [supply['id'] for supply in supplies] == [supply_id]
+    supply = db.get_supply_draft_with_items(supply_id)
+    assert supply['linked_expense_draft_id'] == expense_id
+    assert supply['supplier_name'] == 'Кюрдамир'
+    assert supply['source'] == 'cash'
+    assert supply['total_sum'] == 26624
+    assert len(supply['items']) == 2
+    assert f"расходом #{expense_id}" in response_text
+    assert any(f"черновик #{supply_id}" in item for item in created_drafts)
+
+
+def test_webhook_create_supply_without_prepared_expense_creates_nothing(db):
+    """A model action cannot invent an expense when no prepared row matches."""
+    db.create_user(TEST_USER_ID, "mock_token", "1", "https://mock.joinposter.com/api")
+    actions = [{
+        "action": "create_supply",
+        "supplier_name": "Япоша",
+        "total_sum": 36000,
+        "source": "kaspi",
+        "items": [{"name": "Фри", "qty": 25, "price": 1440, "sum": 36000}],
+    }]
+
+    with patch("web_app.resolve_supplier_name_and_id", return_value=("Япоша", 25)):
+        response_text, created_drafts = execute_assistant_actions(
+            user_id=TEST_USER_ID,
+            actions=actions,
+            date_str="2026-09-06",
+            response_text="Распознал накладную.",
+            is_webhook=True,
+        )
+
+    assert db.get_expense_drafts(TEST_USER_ID, status="all") == []
+    assert db.get_supply_drafts(TEST_USER_ID, status="all") == []
+    assert created_drafts == []
+    assert "Новый расход не создаю" in response_text
