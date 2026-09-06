@@ -119,6 +119,13 @@ def test_explicit_supplier_detection_handles_common_spelling_variants():
     )
 
 
+def test_verified_invoice_legal_names_resolve_without_ai_guessing():
+    from web_app import resolve_supplier_name_and_id
+
+    assert resolve_supplier_name_and_id(TEST_USER_ID, 'ИП Ержанова') == ('Идея', 10)
+    assert resolve_supplier_name_and_id(TEST_USER_ID, 'ИП Пастухова') == ('Кус Вкус', 7)
+
+
 def test_supplier_is_resolved_separately_for_each_poster_account():
     from web_app import resolve_supplier_for_account
 

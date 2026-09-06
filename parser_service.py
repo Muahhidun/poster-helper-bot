@@ -362,6 +362,8 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
 ШАГ 1. Определи тип документа ("document_type"):
 1. "cashier_sheet" — если это список расходов кассира за смену (рукописный лист с разными тратами: зарплаты курьерам/поварам/кассирам, такси, хозтовары, разовые мелкие закупы продуктов).
 2. "printed_invoice" — если это накладная на поставку (печатная таблица или рукописный список от одного поставщика), содержащая перечень товаров от одного конкретного контрагента (например: ТОО Метро, Кюрдамир, ТОО Алель, фарш и т.д.).
+3. "mixed_document" — если на одном фото отчётливо видны и накладная одного поставщика, и отдельные записи кассира с другими расходами. В этом случае заполни одновременно "invoice" и "expenses".
+4. "other" — если это клиентский чек ресторана, фото весов, банковский перевод, случайное фото или документ нельзя уверенно отнести к перечисленным типам. Ничего не выдумывай.
 
 ШАГ 2. Выполни извлечение данных в зависимости от типа:
 
@@ -392,9 +394,15 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
   - sum: общая сумма по строке (число). КРИТИЧЕСКИ ВАЖНО: извлекай ИМЕННО то число, которое напечатано/написано в колонке 'Сумма' на документе. Ни в коем случае НЕ вычисляй его самостоятельно как qty * price!
   *ВАЖНО:* Пересчитывай фасовки ровно один раз. Если в названии указан вес/размер упаковки (например "Фри 2.5кг"), а в количестве штуки (например 2 шт) по цене 4000 за шт, пересчитай в базовые единицы: qty=5.0, price=1600.0. При таком пересчёте обязательно добавь original_qty, original_unit, original_price, pack_size, target_unit и packaging_applied=true. Поле sum оставь равным напечатанной сумме строки. Если исходное количество уже указано в базовых единицах, фасовку не применяй.
 
+*ОЧЕНЬ ВАЖНО ДЛЯ НАКЛАДНЫХ:*
+1. supplier и name должны содержать текст именно из текущего изображения. Не заменяй их названиями из Poster, похожими товарами или сведениями из прошлых документов.
+2. Не угадывай нечитаемую строку. Сохрани максимально близкий видимый текст и добавь "needs_review": true.
+3. Положительный total_sum с документа является контрольной суммой. Не заменяй его суммой распознанных строк, даже если строки не сходятся: расхождение означает, что строка пропущена или прочитана неверно.
+4. Для каждой строки верни "source_text" — короткую дословную часть видимой строки, на которой основаны name, qty, price и sum.
+
 ФОРМАТ JSON ОТВЕТА:
 {
-  "document_type": "cashier_sheet" | "printed_invoice",
+  "document_type": "cashier_sheet" | "printed_invoice" | "mixed_document" | "other",
   
   // Заполняется только для document_type = "cashier_sheet"
   "expenses": [
@@ -427,8 +435,8 @@ UNIFIED_BATCH_PARSER_PROMPT = """Ты — интеллектуальный по�
     "supplier": "Название поставщика",
     "total_sum": 25400,
     "items": [
-      {"name": "Фри дольки", "qty": 10.0, "price": 1200.0, "sum": 12000.0},
-      {"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0, "sum": 13400.0}
+      {"name": "Фри дольки", "qty": 10.0, "price": 1200.0, "sum": 12000.0, "source_text": "Фри дольки 10 кг 1200 12000"},
+      {"name": "Сыр Моцарелла", "qty": 5.0, "price": 2680.0, "sum": 13400.0, "source_text": "Сыр Моцарелла 5 кг 2680 13400"}
     ]
   }
 }
@@ -940,6 +948,8 @@ class ParserService:
         doc_type = parsed.get('document_type')
         if doc_type == 'printed_invoice' and 'invoice' in parsed:
             parsed['invoice'] = self._reconcile_invoice_data(parsed['invoice'])
+        elif doc_type == 'mixed_document' and 'invoice' in parsed:
+            parsed['invoice'] = self._reconcile_invoice_data(parsed['invoice'])
         elif parsed.get('type') == 'supply':
             # This is from parse_invoice_image which returns {type: 'supply', items: [...]}
             parsed = self._reconcile_invoice_data(parsed)
@@ -1051,8 +1061,16 @@ class ParserService:
             if total_sum <= 0 and total_sum_calculated > 0:
                 invoice[total_key] = total_sum_calculated
             elif abs(total_sum - total_sum_calculated) > 5.0 and total_sum_calculated > 0:
-                logger.warning(f"Reconciliation: replacing {total_key} {total_sum} with calculated sum {total_sum_calculated}")
-                invoice[total_key] = total_sum_calculated
+                # A printed total is an invariant, not a value to silently
+                # rewrite.  A mismatch normally means OCR skipped or damaged
+                # a row; keeping the document total lets post-validation flag
+                # the draft instead of making an incomplete invoice look valid.
+                logger.warning(
+                    "Reconciliation: preserving document %s %s despite row total %s",
+                    total_key,
+                    total_sum,
+                    total_sum_calculated,
+                )
         except (ValueError, TypeError):
             if total_sum_calculated > 0:
                 invoice[total_key] = total_sum_calculated

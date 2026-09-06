@@ -10254,8 +10254,11 @@ def execute_assistant_actions(
                     if i.get('sum') is not None
                 )
                 if items_total > 0 and abs(items_total - total_sum) > 1.0:
-                    logger.info(f"create_supply: correcting total_sum {total_sum} → {items_total}")
-                    total_sum = round(items_total, 2)
+                    logger.warning(
+                        "create_supply: preserving document total %s despite row total %s",
+                        total_sum,
+                        items_total,
+                    )
 
                 resolved_supplier_name, resolved_supplier_id = resolve_supplier_name_and_id(user_id, supplier_name)
 
@@ -10618,6 +10621,171 @@ def _strip_whatsapp_bot_prefix(message_text: str) -> tuple[str, bool]:
     return cleaned, False
 
 
+def _whatsapp_document_match_score(supplier_name: str, candidate_name: str) -> int:
+    """Rank an existing draft without allowing a fuzzy supplier substitution."""
+    from matchers import normalize_supplier_text
+
+    supplier = normalize_supplier_text(supplier_name or '')
+    candidate = normalize_supplier_text(candidate_name or '')
+    if not supplier or not candidate:
+        return 0
+    if supplier == candidate:
+        return 3
+    if supplier in candidate or candidate in supplier:
+        return 2
+    supplier_words = {word for word in supplier.split() if len(word) >= 4}
+    candidate_words = {word for word in candidate.split() if len(word) >= 4}
+    return 1 if supplier_words & candidate_words else 0
+
+
+def _find_expense_for_whatsapp_invoice(db, user_id: int, invoice: dict, date_str: str):
+    """Find one existing expense by the invoice invariant: date and exact total.
+
+    Supplier text only ranks equal-total candidates. It is never used to turn
+    one supplier into another, and ambiguity returns no match.
+    """
+    try:
+        total_sum = float(invoice.get('total_sum') or 0)
+    except (TypeError, ValueError):
+        return None
+    if total_sum <= 0:
+        return None
+
+    supplier_name = invoice.get('supplier') or ''
+    tolerance = max(1.0, total_sum * 0.00001)
+    candidates = []
+    seen_expenses = set()
+
+    for supply in db.get_supply_drafts(user_id, status='pending'):
+        linked_id = supply.get('linked_expense_draft_id')
+        if not linked_id or str(supply.get('invoice_date') or '')[:10] != date_str[:10]:
+            continue
+        try:
+            amount = float(supply.get('total_sum') or 0)
+        except (TypeError, ValueError):
+            continue
+        if abs(amount - total_sum) > tolerance:
+            continue
+        expense = db.get_expense_draft(int(linked_id))
+        if not expense or int(expense.get('telegram_user_id') or 0) != int(user_id):
+            continue
+        seen_expenses.add(int(linked_id))
+        candidates.append((
+            _whatsapp_document_match_score(supplier_name, supply.get('supplier_name') or ''),
+            int(linked_id),
+            expense,
+        ))
+
+    for expense in db.get_expense_drafts(user_id, status='all'):
+        expense_id = int(expense['id'])
+        if expense_id in seen_expenses:
+            continue
+        created_at = str(expense.get('created_at') or '')[:10]
+        if created_at != date_str[:10] or expense.get('is_income'):
+            continue
+        try:
+            amount = float(expense.get('amount') or 0)
+        except (TypeError, ValueError):
+            continue
+        if abs(amount - total_sum) > tolerance:
+            continue
+        candidates.append((
+            _whatsapp_document_match_score(supplier_name, expense.get('description') or ''),
+            expense_id,
+            expense,
+        ))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
+        logger.warning(
+            "Ambiguous exact-total expense match for WhatsApp invoice %r / %s: %s",
+            supplier_name,
+            total_sum,
+            [(score, expense_id) for score, expense_id, _ in candidates[:3]],
+        )
+        return None
+    return candidates[0][2]
+
+
+def _actions_from_whatsapp_document(db, user_id: int, parsed: dict, date_str: str) -> list[dict]:
+    """Convert isolated document extraction into deterministic draft actions."""
+    document_type = (parsed or {}).get('document_type')
+    if document_type not in ('cashier_sheet', 'printed_invoice', 'mixed_document'):
+        return []
+
+    actions = []
+    if document_type in ('cashier_sheet', 'mixed_document'):
+        for expense in parsed.get('expenses') or []:
+            try:
+                amount = float(expense.get('amount') or 0)
+            except (TypeError, ValueError):
+                continue
+            description = str(expense.get('description') or '').strip()
+            if amount <= 0 or not description:
+                continue
+            action = {
+                'action': 'create_expense',
+                'amount': amount,
+                'description': description,
+                'expense_type': expense.get('type') or 'transaction',
+                'category': expense.get('category') or 'Прочее',
+                'source': expense.get('source') or 'cash',
+                'is_income': bool(expense.get('is_income', False)),
+            }
+            if action['expense_type'] == 'supply' and expense.get('items'):
+                action['items'] = expense['items']
+            actions.append(action)
+
+    invoices = []
+    if parsed.get('invoice'):
+        invoices.append(parsed['invoice'])
+    invoices.extend(parsed.get('invoices') or [])
+    for invoice in invoices:
+        supplier_name = str(invoice.get('supplier') or '').strip()
+        items = invoice.get('items') or []
+        try:
+            total_sum = float(invoice.get('total_sum') or 0)
+        except (TypeError, ValueError):
+            total_sum = 0
+        if total_sum <= 0 or not supplier_name or not items:
+            logger.warning("Incomplete isolated WhatsApp invoice extraction: %s", invoice)
+            continue
+
+        existing_expense = _find_expense_for_whatsapp_invoice(
+            db, user_id, invoice, date_str
+        )
+        if existing_expense:
+            actions.append({
+                'action': 'add_supply_items',
+                'expense_draft_id': int(existing_expense['id']),
+                'supplier_name': supplier_name,
+                'source': existing_expense.get('source') or 'kaspi',
+                'items': items,
+            })
+        else:
+            actions.append({
+                'action': 'create_supply',
+                'supplier_name': supplier_name,
+                'total_sum': total_sum,
+                'source': 'kaspi',
+                'items': items,
+            })
+    return actions
+
+
+def _should_use_isolated_whatsapp_document_parser(message_text: str, media_files: list[dict]) -> bool:
+    if len(media_files) != 1 or not media_files[0].get('mime_type', '').startswith('image/'):
+        return False
+    text_lower = (message_text or '').lower()
+    conversational_commands = (
+        'удал', 'найди чек', 'найти чек', 'весы', 'запомни', 'правило',
+        'исправ', 'замени', 'отмени',
+    )
+    return not any(command in text_lower for command in conversational_commands)
+
+
 def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
     """Process one queued WhatsApp webhook and create local drafts only."""
     payload = json.loads(job['payload_json'])
@@ -10663,42 +10831,6 @@ def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
         from parser_service import get_parser_service
         parser = get_parser_service()
 
-        chat_history = db.get_assistant_chat_history(user_id, limit=6)
-        all_drafts = db.get_expense_drafts(user_id, status="all")
-        active_drafts = [
-            d for d in all_drafts
-            if d.get('created_at')
-            and get_date_in_kz_tz(d['created_at'], KZ_TZ) == date_str
-        ]
-        all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
-        for supply_draft in all_supply_drafts:
-            draft_with_items = db.get_supply_draft_with_items(supply_draft['id'])
-            if draft_with_items:
-                active_drafts.append({
-                    'id': supply_draft['id'],
-                    'type': 'supply',
-                    'supplier_name': supply_draft.get('supplier_name'),
-                    'total_sum': supply_draft.get('total_sum'),
-                    'items': draft_with_items.get('items', []),
-                })
-
-        raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
-        msg_lower = (message_text or '').lower()
-        supply_keywords = {
-            "постав", "накладн", "привез", "инвойс", "счет", "счёт", "чек",
-            "продукт", "сырь", "ингредиент", "по, ", " по ", " кг", " шт",
-            " литр",
-        }
-        is_supply_related = bool(media_paths) or any(word in msg_lower for word in supply_keywords)
-        if not is_supply_related and raw_supplier_profiles:
-            for supplier, ingredients in raw_supplier_profiles.items():
-                if supplier.lower() in msg_lower or any(
-                    len(ingredient) >= 3 and ingredient in msg_lower
-                    for ingredient in ingredients
-                ):
-                    is_supply_related = True
-                    break
-
         media_files = []
         for path in media_paths:
             file_ext = os.path.splitext(path.lower())[1]
@@ -10706,14 +10838,82 @@ def _process_whatsapp_job_payload(job: dict) -> tuple[str, list[str]]:
             with open(path, 'rb') as media_file:
                 media_files.append({'mime_type': mime_type, 'data': media_file.read()})
 
-        agent_response = run_async(parser.call_gemini_assistant_agent(
-            user_message=message_text,
-            chat_history=chat_history,
-            active_drafts=active_drafts,
-            supplier_profiles=raw_supplier_profiles if is_supply_related else {},
-            media_files=media_files,
-            assistant_memory=db.get_assistant_memory(user_id),
-        )) or {}
+        agent_response = None
+        if _should_use_isolated_whatsapp_document_parser(message_text, media_files):
+            try:
+                parsed_document = run_async(parser.parse_batch_image(
+                    media_files[0]['data'], media_files[0]['mime_type']
+                )) or {}
+                isolated_actions = _actions_from_whatsapp_document(
+                    db, user_id, parsed_document, date_str
+                )
+                if isolated_actions:
+                    agent_response = {
+                        'response_text': 'Документ распознан и проверен отдельно от истории переписки.',
+                        'actions': isolated_actions,
+                        '_model_used': f"{config.GEMINI_MODEL}-document-parser",
+                    }
+                    logger.info(
+                        "Queued WhatsApp job %s used isolated document parser (%s)",
+                        job['id'],
+                        parsed_document.get('document_type'),
+                    )
+            except Exception as document_error:
+                logger.warning(
+                    "Isolated parser failed for WhatsApp job %s; using assistant fallback: %s",
+                    job['id'],
+                    document_error,
+                )
+
+        # Text commands, PDFs, receipt-deletion requests, scale photos and
+        # unclassified images still use the conversational assistant.
+        if agent_response is None:
+            chat_history = db.get_assistant_chat_history(user_id, limit=6)
+            all_drafts = db.get_expense_drafts(user_id, status="all")
+            active_drafts = [
+                d for d in all_drafts
+                if d.get('created_at')
+                and get_date_in_kz_tz(d['created_at'], KZ_TZ) == date_str
+            ]
+            all_supply_drafts = db.get_supply_drafts(user_id, status="pending")
+            for supply_draft in all_supply_drafts:
+                draft_with_items = db.get_supply_draft_with_items(supply_draft['id'])
+                if draft_with_items:
+                    active_drafts.append({
+                        'id': supply_draft['id'],
+                        'type': 'supply',
+                        'supplier_name': supply_draft.get('supplier_name'),
+                        'total_sum': supply_draft.get('total_sum'),
+                        'items': draft_with_items.get('items', []),
+                    })
+
+            raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
+            msg_lower = (message_text or '').lower()
+            supply_keywords = {
+                "постав", "накладн", "привез", "инвойс", "счет", "счёт", "чек",
+                "продукт", "сырь", "ингредиент", "по, ", " по ", " кг", " шт",
+                " литр",
+            }
+            is_supply_related = bool(media_paths) or any(
+                word in msg_lower for word in supply_keywords
+            )
+            if not is_supply_related and raw_supplier_profiles:
+                for supplier, ingredients in raw_supplier_profiles.items():
+                    if supplier.lower() in msg_lower or any(
+                        len(ingredient) >= 3 and ingredient in msg_lower
+                        for ingredient in ingredients
+                    ):
+                        is_supply_related = True
+                        break
+
+            agent_response = run_async(parser.call_gemini_assistant_agent(
+                user_message=message_text,
+                chat_history=chat_history,
+                active_drafts=active_drafts,
+                supplier_profiles=raw_supplier_profiles if is_supply_related else {},
+                media_files=media_files,
+                assistant_memory=db.get_assistant_memory(user_id),
+            )) or {}
 
         response_text = agent_response.get('response_text', '')
         actions = agent_response.get('actions', [])
