@@ -503,11 +503,27 @@ document.addEventListener('DOMContentLoaded', function() {
         this.textContent = '⏳ Создаю...';
 
         try {
-            const response = await fetch('/supplies/process/{{ draft.id }}', {
+            let response = await fetch('/supplies/process/{{ draft.id }}', {
                 method: 'POST'
             });
 
-            const result = await response.json();
+            let result = await response.json();
+            if (result.requires_confirmation) {
+                const proceed = confirm(
+                    result.error + '\n\nВсё равно создать поставку в Poster?'
+                );
+                if (!proceed) {
+                    this.disabled = false;
+                    this.textContent = '✅ Создать поставку в Poster';
+                    return;
+                }
+                response = await fetch('/supplies/process/{{ draft.id }}', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({allow_total_mismatch: true})
+                });
+                result = await response.json();
+            }
 
             if (result.success) {
                 alert('✅ Поставка создана в Poster!\nID: ' + result.supply_id);

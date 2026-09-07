@@ -1067,7 +1067,11 @@ def calculate_supply_total_mismatch(
         for item in items
     ), 2)
     difference = round(actual - expected, 2)
-    if abs(difference) <= tolerance:
+    # Fractional quantities and rounded unit prices commonly produce a small
+    # difference. Treat up to 0.1% as rounding, while still surfacing material
+    # differences such as delivery included only in the expense.
+    effective_tolerance = max(float(tolerance), abs(expected) * 0.001)
+    if abs(difference) <= effective_tolerance:
         return None
     return expected, actual, difference
 
@@ -6960,7 +6964,11 @@ def learn_supply_item(item_id):
 
 
 
-def _process_supply_draft_for_user(draft_id: int, user_id: int) -> dict:
+def _process_supply_draft_for_user(
+    draft_id: int,
+    user_id: int,
+    allow_total_mismatch: bool = False,
+) -> dict:
     """Process supply draft - create supply in Poster (multi-account support)
 
     Items can have different poster_account_id, so we create separate supplies for each account.
@@ -6991,15 +6999,19 @@ def _process_supply_draft_for_user(draft_id: int, user_id: int) -> dict:
             expected_total = linked_expense['amount']
 
     mismatch = calculate_supply_total_mismatch(items, expected_total)
-    if mismatch:
+    if mismatch and not allow_total_mismatch:
         expected, actual, difference = mismatch
         direction = 'больше' if difference > 0 else 'меньше'
         return {
             'success': False,
+            'requires_confirmation': True,
+            'expected_total': expected,
+            'actual_total': actual,
+            'difference': difference,
             'error': (
                 f'Сумма позиций ({actual:,.2f} ₸) не совпадает с расходом '
                 f'({expected:,.2f} ₸): позиции на {abs(difference):,.2f} ₸ {direction}. '
-                'Исправьте количество или цену перед созданием поставки.'
+                'Проверьте количество и цену.'
             )
         }
 
@@ -7441,7 +7453,13 @@ def _process_supply_draft_for_user(draft_id: int, user_id: int) -> dict:
 @app.route('/supplies/process/<int:draft_id>', methods=['POST'])
 def process_supply(draft_id):
     """Web endpoint for the shared supply-posting implementation."""
-    return jsonify(_process_supply_draft_for_user(draft_id, g.user_id))
+    data = request.get_json(silent=True) or {}
+    allow_total_mismatch = data.get('allow_total_mismatch') is True
+    return jsonify(_process_supply_draft_for_user(
+        draft_id,
+        g.user_id,
+        allow_total_mismatch=allow_total_mismatch,
+    ))
 
 
 # ========================================

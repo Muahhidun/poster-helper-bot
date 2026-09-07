@@ -1348,8 +1348,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 );
                 await Promise.all(updatePromises);
 
-                const response = await fetch(`/supplies/process/${draftId}`, { method: 'POST' });
-                const result = await response.json();
+                let response = await fetch(`/supplies/process/${draftId}`, { method: 'POST' });
+                let result = await response.json();
+
+                if (result.requires_confirmation) {
+                    const proceed = confirm(
+                        result.error + '\n\nВсё равно создать поставку в Poster?'
+                    );
+                    if (!proceed) {
+                        showToast('Поставка оставлена в черновиках', 'warning');
+                        this.disabled = false;
+                        this.textContent = '✅ Создать';
+                        return;
+                    }
+                    response = await fetch(`/supplies/process/${draftId}`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({allow_total_mismatch: true})
+                    });
+                    result = await response.json();
+                }
 
                 if (result.success) {
                     const supplies = result.supplies || [{ supply_id: result.supply_id }];

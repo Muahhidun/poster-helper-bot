@@ -257,6 +257,43 @@ def test_supply_total_allows_small_rounding_difference():
     assert calculate_supply_total_mismatch(items, 10000) is None
 
 
+def test_supply_total_allows_small_relative_rounding_difference():
+    from web_app import calculate_supply_total_mismatch
+
+    items = [{'quantity': 1, 'price_per_unit': 42649}]
+    assert calculate_supply_total_mismatch(items, 42669) is None
+
+
+def test_supply_total_requires_confirmation_instead_of_permanent_block(db):
+    from web_app import _process_supply_draft_for_user
+
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name='Смолл тест',
+        total_sum=6347,
+    )
+    db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name='Куриная грудка',
+        quantity=0.958,
+        unit='кг',
+        price_per_unit=4539,
+        poster_ingredient_id=1,
+        poster_ingredient_name='Куриная грудка',
+        poster_account_name='Pizzburg',
+        item_type='ingredient',
+    )
+    try:
+        result = _process_supply_draft_for_user(draft_id, TEST_USER_ID)
+        assert result['success'] is False
+        assert result['requires_confirmation'] is True
+        assert result['expected_total'] == 6347
+        assert result['actual_total'] == pytest.approx(4348.36)
+    finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
 def test_manual_supply_correction_does_not_create_future_rules(db):
     from web_app import app
 
