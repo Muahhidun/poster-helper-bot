@@ -9178,27 +9178,30 @@ def api_cafe_transfers():
                         if expense_cat_id:
                             dt = datetime.strptime(date, '%Y-%m-%d')
                             tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
-                            marker = f"PHB shift cafe {date} wedrink"
-                            if marker in existing_comments:
+                            legacy_marker = f"PHB shift cafe {date} wedrink"
+                            comment = _shift_operation_comment(
+                                'cafe', date, 'списание продаж WeDrink'
+                            )
+                            if legacy_marker in existing_comments or comment in existing_comments:
                                 results.append({
                                     'name': 'Расход WeDrink',
                                     'amount': int(round(wedrink_sales)),
                                     'already_exists': True,
                                 })
-                                logger.info("[CAFE TRANSFER] WeDrink expense already exists: %s", marker)
+                                logger.info("[CAFE TRANSFER] WeDrink expense already exists: %s", comment)
                             else:
                                 tx_id = await client.create_transaction(
                                     transaction_type=0, # Expense
                                     category_id=expense_cat_id,
                                     account_from_id=CAFE_ACCOUNTS['cash_left'],
                                     amount=int(round(wedrink_sales)),
-                                    comment=marker,
+                                    comment=comment,
                                     date=tx_date
                                 )
                                 if tx_id:
                                     # MUST append a dict to avoid JS TypeError on frontend
                                     results.append({'name': 'Расход WeDrink', 'amount': int(round(wedrink_sales)), 'tx_id': tx_id})
-                                    existing_comments.add(marker)
+                                    existing_comments.add(comment)
                                     logger.info(f"[CAFE TRANSFER] Created WeDrink expense: {int(round(wedrink_sales))}₸ (Cat ID: {expense_cat_id})")
                         else:
                             cat_names = [c.get('name') or c.get('category_name') for c in categories]
@@ -9211,14 +9214,15 @@ def api_cafe_transfers():
                 tx_date = dt.strftime('%Y-%m-%d') + ' 22:00:00'
 
                 for t in transfers:
-                    marker = _shift_operation_marker('cafe', date, t['from'], t['to'])
-                    if marker in existing_comments:
+                    legacy_marker = _shift_operation_marker('cafe', date, t['from'], t['to'])
+                    comment = _shift_operation_comment('cafe', date, t['name'])
+                    if legacy_marker in existing_comments or comment in existing_comments:
                         results.append({
                             'name': t['name'],
                             'amount': t['amount'],
                             'already_exists': True,
                         })
-                        logger.info("[CAFE TRANSFER] Already exists, skipping: %s", marker)
+                        logger.info("[CAFE TRANSFER] Already exists, skipping: %s", comment)
                         continue
                     tx_id = await client.create_transaction(
                         transaction_type=2,
@@ -9227,10 +9231,10 @@ def api_cafe_transfers():
                         account_to_id=t['to'],
                         amount=t['amount'],
                         date=tx_date,
-                        comment=marker,
+                        comment=comment,
                     )
                     results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
-                    existing_comments.add(marker)
+                    existing_comments.add(comment)
                     logger.info(f"[CAFE TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}")
             finally:
                 await client.close()
@@ -9318,8 +9322,18 @@ MAIN_ACCOUNTS = {
 
 
 def _shift_operation_marker(scope: str, date: str, account_from: int, account_to: int) -> str:
-    """Stable Poster comment used to make shift transfers retry-safe."""
+    """Legacy technical comment kept for retry safety of older operations."""
     return f"PHB shift {scope} {date} {account_from}>{account_to}"
+
+
+def _shift_operation_comment(scope: str, date: str, description: str) -> str:
+    """Human-readable, stable Poster comment for an automatic shift operation."""
+    department = 'Pizzburg Cafe' if scope == 'cafe' else 'Pizzburg'
+    try:
+        readable_date = datetime.strptime(date, '%Y-%m-%d').strftime('%d.%m.%Y')
+    except (TypeError, ValueError):
+        readable_date = str(date)
+    return f"Закрытие смены {department} {readable_date} — {description}"
 
 
 @app.route('/api/shift-closing/transfers', methods=['POST'])
@@ -9417,14 +9431,15 @@ def api_shift_closing_transfers():
                 }
 
                 for t in transfers:
-                    marker = _shift_operation_marker('main', date, t['from'], t['to'])
-                    if marker in existing_comments:
+                    legacy_marker = _shift_operation_marker('main', date, t['from'], t['to'])
+                    comment = _shift_operation_comment('main', date, t['name'])
+                    if legacy_marker in existing_comments or comment in existing_comments:
                         results.append({
                             'name': t['name'],
                             'amount': t['amount'],
                             'already_exists': True,
                         })
-                        logger.info("[MAIN TRANSFER] Already exists, skipping: %s", marker)
+                        logger.info("[MAIN TRANSFER] Already exists, skipping: %s", comment)
                         continue
                     tx_id = await client.create_transaction(
                         transaction_type=2,
@@ -9433,10 +9448,10 @@ def api_shift_closing_transfers():
                         account_to_id=t['to'],
                         amount=t['amount'],
                         date=tx_date,
-                        comment=marker,
+                        comment=comment,
                     )
                     results.append({'name': t['name'], 'amount': t['amount'], 'tx_id': tx_id})
-                    existing_comments.add(marker)
+                    existing_comments.add(comment)
                     logger.info(f"[MAIN TRANSFER] {t['name']}: {t['amount']}₸ → tx_id={tx_id}")
             finally:
                 await client.close()

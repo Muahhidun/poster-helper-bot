@@ -114,7 +114,7 @@ def test_shift_transfer_retry_skips_operation_already_present_in_poster(app_clie
         assert sum(1 for item in payload['transfers'] if item.get('already_exists')) == 1
         mock_client.create_transaction.assert_awaited_once()
         assert mock_client.create_transaction.call_args.kwargs['comment'] == (
-            'PHB shift main 2026-08-30 1>8'
+            'Закрытие смены Pizzburg 30.08.2026 — Каспий → Вольт'
         )
     finally:
         conn = db._get_connection()
