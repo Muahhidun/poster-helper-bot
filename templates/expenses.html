@@ -3603,13 +3603,6 @@ function copyChecklistToClipboard() {
     const cashNotes = document.getElementById('checklist-cash-notes')?.value?.trim() || '';
     const generalNotes = document.getElementById('checklist-general-notes-input')?.value?.trim() || '';
 
-    // Get checkbox states
-    const kaspiVerified = document.getElementById('check-kaspi-verified')?.checked;
-    const halykVerified = document.getElementById('check-halyk-verified')?.checked;
-    const cashVerified = document.getElementById('check-cash-verified')?.checked;
-    const posterVerified = document.getElementById('check-poster-verified')?.checked;
-    const collectionDone = document.getElementById('check-collection-done')?.checked;
-
     // Build text
     let text = `📋 Чеклист закрытия смены\n`;
     text += `📅 ${formattedDate}\n`;
@@ -3636,14 +3629,6 @@ function copyChecklistToClipboard() {
     text += `🏦 Halyk: ${halykDiff}\n`;
     if (halykNotes) text += `📝 ${halykNotes}\n`;
     if (halykExpenses) text += halykExpenses;
-    text += `\n`;
-
-    text += `--- Проверки ---\n`;
-    text += `${cashVerified ? '✅' : '⬜'} Наличка сверена\n`;
-    text += `${kaspiVerified ? '✅' : '⬜'} Kaspi сверен\n`;
-    text += `${halykVerified ? '✅' : '⬜'} Halyk сверен\n`;
-    text += `${posterVerified ? '✅' : '⬜'} Poster проверен\n`;
-    text += `${collectionDone ? '✅' : '⬜'} Инкассация сделана\n`;
 
     navigator.clipboard.writeText(text.trim()).then(() => {
         const status = document.getElementById('copy-status');
