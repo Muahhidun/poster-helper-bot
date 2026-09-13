@@ -56,6 +56,11 @@ def normalize_ingredient_text(text: str) -> str:
     text = normalize_text_for_matching(text)
     text = re.sub(r'\bбургер\s*[-–—]?\s*соус\b', 'бургерный соус', text)
     text = re.sub(r'^соус\s+бургерный(?:\s+соус)?\b', 'бургерный соус', text)
+    text = re.sub(
+        r'\bкольца\s+из\s+(?:рубленого\s+)?лука(?:\s+в\s+панировке)?\b',
+        'луковые кольца',
+        text,
+    )
     if text.startswith('бургерный соус'):
         text = re.sub(r'\s+\d+(?:[.,]\d+)?\s*(?:кг|г|гр|л)\.?$', '', text)
     # Parentheses are presentation-only in Poster names. Treat their contents
@@ -824,22 +829,42 @@ class IngredientMatcher:
 
         # 1. Canonical Poster names are authoritative. A stale learned alias
         # must never replace an exact catalogue item with an unrelated item.
+        has_exact_name = False
         if text_lower in self.names:
             for ingredient_id, account_name in self.names[text_lower]:
                 ingredient = self.ingredients.get((ingredient_id, account_name))
                 if ingredient:
                     all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
+                    has_exact_name = True
 
-        # 2. Then check exact aliases.
-        if (not any(m[4] == primary_account for m in all_matches)
-                and text_lower in self.aliases):
+        # 2. Then check exact aliases. A mapping explicitly confirmed by the
+        # user must beat every merely fuzzy catalogue candidate, including a
+        # candidate from the primary department.
+        exact_alias_matches = []
+        if not has_exact_name and text_lower in self.aliases:
             for ingredient_id, account_name in self.aliases[text_lower]:
                 ingredient = self.ingredients.get((ingredient_id, account_name))
                 if ingredient:
-                    all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name))
+                    exact_alias_matches.append((
+                        ingredient_id, ingredient['name'], ingredient['unit'], 100, account_name
+                    ))
+
+        if exact_alias_matches:
+            def exact_alias_priority(match):
+                account_name = match[4]
+                is_target = (account_name == target_account) if target_account else False
+                is_primary = account_name == primary_account
+                return (is_primary, is_target)
+
+            best_alias = max(exact_alias_matches, key=exact_alias_priority)
+            logger.info(
+                "✅ Found exact ingredient alias: '%s' -> %s (account=%s)",
+                text, best_alias[1], best_alias[4],
+            )
+            return best_alias
 
         # 3. Fuzzy matching - search in aliases first
-        if not any(m[4] == primary_account for m in all_matches) and self.aliases:
+        if not has_exact_name and self.aliases:
             aliases_list = list(self.aliases.keys())
             alias_matches = process.extract(
                 text_lower,
@@ -943,8 +968,19 @@ class IngredientMatcher:
                     and len(matched_words) > 1
                 )
 
+                # WRatio gives a high substring score to pairs such as
+                # "угорь" and "полугорький". They share letters, not a word,
+                # and therefore cannot describe the same ingredient.
+                is_single_word_substring = (
+                    len(text_words) == 1
+                    and not common_tokens
+                )
+
                 if is_suspicious or is_generic_overlap or is_descriptor_only_overlap:
                     logger.info(f"      ❌ Rejected name priority match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
+                    continue
+                if is_single_word_substring:
+                    logger.info(f"      ❌ Rejected substring-only name match: '{text_lower}' → '{matched_name}' (score={score:.1f})")
                     continue
                     
                 for ingredient_id, account_name in self.names[matched_name]:
@@ -1015,7 +1051,10 @@ class IngredientMatcher:
         if not target_candidates:
             target_candidates = candidates
 
-        alias_lower = normalize_text_for_matching(alias_text)
+        # Use the same normalization as match() and load_aliases(). Otherwise
+        # an alias containing presentation punctuation can work only after an
+        # application restart, when it is reloaded from the database.
+        alias_lower = normalize_ingredient_text(alias_text)
 
         # Add to memory for all matching candidates
         for cand in target_candidates:

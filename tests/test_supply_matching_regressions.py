@@ -64,6 +64,73 @@ def test_burger_sauce_invoice_wording_matches_catalogue_ingredient():
     assert match[4] == 'Pizzburg'
 
 
+def test_exact_cafe_ingredient_is_not_shadowed_by_primary_name_substring(tmp_path, monkeypatch):
+    import config
+    from matchers import IngredientMatcher
+
+    (tmp_path / 'poster_ingredients.csv').write_text(
+        'ingredient_id,ingredient_name,unit,type,account_name\n'
+        '122,Перец острый (Полугорький),кг,1,Pizzburg\n'
+        '44,Угорь,кг,1,Pizzburg-cafe\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'alias_item_mapping.csv').write_text(
+        'alias_text,poster_item_id,poster_item_name,source,notes\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config, 'DATA_DIR', tmp_path)
+
+    match = IngredientMatcher(None).match('угорь')
+
+    assert match[:2] == (44, 'Угорь')
+    assert match[4] == 'Pizzburg-cafe'
+
+
+def test_confirmed_exact_alias_beats_fuzzy_primary_ingredient(tmp_path, monkeypatch):
+    import config
+    from matchers import IngredientMatcher
+
+    (tmp_path / 'poster_ingredients.csv').write_text(
+        'ingredient_id,ingredient_name,unit,type,account_name\n'
+        '99,Панировка,кг,1,Pizzburg\n'
+        '263,"Луковые кольца 2,5кг",кг,1,Pizzburg-cafe\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'alias_item_mapping.csv').write_text(
+        'alias_text,poster_item_id,poster_item_name,source,notes\n'
+        'кольца из рубленого лука в панировке,263,"Луковые кольца 2,5кг",ingredient,confirmed\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config, 'DATA_DIR', tmp_path)
+
+    match = IngredientMatcher(None).match('кольца из рубленого лука в панировке')
+
+    assert match[:2] == (263, 'Луковые кольца 2,5кг')
+    assert match[4] == 'Pizzburg-cafe'
+
+
+def test_onion_ring_invoice_wording_matches_onion_rings_without_alias(tmp_path, monkeypatch):
+    import config
+    from matchers import IngredientMatcher
+
+    (tmp_path / 'poster_ingredients.csv').write_text(
+        'ingredient_id,ingredient_name,unit,type,account_name\n'
+        '99,Панировка,кг,1,Pizzburg\n'
+        '263,"Луковые кольца 2,5кг",кг,1,Pizzburg-cafe\n',
+        encoding='utf-8',
+    )
+    (tmp_path / 'alias_item_mapping.csv').write_text(
+        'alias_text,poster_item_id,poster_item_name,source,notes\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config, 'DATA_DIR', tmp_path)
+
+    match = IngredientMatcher(None).match('кольца из рубленого лука в панировке')
+
+    assert match[:2] == (263, 'Луковые кольца 2,5кг')
+    assert match[4] == 'Pizzburg-cafe'
+
+
 def test_weighted_cheddar_does_not_match_weighted_ketchup():
     from matchers import IngredientMatcher
 
@@ -348,6 +415,63 @@ def test_manual_supply_correction_does_not_create_future_rules(db):
             for habit in db.get_ingredient_habits(TEST_USER_ID)
         )
     finally:
+        db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
+
+
+def test_site_offers_alias_learning_when_corrected_name_matches_ocr_text(db):
+    from matchers import invalidate_item_matchers
+    from web_app import app
+
+    raw_name = 'угорь'
+    db.delete_ingredient_alias(TEST_USER_ID, raw_name)
+    invalidate_item_matchers(TEST_USER_ID)
+    db.create_user(TEST_USER_ID, 'mock_token', '1', 'https://mock.joinposter.com/api')
+    draft_id = db.create_empty_supply_draft(
+        telegram_user_id=TEST_USER_ID,
+        supplier_name='Тестовый поставщик',
+        total_sum=1000,
+    )
+    item_id = db.add_supply_draft_item(
+        supply_draft_id=draft_id,
+        item_name=raw_name,
+        quantity=1,
+        unit='кг',
+        price_per_unit=1000,
+        poster_ingredient_id=122,
+        poster_ingredient_name='Перец острый (Полугорький)',
+        poster_account_name='Pizzburg',
+        item_type='ingredient',
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session['telegram_user_id'] = TEST_USER_ID
+        session['web_user_id'] = 1
+        session['role'] = 'owner'
+
+    try:
+        response = client.post(f'/supplies/update-item/{item_id}', json={
+            'poster_ingredient_id': 44,
+            'poster_ingredient_name': 'Угорь',
+            'poster_account_name': 'Pizzburg-cafe',
+            'item_type': 'ingredient',
+        })
+        data = response.get_json()
+
+        assert data['success'] is True
+        assert data['alias_learning_suggestion']['kind'] == 'alias'
+
+        learn_response = client.post(
+            f'/supplies/learn-item/{item_id}', json={'kind': 'alias'}
+        )
+        assert learn_response.get_json()['success'] is True
+        assert any(
+            alias['alias_text'] == raw_name
+            and alias['poster_item_id'] == 44
+            for alias in db.get_ingredient_aliases(TEST_USER_ID)
+        )
+    finally:
+        db.delete_ingredient_alias(TEST_USER_ID, raw_name)
+        invalidate_item_matchers(TEST_USER_ID)
         db.delete_supply_draft(draft_id, telegram_user_id=TEST_USER_ID)
 
 

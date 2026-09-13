@@ -6885,7 +6885,19 @@ def update_supply_item(item_id):
         updated_item = db.get_supply_draft_item(item_id, telegram_user_id=g.user_id)
         raw_name = (updated_item or {}).get('item_name') or ''
         poster_name = (updated_item or {}).get('poster_ingredient_name') or ''
-        if raw_name.strip() and poster_name.strip() and raw_name.strip().casefold() != poster_name.strip().casefold():
+        mapping_changed = (
+            str(item.get('poster_ingredient_id') or '') != str((updated_item or {}).get('poster_ingredient_id') or '')
+            or (item.get('poster_account_name') or '').strip() != ((updated_item or {}).get('poster_account_name') or '').strip()
+            or (item.get('item_type') or 'ingredient') != ((updated_item or {}).get('item_type') or 'ingredient')
+        )
+        if (
+            raw_name.strip()
+            and poster_name.strip()
+            and (
+                mapping_changed
+                or raw_name.strip().casefold() != poster_name.strip().casefold()
+            )
+        ):
             alias_suggestion = {
                 'kind': 'alias',
                 'item_id': item_id,
