@@ -122,6 +122,7 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
 .sc-btn-full:active{opacity:.7}
 .sc-btn-full:disabled{opacity:.4;cursor:default}
 .sc-btn-full.green{background:#34c759}
+.sc-btn-salary-calc{background:#e5e5ea;color:#1c1c1e;margin-top:10px;margin-bottom:0}
 
 .sc-banner-sal{padding:10px 14px;border-radius:10px;text-align:center;font-size:14px;font-weight:500;margin-bottom:10px}
 .sc-banner-sal.info{background:#007aff15;color:#007aff}
@@ -206,7 +207,7 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
             <div class="sc-salary-row">
                 <div class="sc-field">
                     <label>Имя</label>
-                    <input type="text" id="sal_sushi_name" class="sc-name-input" placeholder="Имя" autocomplete="off">
+                    <input type="text" id="sal_sushi_name" class="sc-name-input" placeholder="Имя" autocomplete="off" onchange="calculateCafeSalarySuggestions(true)">
                 </div>
                 <div class="sc-field">
                     <label>Сумма</label>
@@ -230,6 +231,8 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
                 <span>Итого</span>
                 <span id="sal_total">0 ₸</span>
             </div>
+
+            <button type="button" class="sc-btn-full sc-btn-salary-calc" id="btnSalaryCalc" onclick="calculateCafeSalarySuggestions(true)">Рассчитать автоматически</button>
         </div>
 
         <button class="sc-btn-full" id="btnSalaryNext" onclick="createCafeSalaries()">Далее</button>
@@ -406,6 +409,7 @@ let currentDate = '';
 let isReadonly = false;
 let transfersCreated = false;
 let salariesCreated = false;
+let lastSalaryCalcSushiName = null;
 const INPUT_IDS = ['wolt','kaspi','kaspi_pizzburg','cash_bills','cash_coins','shift_start','expenses','cash_to_leave'];
 const USER_INPUT_IDS = ['wolt','kaspi','kaspi_pizzburg','cash_bills','cash_coins','expenses','cash_to_leave'];
 
@@ -444,6 +448,59 @@ function goToShiftClosing() {
     loadDateData(currentDate);
 }
 
+async function calculateCafeSalarySuggestions(showStatus) {
+    if (salariesCreated) return false;
+
+    var btn = document.getElementById('btnSalaryCalc');
+    var originalText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Расчёт...';
+    }
+    if (showStatus) showSalBanner('Считаю выручку и проданные роллы...', 'info');
+
+    try {
+        var r = await fetch(API_BASE + '/salaries/calculate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                date: currentDate,
+                sushi_name: document.getElementById('sal_sushi_name').value.trim()
+            })
+        });
+        var d = await r.json();
+        if (!d.success) throw new Error(d.error || 'Не удалось рассчитать зарплаты');
+
+        document.getElementById('sal_cashier_amount').value = d.cashier_salary;
+        document.getElementById('sal_sushi_amount').value = d.sushi_salary;
+        document.getElementById('sal_povar_amount').value = d.povar_salary;
+        lastSalaryCalcSushiName = document.getElementById('sal_sushi_name').value.trim();
+        updateSalaryTotal();
+
+        if (showStatus) {
+            var sushiText = d.is_yuri
+                ? 'Юрий: ' + Number(d.roll_equivalents || 0).toLocaleString('ru-RU', {maximumFractionDigits: 2}) + ' рол.'
+                : 'сушист: фиксированные 14 000 ₸';
+            var message = 'Готово. Выручка: ' + fmt(d.revenue) + ' ₸; ' + sushiText;
+            if (d.warnings && d.warnings.length) {
+                message += ' Не удалось учесть: ' + d.warnings.join(' ');
+            }
+            showSalBanner(message, d.warnings && d.warnings.length ? 'error' : 'success');
+        } else {
+            hideSalBanner();
+        }
+        return true;
+    } catch(e) {
+        showSalBanner('Авторасчёт не выполнен: ' + e.message + '. Суммы можно ввести вручную.', 'error');
+        return false;
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText || 'Рассчитать автоматически';
+        }
+    }
+}
+
 async function loadLastEmployees() {
     try {
         var r = await fetch(API_BASE + '/employees/last');
@@ -452,17 +509,14 @@ async function loadLastEmployees() {
             d.salaries.forEach(function(s) {
                 if (s.role === 'Кассир') {
                     document.getElementById('sal_cashier_name').value = s.name || '';
-                    document.getElementById('sal_cashier_amount').value = s.amount || '';
                 } else if (s.role === 'Сушист') {
                     document.getElementById('sal_sushi_name').value = s.name || '';
-                    document.getElementById('sal_sushi_amount').value = s.amount || '';
                 } else if (s.role === 'Повар Сандей') {
                     document.getElementById('sal_povar_name').value = s.name || '';
-                    document.getElementById('sal_povar_amount').value = s.amount || '';
                 }
             });
-            updateSalaryTotal();
         }
+        await calculateCafeSalarySuggestions(false);
     } catch(e) {
         console.error('Load employees error:', e);
     }
@@ -531,6 +585,7 @@ function resetSalaryForm() {
     btn.style.background = '';
     btn.textContent = IS_OWNER ? 'Создать зарплаты' : 'Далее';
     salariesCreated = false;
+    lastSalaryCalcSushiName = null;
 
     // Clear readonly from inputs
     ['sal_cashier_name','sal_cashier_amount','sal_sushi_name','sal_sushi_amount','sal_povar_name','sal_povar_amount'].forEach(function(id) {
@@ -580,19 +635,30 @@ async function loadSalaryDataForDate(date) {
     } catch(e) {
         console.error('Load employees error:', e);
     }
+
+    await calculateCafeSalarySuggestions(false);
 }
 
 async function createCafeSalaries() {
     var cashierName = document.getElementById('sal_cashier_name').value.trim();
     var sushiName = document.getElementById('sal_sushi_name').value.trim();
     var povarName = document.getElementById('sal_povar_name').value.trim();
-    var cashierAmt = salPi('sal_cashier_amount');
-    var sushiAmt = salPi('sal_sushi_amount');
-    var povarAmt = salPi('sal_povar_amount');
 
     if (!cashierName || !sushiName || !povarName) {
         showSalBanner('Заполните все имена', 'error');
         return;
+    }
+
+    var cashierAmt = salPi('sal_cashier_amount');
+    var sushiAmt = salPi('sal_sushi_amount');
+    var povarAmt = salPi('sal_povar_amount');
+    if (cashierAmt <= 0 || sushiAmt <= 0 || povarAmt <= 0 || sushiName !== lastSalaryCalcSushiName) {
+        var calculated = await calculateCafeSalarySuggestions(false);
+        if (calculated) {
+            cashierAmt = salPi('sal_cashier_amount');
+            sushiAmt = salPi('sal_sushi_amount');
+            povarAmt = salPi('sal_povar_amount');
+        }
     }
     if (cashierAmt <= 0 && sushiAmt <= 0 && povarAmt <= 0) {
         showSalBanner('Введите хотя бы одну сумму', 'error');

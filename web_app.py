@@ -8896,6 +8896,40 @@ def api_cafe_employees_last():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/cafe/salaries/calculate', methods=['POST'])
+def api_cafe_salaries_calculate():
+    """Calculate suggested cafe salaries without creating transactions."""
+    from datetime import timedelta
+    from cafe_salary import CafeSalaryCalculator
+
+    info = resolve_cafe_info()
+    data = request.get_json(silent=True) or {}
+
+    try:
+        raw_date = str(data.get('date') or '').strip()
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw_date):
+            date_param = raw_date.replace('-', '')
+        elif re.fullmatch(r'\d{8}', raw_date):
+            date_param = raw_date
+        elif raw_date:
+            return jsonify({'success': False, 'error': 'Некорректная дата'}), 400
+        else:
+            kz_now = _kz_now()
+            business_day = kz_now if kz_now.hour >= 6 else kz_now - timedelta(days=1)
+            date_param = business_day.strftime('%Y%m%d')
+
+        calculator = CafeSalaryCalculator(info)
+        result = run_async(calculator.calculate(
+            date=date_param,
+            sushi_name=str(data.get('sushi_name') or ''),
+        ))
+        return jsonify({'success': True, **result})
+
+    except Exception as e:
+        logger.error("Cafe salary calculation failed: %s", e, exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/cafe/salaries/create', methods=['POST'])
 def api_cafe_salaries_create():
     """Create cafe salary transactions in Poster (Кассир, Сушист, Повар Сандей)"""
