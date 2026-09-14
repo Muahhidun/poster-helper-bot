@@ -130,6 +130,26 @@ def test_generic_sushi_category_does_not_turn_rolls_into_piece_sushi():
     assert warnings == []
 
 
+def test_half_set_menu_variants_count_as_two_rolls_each():
+    categories = [{"category_id": 1, "category_name": "Сеты"}]
+    sales = [
+        {"product_name": "1/2 СанДей Про Сэт - 20шт", "category_id": 1, "count": 1},
+        {"product_name": "1/2 Темпура Сэт - 16шт", "category_id": 1, "count": 1},
+        {"product_name": "1/2 Унаги Сэт - 13шт", "category_id": 1, "count": 1},
+        {"product_name": "1/2 Филадельфия Сэт - 17шт", "category_id": 1, "count": 1},
+    ]
+
+    equivalents, details, warnings = calculate_roll_equivalents(sales, categories)
+
+    assert equivalents == 8.0
+    assert [detail["kind"] for detail in details] == ["set"] * 4
+    assert [detail["pieces"] for detail in details] == [20.0, 16.0, 13.0, 17.0]
+    assert [detail["normalized_pieces"] for detail in details] == [16.0] * 4
+    assert [detail["rolls_per_sale"] for detail in details] == [2.0] * 4
+    assert sum(detail["yuri_bonus"] for detail in details) == 400.0
+    assert warnings == []
+
+
 @pytest.mark.parametrize(
     ("product_name", "expected_equivalents", "expected_pieces"),
     [

@@ -48,15 +48,18 @@ def _has_stem(text: str, stem: str) -> bool:
 
 def _piece_count(product_name: str) -> float | None:
     text = (product_name or "").lower().replace("½", "1/2")
-    if re.search(r"\b1\s*/\s*2\b", text) or re.search(r"\bпол(?:овина|овинка)?\s+рол", text):
-        return 4.0
+    # Prefer an explicit piece count.  In names such as "1/2 ... Сет -
+    # 20шт", the 1/2 prefix describes the menu variant rather than four
+    # pieces and must not hide the real count at the end of the name.
     match = re.search(
         r"(\d+(?:[.,]\d+)?)\s*(?:шт(?:ук[аи]?)?|pcs?|pieces?|кус(?:очк\w*)?|ролл\w*)\b",
         text,
     )
-    if not match:
-        return None
-    return float(match.group(1).replace(",", "."))
+    if match:
+        return float(match.group(1).replace(",", "."))
+    if re.search(r"\b1\s*/\s*2\b", text) or re.search(r"\bпол(?:овина|овинка)?\s+рол", text):
+        return 4.0
+    return None
 
 
 def _rounded_roll_pieces(pieces: float) -> float:
@@ -141,6 +144,9 @@ def calculate_roll_equivalents(
         # The piece count may be written either in the product name or in the
         # Poster category (for example, a separate "Роллы 4 шт" category).
         pieces = _piece_count(f"{name} {category_name}")
+        is_half_set = is_set and bool(
+            re.search(r"\b1\s*/\s*2\b", name.lower().replace("½", "1/2"))
+        )
         if is_set and pieces is None:
             warnings.append(
                 f"Не учтён сет «{name}»: количество штук не найдено в названии."
@@ -148,7 +154,13 @@ def calculate_roll_equivalents(
             continue
 
         normalized_pieces = pieces
-        if is_onigiri:
+        if is_half_set:
+            # The Cafe menu's "1/2 ... Сет" variants are paid as two
+            # rolls per sold set, independently of the printed piece count.
+            normalized_pieces = 16.0
+            per_product = 2.0
+            kind = "set"
+        elif is_onigiri:
             per_product = pieces if pieces is not None else 1.0
             kind = "onigiri"
         elif is_gunkan or is_sushi:
