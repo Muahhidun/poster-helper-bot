@@ -130,7 +130,7 @@ def test_generic_sushi_category_does_not_turn_rolls_into_piece_sushi():
     assert warnings == []
 
 
-def test_half_set_menu_variants_count_as_two_rolls_each():
+def test_set_calculation_uses_trailing_piece_count_not_half_prefix():
     categories = [{"category_id": 1, "category_name": "Сеты"}]
     sales = [
         {"product_name": "1/2 СанДей Про Сэт - 20шт", "category_id": 1, "count": 1},
@@ -147,6 +147,32 @@ def test_half_set_menu_variants_count_as_two_rolls_each():
     assert [detail["normalized_pieces"] for detail in details] == [16.0] * 4
     assert [detail["rolls_per_sale"] for detail in details] == [2.0] * 4
     assert sum(detail["yuri_bonus"] for detail in details) == 400.0
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
+    ("pieces", "normalized_pieces", "rolls"),
+    [
+        (10, 8, 1),
+        (13, 16, 2),
+        (17, 16, 2),
+        (20, 16, 2),
+        (24, 24, 3),
+        (32, 32, 4),
+    ],
+)
+def test_set_piece_count_rounds_to_nearest_eight_with_ties_down(
+    pieces, normalized_pieces, rolls
+):
+    equivalents, details, warnings = calculate_roll_equivalents(
+        [{"product_name": f"1/2 Фирменный Сет - {pieces}шт", "category_id": 1, "count": 1}],
+        [{"category_id": 1, "category_name": "Сеты"}],
+    )
+
+    assert equivalents == rolls
+    assert details[0]["pieces"] == pieces
+    assert details[0]["normalized_pieces"] == normalized_pieces
+    assert details[0]["rolls_per_sale"] == rolls
     assert warnings == []
 
 

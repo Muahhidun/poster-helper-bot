@@ -67,8 +67,10 @@ def _rounded_roll_pieces(pieces: float) -> float:
     pieces = max(0.0, float(pieces or 0))
     if pieces == 4:
         return 4.0
-    # Halfway values round up: 10 -> 8, 13 -> 16, 17 -> 16.
-    return float(max(8, math.floor((pieces + 4) / 8) * 8))
+    # Use the piece count printed in the name.  Exact halfway values round
+    # down: 20 -> 16, while 10 -> 8, 13 -> 16, and 17 -> 16.
+    multiple = math.ceil((pieces / 8.0) - 0.5)
+    return float(max(8, multiple * 8))
 
 
 def calculate_roll_equivalents(
@@ -144,9 +146,6 @@ def calculate_roll_equivalents(
         # The piece count may be written either in the product name or in the
         # Poster category (for example, a separate "Роллы 4 шт" category).
         pieces = _piece_count(f"{name} {category_name}")
-        is_half_set = is_set and bool(
-            re.search(r"\b1\s*/\s*2\b", name.lower().replace("½", "1/2"))
-        )
         if is_set and pieces is None:
             warnings.append(
                 f"Не учтён сет «{name}»: количество штук не найдено в названии."
@@ -154,13 +153,7 @@ def calculate_roll_equivalents(
             continue
 
         normalized_pieces = pieces
-        if is_half_set:
-            # The Cafe menu's "1/2 ... Сет" variants are paid as two
-            # rolls per sold set, independently of the printed piece count.
-            normalized_pieces = 16.0
-            per_product = 2.0
-            kind = "set"
-        elif is_onigiri:
+        if is_onigiri:
             per_product = pieces if pieces is not None else 1.0
             kind = "onigiri"
         elif is_gunkan or is_sushi:
