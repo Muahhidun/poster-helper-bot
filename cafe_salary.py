@@ -96,8 +96,8 @@ def calculate_roll_equivalents(
         name_is_roll = _has_stem(name, "рол")
         category_is_set = _has_stem(category_name, "сет")
         category_is_roll = _has_stem(category_name, "рол")
+        category_is_sushi = _has_stem(category_name, "суш")
         is_set = name_is_set or category_is_set
-        is_roll = name_is_roll or category_is_roll
 
         is_onigiri = (
             _has_stem(name, "онигир")
@@ -117,14 +117,21 @@ def calculate_roll_equivalents(
             _has_stem(name, "гункан")
             or (_has_stem(category_name, "гункан") and not name_is_set and not name_is_roll)
         )
-        is_sushi = (
-            _has_stem(name, "суш")
+        # Poster uses "Суши" as a broad menu category that also contains
+        # ordinary rolls (Philadelphia, California, maki, etc.).  A dish is
+        # treated as a piece of sushi only when its own name explicitly says
+        # "суши".  Other dishes from that category are rolls unless
+        # their name identifies another explicit kind below.
+        is_sushi = _has_stem(name, "суш")
+        is_roll = (
+            name_is_roll
+            or category_is_roll
             or (
-                _has_stem(category_name, "суш")
-                and not name_is_set
-                and not name_is_roll
-                and not category_is_set
-                and not category_is_roll
+                category_is_sushi
+                and not is_set
+                and not is_onigiri
+                and not is_gunkan
+                and not is_sushi
             )
         )
 

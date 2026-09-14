@@ -98,7 +98,7 @@ def test_sushi_gunkan_and_onigiri_salary_equivalents():
         {"category_id": 3, "category_name": "Анигири"},
     ]
     sales = [
-        {"product_name": "Сяке", "category_id": 1, "count": 2},
+        {"product_name": "Суши Сяке", "category_id": 1, "count": 2},
         {"product_name": "Гункан с угрём", "category_id": 2, "count": 3},
         {"product_name": "Анигири с лососем", "category_id": 3, "count": 2},
     ]
@@ -111,6 +111,23 @@ def test_sushi_gunkan_and_onigiri_salary_equivalents():
     assert [detail["yuri_bonus"] for detail in details] == [50.0, 75.0, 100.0]
     assert warnings == []
     assert calculate_cafe_sushi_salary("Юрий", equivalents) == 15_225
+
+
+def test_generic_sushi_category_does_not_turn_rolls_into_piece_sushi():
+    categories = [{"category_id": 1, "category_name": "Суши"}]
+    sales = [
+        {"product_name": "Дракон-Фила Лайт 50/50 - 4шт", "category_id": 1, "count": 1},
+        {"product_name": "Капа Маки - 8шт (2026)", "category_id": 1, "count": 2},
+        {"product_name": "Суши Ассорти - 3шт", "category_id": 1, "count": 1},
+        {"product_name": "Суши с Креветкой - 1шт", "category_id": 1, "count": 4},
+    ]
+
+    equivalents, details, warnings = calculate_roll_equivalents(sales, categories)
+
+    assert [detail["kind"] for detail in details] == ["roll", "roll", "sushi", "sushi"]
+    assert [detail["roll_equivalents"] for detail in details] == [0.5, 2.0, 1.5, 2.0]
+    assert equivalents == 6.0
+    assert warnings == []
 
 
 @pytest.mark.parametrize(
