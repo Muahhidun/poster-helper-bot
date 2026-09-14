@@ -7457,8 +7457,11 @@ def _process_supply_draft_for_user(
             return {'success': False, 'error': 'Не удалось создать поставку'}
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(
+            "Supply draft #%s could not be posted for user %s",
+            draft_id,
+            user_id,
+        )
         return {'success': False, 'error': str(e)}
 
 

@@ -1322,6 +1322,22 @@ document.addEventListener('DOMContentLoaded', function() {
             this.textContent = '⏳...';
 
             try {
+                const readJsonResponse = async (response, action) => {
+                    const responseText = await response.text();
+                    let result = {};
+                    try {
+                        result = responseText ? JSON.parse(responseText) : {};
+                    } catch (_) {
+                        throw new Error(
+                            `${action}: сервер вернул ответ ${response.status}, который не удалось прочитать`
+                        );
+                    }
+                    if (!response.ok) {
+                        throw new Error(result.error || `${action}: ошибка HTTP ${response.status}`);
+                    }
+                    return result;
+                };
+
                 // Read latest values from DOM inputs (in case change event hasn't fired yet)
                 const tbody = document.querySelector(`.items-tbody[data-draft-id="${draftId}"]`);
                 if (tbody) {
@@ -1339,17 +1355,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // Flush all item data to server before processing
                 // (prevents race condition when user edits price and immediately clicks "Создать")
-                const updatePromises = items.map(item =>
-                    fetch(`/supplies/update-item/${item.id}`, {
+                const updatePromises = items.map(async item => {
+                    const response = await fetch(`/supplies/update-item/${item.id}`, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ quantity: item.quantity, price_per_unit: item.price_per_unit })
-                    })
-                );
+                    });
+                    const result = await readJsonResponse(response, `Не удалось сохранить позицию «${item.item_name || item.id}»`);
+                    if (result.success === false) {
+                        throw new Error(result.error || `Не удалось сохранить позицию «${item.item_name || item.id}»`);
+                    }
+                    return result;
+                });
                 await Promise.all(updatePromises);
 
                 let response = await fetch(`/supplies/process/${draftId}`, { method: 'POST' });
-                let result = await response.json();
+                let result = await readJsonResponse(response, 'Не удалось создать поставку');
 
                 if (result.requires_confirmation) {
                     const proceed = confirm(
@@ -1366,7 +1387,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({allow_total_mismatch: true})
                     });
-                    result = await response.json();
+                    result = await readJsonResponse(response, 'Не удалось создать поставку после подтверждения суммы');
                 }
 
                 if (result.success) {
@@ -1378,12 +1399,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     this.closest('.supply-card').remove();
                     updateTotals();
                 } else {
-                    showToast('Ошибка: ' + result.error, 'error');
+                    // Posting errors must stay visible until the user closes them.
+                    // A four-second toast made Poster validation/API failures look
+                    // like the button simply stopped doing anything on mobile.
+                    showToast('Поставка не создана: ' + (result.error || 'неизвестная ошибка'), 'error', 0);
                     this.disabled = false;
                     this.textContent = '✅ Создать';
                 }
             } catch (e) {
-                showToast('Ошибка: ' + e.message, 'error');
+                showToast('Поставка не создана: ' + e.message, 'error', 0);
                 this.disabled = false;
                 this.textContent = '✅ Создать';
             }
