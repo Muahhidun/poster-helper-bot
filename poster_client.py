@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 import logging
 from datetime import datetime
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, List, Optional, Any
 from config import POSTER_BASE_URL, POSTER_TOKEN, POSTER_USER_ID
 
@@ -534,6 +535,31 @@ class PosterClient:
 
         ingredients = merged_ingredients
 
+        def _payment_amount_from_unit_prices() -> str:
+            """Return a cent-precision payment that never exceeds the supply.
+
+            Poster keeps fractional supply totals (quantity * unit price) with
+            more than two decimal places, while finance transactions are
+            cent-precision.  Normal rounding can therefore turn 185229.994
+            into 185230.00 and Poster rejects it with error 44 because the
+            payment is 0.006 greater than the supply.  A supply may be
+            partially paid, so rounding down the sub-cent remainder is both
+            valid and prevents the transaction from exceeding the item total.
+            """
+            exact_total = sum(
+                Decimal(str(item['num'])) * Decimal(str(item['price']))
+                for item in ingredients
+            )
+            return format(exact_total.quantize(Decimal('0.01'), rounding=ROUND_DOWN), 'f')
+
+        def _payment_amount_from_legacy_sums() -> str:
+            """Match the explicit line sums used by the legacy request."""
+            exact_total = sum(
+                Decimal(str(item.get('sum', 0)))
+                for item in ingredients
+            )
+            return format(exact_total.quantize(Decimal('0.01'), rounding=ROUND_DOWN), 'f')
+
         def _build_supply_data(type_map):
             """Build form data in official Poster API format"""
             data = {
@@ -565,10 +591,7 @@ class PosterClient:
                     data[f'ingredient[{idx}][packing]'] = item['packing']
 
             # Payment transaction
-            total_amount = round(sum(
-                float(item['num']) * float(item['price'])
-                for item in ingredients
-            ), 2)
+            total_amount = _payment_amount_from_unit_prices()
             data['transactions[0][account_id]'] = account_id
             data['transactions[0][date]'] = date
             data['transactions[0][amount]'] = total_amount
@@ -578,10 +601,7 @@ class PosterClient:
 
         def _build_legacy_data(type_map):
             """Build form data in legacy flat format (works for some accounts)"""
-            total_amount = round(sum(
-                float(item['num']) * float(item['price'])
-                for item in ingredients
-            ), 2)
+            total_amount = _payment_amount_from_legacy_sums()
 
             data = {
                 'date': date,
