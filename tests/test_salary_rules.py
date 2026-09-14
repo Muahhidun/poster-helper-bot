@@ -54,6 +54,7 @@ def test_yuri_name_variants(name):
 
 def test_cafe_sushi_salary_is_variable_only_for_yuri():
     assert calculate_cafe_sushi_salary("Юра", 3.5) == 15_175
+    assert calculate_cafe_sushi_salary("Юра", 17.76) == 15_900
     assert calculate_cafe_sushi_salary("Бауржан", 100) == 14_000
 
 
@@ -88,6 +89,49 @@ def test_set_without_piece_count_is_not_silently_counted():
     assert equivalents == 0
     assert details == []
     assert "Сет Семейный" in warnings[0]
+
+
+def test_sushi_gunkan_and_onigiri_salary_equivalents():
+    categories = [
+        {"category_id": 1, "category_name": "Суши"},
+        {"category_id": 2, "category_name": "Гунканы"},
+        {"category_id": 3, "category_name": "Анигири"},
+    ]
+    sales = [
+        {"product_name": "Сяке", "category_id": 1, "count": 2},
+        {"product_name": "Гункан с угрём", "category_id": 2, "count": 3},
+        {"product_name": "Анигири с лососем", "category_id": 3, "count": 2},
+    ]
+
+    equivalents, details, warnings = calculate_roll_equivalents(sales, categories)
+
+    assert equivalents == 4.5
+    assert [detail["kind"] for detail in details] == ["sushi", "gunkan", "onigiri"]
+    assert warnings == []
+    assert calculate_cafe_sushi_salary("Юрий", equivalents) == 15_225
+
+
+@pytest.mark.parametrize(
+    ("product_name", "expected_equivalents", "expected_pieces"),
+    [
+        ("Ролл авторский 10 шт", 1, 8),
+        ("Ролл авторский 13 шт", 2, 16),
+        ("Сет фирменный 17 шт", 2, 16),
+        ("Ролл половинка 4 шт", 0.5, 4),
+    ],
+)
+def test_nonstandard_piece_counts_round_to_salary_portions(
+    product_name, expected_equivalents, expected_pieces
+):
+    category = "Сеты" if product_name.startswith("Сет") else "Роллы"
+    equivalents, details, warnings = calculate_roll_equivalents(
+        [{"product_name": product_name, "category_id": 1, "count": 1}],
+        [{"category_id": 1, "category_name": category}],
+    )
+
+    assert equivalents == expected_equivalents
+    assert details[0]["normalized_pieces"] == expected_pieces
+    assert warnings == []
 
 
 def test_cafe_salary_calculate_endpoint_returns_suggestions():

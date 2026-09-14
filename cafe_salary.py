@@ -32,7 +32,14 @@ def calculate_cafe_sushi_salary(name: str, roll_equivalents: float) -> int:
     """Yuri gets 15k + 50₸ per roll; every other sushi chef gets 14k."""
     if not is_yuri_name(name):
         return 14_000
-    return int(round(15_000 + max(0.0, float(roll_equivalents or 0)) * 50))
+    # Salary additions can only be 25₸ (half a roll) or 50₸ (a full roll).
+    normalized_equivalents = _round_to_half_roll(roll_equivalents)
+    return int(15_000 + normalized_equivalents * 50)
+
+
+def _round_to_half_roll(value: float) -> float:
+    """Round a calculated total to the nearest half-roll, with .25 rounding up."""
+    return math.floor(max(0.0, float(value or 0)) * 2 + 0.5) / 2
 
 
 def _has_stem(text: str, stem: str) -> bool:
@@ -52,10 +59,19 @@ def _piece_count(product_name: str) -> float | None:
     return float(match.group(1).replace(",", "."))
 
 
+def _rounded_roll_pieces(pieces: float) -> float:
+    """Normalize unusual roll/set sizes to the closest multiple of eight."""
+    pieces = max(0.0, float(pieces or 0))
+    if pieces == 4:
+        return 4.0
+    # Halfway values round up: 10 -> 8, 13 -> 16, 17 -> 16.
+    return float(max(8, math.floor((pieces + 4) / 8) * 8))
+
+
 def calculate_roll_equivalents(
     product_sales: Iterable[dict], categories: Iterable[dict]
 ) -> Tuple[float, List[dict], List[str]]:
-    """Convert sold rolls and sets into eight-piece roll equivalents."""
+    """Convert Cafe dishes into full- and half-roll salary equivalents."""
     category_names = {
         str(category.get("category_id") or category.get("id")): (
             category.get("category_name") or category.get("name") or ""
@@ -76,9 +92,43 @@ def calculate_roll_equivalents(
         if sold_count <= 0:
             continue
 
-        is_set = _has_stem(name, "сет") or _has_stem(category_name, "сет")
-        is_roll = _has_stem(name, "рол") or _has_stem(category_name, "рол")
-        if not is_set and not is_roll:
+        name_is_set = _has_stem(name, "сет")
+        name_is_roll = _has_stem(name, "рол")
+        category_is_set = _has_stem(category_name, "сет")
+        category_is_roll = _has_stem(category_name, "рол")
+        is_set = name_is_set or category_is_set
+        is_roll = name_is_roll or category_is_roll
+
+        is_onigiri = (
+            _has_stem(name, "онигир")
+            or _has_stem(name, "анигир")
+            or _has_stem(name, "onigir")
+            or (
+                (
+                    _has_stem(category_name, "онигир")
+                    or _has_stem(category_name, "анигир")
+                    or _has_stem(category_name, "onigir")
+                )
+                and not name_is_set
+                and not name_is_roll
+            )
+        )
+        is_gunkan = (
+            _has_stem(name, "гункан")
+            or (_has_stem(category_name, "гункан") and not name_is_set and not name_is_roll)
+        )
+        is_sushi = (
+            _has_stem(name, "суш")
+            or (
+                _has_stem(category_name, "суш")
+                and not name_is_set
+                and not name_is_roll
+                and not category_is_set
+                and not category_is_roll
+            )
+        )
+
+        if not is_set and not is_roll and not is_onigiri and not is_gunkan and not is_sushi:
             continue
 
         # The piece count may be written either in the product name or in the
@@ -90,7 +140,18 @@ def calculate_roll_equivalents(
             )
             continue
 
-        per_product = (pieces / 8.0) if pieces is not None else 1.0
+        normalized_pieces = pieces
+        if is_onigiri:
+            per_product = pieces if pieces is not None else 1.0
+            kind = "onigiri"
+        elif is_gunkan or is_sushi:
+            per_product = (pieces if pieces is not None else 1.0) * 0.5
+            kind = "gunkan" if is_gunkan else "sushi"
+        else:
+            normalized_pieces = _rounded_roll_pieces(pieces) if pieces is not None else None
+            per_product = (normalized_pieces / 8.0) if normalized_pieces is not None else 1.0
+            kind = "set" if is_set else "roll"
+
         equivalents = sold_count * per_product
         total += equivalents
         details.append({
@@ -98,11 +159,12 @@ def calculate_roll_equivalents(
             "category_name": category_name,
             "sold_count": sold_count,
             "pieces": pieces,
+            "normalized_pieces": normalized_pieces,
             "roll_equivalents": equivalents,
-            "kind": "set" if is_set else "roll",
+            "kind": kind,
         })
 
-    return total, details, warnings
+    return _round_to_half_roll(total), details, warnings
 
 
 class CafeSalaryCalculator:
