@@ -160,7 +160,9 @@ def calculate_roll_equivalents(
             "sold_count": sold_count,
             "pieces": pieces,
             "normalized_pieces": normalized_pieces,
+            "rolls_per_sale": per_product,
             "roll_equivalents": equivalents,
+            "yuri_bonus": equivalents * 50,
             "kind": kind,
         })
 

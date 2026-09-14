@@ -107,6 +107,8 @@ def test_sushi_gunkan_and_onigiri_salary_equivalents():
 
     assert equivalents == 4.5
     assert [detail["kind"] for detail in details] == ["sushi", "gunkan", "onigiri"]
+    assert [detail["rolls_per_sale"] for detail in details] == [0.5, 0.5, 1.0]
+    assert [detail["yuri_bonus"] for detail in details] == [50.0, 75.0, 100.0]
     assert warnings == []
     assert calculate_cafe_sushi_salary("Юрий", equivalents) == 15_225
 

@@ -112,6 +112,24 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
 .sc-salary-total{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-radius:10px;background:#f2f2f7;margin-top:8px;font-size:16px;font-weight:700;color:#1c1c1e}
 .sc-salary-total span:last-child{font-size:20px;font-variant-numeric:tabular-nums}
 
+.sc-sushi-breakdown{margin:-2px 0 12px;border:1px solid #e5e5ea;border-radius:10px;background:#f9f9fb;overflow:hidden}
+.sc-sushi-breakdown summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;cursor:pointer;list-style:none;font-size:13px;font-weight:600;color:#1c1c1e}
+.sc-sushi-breakdown summary::-webkit-details-marker{display:none}
+.sc-sushi-breakdown summary::after{content:'▼';font-size:10px;color:#8e8e93;transition:transform .15s}
+.sc-sushi-breakdown[open] summary::after{transform:rotate(180deg)}
+.sc-sushi-breakdown-body{padding:0 10px 10px}
+.sc-sushi-group{margin-top:8px;border-radius:8px;background:#fff;overflow:hidden;border:1px solid #ededf0}
+.sc-sushi-group-head{display:flex;justify-content:space-between;gap:8px;padding:8px 9px;background:#f2f2f7;font-size:12px;font-weight:700;color:#3a3a3c}
+.sc-sushi-group-total{white-space:nowrap;color:#007aff;font-variant-numeric:tabular-nums}
+.sc-sushi-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 8px;padding:8px 9px;border-top:1px solid #ededf0;font-size:12px}
+.sc-sushi-item:first-of-type{border-top:none}
+.sc-sushi-item-name{min-width:0;color:#1c1c1e;font-weight:600;overflow-wrap:anywhere}
+.sc-sushi-item-count{color:#3a3a3c;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sc-sushi-item-calc{grid-column:1/-1;color:#8e8e93;font-size:11px}
+.sc-sushi-total{margin-top:10px;padding:9px;border-radius:8px;background:#007aff12;color:#1c1c1e;font-size:12px;line-height:1.55}
+.sc-sushi-total strong{color:#007aff}
+.sc-sushi-empty{padding:12px 4px 2px;text-align:center;color:#8e8e93;font-size:12px}
+
 .sc-salary-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #e5e5ea}
 .sc-salary-item:last-child{border-bottom:none}
 .sc-salary-item-role{font-size:13px;color:#8e8e93}
@@ -214,6 +232,11 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
                     <input type="text" id="sal_sushi_amount" inputmode="decimal" placeholder="0" oninput="updateSalaryTotal()">
                 </div>
             </div>
+
+            <details id="sushi-breakdown" class="sc-sushi-breakdown hidden">
+                <summary id="sushi-breakdown-summary">Расшифровка блюд сушиста</summary>
+                <div id="sushi-breakdown-body" class="sc-sushi-breakdown-body"></div>
+            </details>
 
             <div class="sc-salary-role">Повар Сандей</div>
             <div class="sc-salary-row">
@@ -436,6 +459,129 @@ function hideSalBanner() {
     document.getElementById('sal-banner').className = 'sc-banner-sal hidden';
 }
 
+function sushiNumber(value) {
+    return Number(value || 0).toLocaleString('ru-RU', {maximumFractionDigits: 2});
+}
+
+function sushiEscape(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function sushiGroupInfo(item) {
+    var kind = item.kind || 'roll';
+    var pieces = Number(item.pieces || 0);
+    var normalized = Number(item.normalized_pieces || 0);
+
+    if (kind === 'onigiri') return {key: '4-onigiri', label: 'Онигири', order: 400};
+    if (kind === 'sushi') return {key: '5-sushi', label: 'Суши', order: 500};
+    if (kind === 'gunkan') return {key: '6-gunkan', label: 'Гунканы', order: 600};
+    if (kind === 'set') {
+        var setPieces = pieces || normalized;
+        var setLabel = setPieces ? 'Сеты по ' + sushiNumber(setPieces) + ' шт.' : 'Сеты';
+        if (pieces && normalized && pieces !== normalized) {
+            setLabel += ' (в расчёт ' + sushiNumber(normalized) + ')';
+        }
+        return {key: '3-set-' + setPieces + '-' + normalized, label: setLabel, order: 300 + setPieces};
+    }
+
+    var rollPieces = normalized || pieces || 8;
+    var rollOrder = rollPieces === 8 ? 100 : (rollPieces === 4 ? 101 : 110 + rollPieces);
+    var rollLabel = 'Роллы по ' + sushiNumber(rollPieces) + ' шт.';
+    if (pieces && normalized && pieces !== normalized) {
+        rollLabel += ' (в названии ' + sushiNumber(pieces) + ')';
+    }
+    return {key: '1-roll-' + rollPieces + '-' + pieces, label: rollLabel, order: rollOrder};
+}
+
+function renderSushiBreakdown(data) {
+    var panel = document.getElementById('sushi-breakdown');
+    var summary = document.getElementById('sushi-breakdown-summary');
+    var body = document.getElementById('sushi-breakdown-body');
+    if (!panel || !summary || !body) return;
+
+    var details = Array.isArray(data.roll_details) ? data.roll_details.slice() : [];
+    var groups = {};
+    details.forEach(function(item) {
+        var info = sushiGroupInfo(item);
+        if (!groups[info.key]) {
+            groups[info.key] = {label: info.label, order: info.order, items: [], sold: 0, rolls: 0};
+        }
+        groups[info.key].items.push(item);
+        groups[info.key].sold += Number(item.sold_count || 0);
+        groups[info.key].rolls += Number(item.roll_equivalents || 0);
+    });
+
+    var totalRolls = Number(data.roll_equivalents || 0);
+    var rawRolls = details.reduce(function(total, item) {
+        return total + Number(item.roll_equivalents || 0);
+    }, 0);
+    summary.textContent = 'Расшифровка: ' + sushiNumber(totalRolls) + ' рол.';
+    panel.classList.remove('hidden');
+    panel.open = true;
+
+    if (!details.length) {
+        body.innerHTML = '<div class="sc-sushi-empty">Продажи блюд суши-кухни за этот день не найдены.</div>';
+        return;
+    }
+
+    var html = Object.keys(groups)
+        .map(function(key) { return groups[key]; })
+        .sort(function(a, b) { return a.order - b.order || a.label.localeCompare(b.label, 'ru'); })
+        .map(function(group) {
+            var rows = group.items
+                .sort(function(a, b) { return String(a.name).localeCompare(String(b.name), 'ru'); })
+                .map(function(item) {
+                    var sold = Number(item.sold_count || 0);
+                    var perSale = Number(item.rolls_per_sale || (sold ? Number(item.roll_equivalents || 0) / sold : 0));
+                    var rolls = Number(item.roll_equivalents || 0);
+                    return '<div class="sc-sushi-item">' +
+                        '<div class="sc-sushi-item-name">' + sushiEscape(item.name || 'Без названия') + '</div>' +
+                        '<div class="sc-sushi-item-count">' + sushiNumber(sold) + ' прод.</div>' +
+                        '<div class="sc-sushi-item-calc">' + sushiNumber(sold) + ' × ' + sushiNumber(perSale) +
+                            ' = ' + sushiNumber(rolls) + ' рол. · +' + sushiNumber(rolls * 50) + ' ₸</div>' +
+                        '</div>';
+                }).join('');
+            return '<div class="sc-sushi-group">' +
+                '<div class="sc-sushi-group-head"><span>' + sushiEscape(group.label) + '</span>' +
+                '<span class="sc-sushi-group-total">' + sushiNumber(group.sold) + ' прод. · ' + sushiNumber(group.rolls) + ' рол.</span></div>' +
+                rows + '</div>';
+        }).join('');
+
+    var roundingText = Math.abs(rawRolls - totalRolls) > 0.001
+        ? 'По блюдам: ' + sushiNumber(rawRolls) + ' рол.; для зарплаты округлено до ' + sushiNumber(totalRolls) + ' рол.<br>'
+        : '';
+    var totalText = data.is_yuri
+        ? 'База Юры: 15 000 ₸<br>' + roundingText + 'Блюда: ' + sushiNumber(totalRolls) + ' рол. × 50 ₸ = +' + sushiNumber(totalRolls * 50) +
+            ' ₸<br><strong>Итого: ' + sushiNumber(data.sushi_salary) + ' ₸</strong>'
+        : 'Список блюд показан для проверки. Для этого сушиста действует фиксированная зарплата ' + sushiNumber(data.sushi_salary) + ' ₸.';
+    var warningText = Array.isArray(data.warnings) && data.warnings.length
+        ? '<div class="sc-sushi-total" style="background:#ff3b3015;color:#ff3b30">Не учтено: ' + sushiEscape(data.warnings.join(' ')) + '</div>'
+        : '';
+    body.innerHTML = html + '<div class="sc-sushi-total">' + totalText + '</div>' + warningText;
+}
+
+async function loadSushiBreakdownOnly() {
+    try {
+        var r = await fetch(API_BASE + '/salaries/calculate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                date: currentDate,
+                sushi_name: document.getElementById('sal_sushi_name').value.trim()
+            })
+        });
+        var d = await r.json();
+        if (d.success) renderSushiBreakdown(d);
+    } catch(e) {
+        console.error('Sushi breakdown error:', e);
+    }
+}
+
 function goToShiftClosing() {
     document.getElementById('salary-step').classList.add('hidden');
     document.getElementById('shift-closing-step').classList.remove('hidden');
@@ -476,6 +622,7 @@ async function calculateCafeSalarySuggestions(showStatus) {
         document.getElementById('sal_povar_amount').value = d.povar_salary;
         lastSalaryCalcSushiName = document.getElementById('sal_sushi_name').value.trim();
         updateSalaryTotal();
+        renderSushiBreakdown(d);
 
         if (showStatus) {
             var sushiText = d.is_yuri
@@ -586,6 +733,8 @@ function resetSalaryForm() {
     btn.textContent = IS_OWNER ? 'Создать зарплаты' : 'Далее';
     salariesCreated = false;
     lastSalaryCalcSushiName = null;
+    var sushiBreakdown = document.getElementById('sushi-breakdown');
+    if (sushiBreakdown) sushiBreakdown.classList.add('hidden');
 
     // Clear readonly from inputs
     ['sal_cashier_name','sal_cashier_amount','sal_sushi_name','sal_sushi_amount','sal_povar_name','sal_povar_amount'].forEach(function(id) {
@@ -611,6 +760,7 @@ async function loadSalaryDataForDate(date) {
             if (d.salaries_data) {
                 showCreatedSalaries(d.salaries_data);
             }
+            await loadSushiBreakdownOnly();
             return;
         }
     } catch(e) {
