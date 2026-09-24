@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 from account_analytics import KZ_TZ
 from business_analytics import (
+    _current_menu_quality,
     _daily_store_metrics,
     _product_economics,
     collect_business_report,
@@ -39,6 +40,44 @@ def test_product_economics_exposes_zero_cost_sales():
     assert result['theoretical_cogs'] == 200.0
     assert result['zero_cost_sold_products'] == 1
     assert result['zero_cost_revenue_pct'] == 66.67
+
+
+def test_current_menu_quality_ignores_disabled_repaired_and_external_products():
+    products = [
+        {
+            'product_id': '1', 'product_name': 'Отключённый сет', 'cost': '0',
+            'category_name': 'Сеты', 'spots': [{'visible': '0', 'price': '900000'}],
+        },
+        {
+            'product_id': '2', 'product_name': 'Исправленный ролл', 'cost': '120000',
+            'category_name': 'Роллы', 'spots': [{'visible': '1', 'price': '300000'}],
+        },
+        {
+            'product_id': '3', 'product_name': 'Чай WeDrink', 'cost': '0',
+            'category_name': 'WeDrink', 'spots': [{'visible': '1', 'price': '80000'}],
+        },
+        {
+            'product_id': '4', 'product_name': 'Активный ролл', 'cost': '0',
+            'category_name': 'Роллы', 'spots': [{'visible': '1', 'price': '250000'}],
+        },
+    ]
+    sales = [
+        {'product_id': '1', 'product_name': 'Отключённый сет', 'payed_sum': '100000'},
+        {'product_id': '2', 'product_name': 'Исправленный ролл', 'payed_sum': '100000'},
+        {'product_id': '3', 'product_name': 'Чай WeDrink', 'payed_sum': '100000'},
+        {'product_id': '4', 'product_name': 'Активный ролл', 'payed_sum': '100000'},
+        {'product_id': '4', 'product_name': 'Активный ролл', 'payed_sum': '100000'},
+    ]
+
+    result = _current_menu_quality(products, sales, sales)
+
+    assert result['disabled_products_with_zero_current_cost'] == 1
+    assert result['externally_costed_products_with_zero_current_cost'] == 1
+    assert result['active_products_with_zero_current_cost'] == 1
+    assert result['recent']['zero_cost_sold_products'] == 1
+    assert result['recent']['zero_cost_revenue_pct'] == 40.0
+    assert result['recent']['zero_cost_top'][0]['name'] == 'Активный ролл'
+    assert result['recent']['zero_cost_top'][0]['revenue'] == 2000.0
 
 
 class FakePosterClient:

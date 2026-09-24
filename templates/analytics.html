@@ -146,7 +146,9 @@ function kpi(label, value, change, meta, inverse) {
 
 function renderStore(store) {
     const current = store.current, changes = store.changes;
-    const zero = store.product_economics.current.zero_cost_revenue_pct;
+    const menu = store.menu_quality || {};
+    const zero = Number(menu.recent?.zero_cost_revenue_pct || 0);
+    const recentDays = Number(menu.recent_days || 7);
     return `<article class="store-card">
         <div class="store-name"><span>${esc(store.store_name)}</span><span class="delta ${deltaClass(changes.revenue_pct,false)}">${pct(changes.revenue_pct)}</span></div>
         <div class="store-revenue">${money(current.revenue)}</div>
@@ -156,7 +158,7 @@ function renderStore(store) {
             <div><span class="stat-label">Расходы</span><span class="stat-value">${money(current.expenses)}</span></div>
             <div><span class="stat-label">Кассовый результат</span><span class="stat-value">${money(current.cash_result)}</span></div>
         </div>
-        ${zero >= 10 ? `<span class="quality-tag">${zero.toFixed(1)}% выручки без себестоимости</span>` : ''}
+        ${zero >= 10 ? `<span class="quality-tag">${zero.toFixed(1)}% выручки за ${recentDays} дней — активные позиции без себестоимости</span>` : ''}
     </article>`;
 }
 

@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 MONEY = Decimal("0.01")
 TRANSFER_CATEGORY = "переводы"
 SUPPLY_CATEGORY = "поставки"
+RECENT_MENU_DAYS = 7
+# These products are costed through a separate daily expense, not Poster recipes.
+EXTERNAL_COST_CATEGORIES = {"wedrink"}
 
 
 def _decimal(value: Any) -> Decimal:
@@ -214,6 +217,110 @@ def _product_economics(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _product_is_active(product: Dict[str, Any]) -> bool:
+    """Return whether a product is currently available in at least one spot."""
+    if str(product.get("hidden") or "0") == "1" or str(product.get("out") or "0") == "1":
+        return False
+    spots = product.get("spots")
+    if isinstance(spots, list) and spots:
+        return any(
+            str(spot.get("visible") or "0") == "1"
+            and str(spot.get("out") or "0") != "1"
+            for spot in spots
+        )
+    # Some test/legacy Poster responses do not contain per-spot visibility.
+    return True
+
+
+def _product_is_saleable(product: Dict[str, Any]) -> bool:
+    spots = product.get("spots")
+    if isinstance(spots, list) and spots:
+        return any(
+            str(spot.get("visible") or "0") == "1"
+            and _decimal(spot.get("price")) > 0
+            for spot in spots
+        )
+    return _decimal(product.get("price")) > 0 or product.get("price") is None
+
+
+def _uses_external_costing(product: Dict[str, Any]) -> bool:
+    return normalise_text(product.get("category_name")) in EXTERNAL_COST_CATEGORIES
+
+
+def _current_menu_quality(
+    products: Iterable[Dict[str, Any]],
+    recent_sales: Iterable[Dict[str, Any]],
+    latest_sales: Iterable[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Assess today's active menu against fresh sales, not stale historical costs."""
+    products = list(products)
+    active = [row for row in products if _product_is_active(row) and _product_is_saleable(row)]
+    disabled_zero = [
+        row for row in products
+        if not _product_is_active(row) and _tenge(row.get("cost")) == 0
+    ]
+    external_zero = [
+        row for row in active
+        if _uses_external_costing(row) and _tenge(row.get("cost")) == 0
+    ]
+    actionable_zero = [
+        row for row in active
+        if not _uses_external_costing(row) and _tenge(row.get("cost")) == 0
+    ]
+
+    by_id = {str(row.get("product_id") or ""): row for row in actionable_zero}
+    by_name = {
+        normalise_text(row.get("product_name")): row
+        for row in actionable_zero
+        if normalise_text(row.get("product_name"))
+    }
+
+    def sales_quality(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+        valid = [row for row in rows if not _is_deleted(row)]
+        revenue = sum((_tenge(row.get("payed_sum")) for row in valid), Decimal("0"))
+        flagged: Dict[str, Dict[str, Any]] = {}
+        for row in valid:
+            product = by_id.get(str(row.get("product_id") or ""))
+            if product is None:
+                product = by_name.get(normalise_text(row.get("product_name")))
+            if product is not None and _tenge(row.get("payed_sum")) > 0:
+                key = str(product.get("product_id") or normalise_text(product.get("product_name")))
+                item = flagged.setdefault(key, {
+                    "name": product.get("product_name") or row.get("product_name") or "Без названия",
+                    "revenue": Decimal("0"),
+                })
+                item["revenue"] += _tenge(row.get("payed_sum"))
+        zero_revenue = sum((item["revenue"] for item in flagged.values()), Decimal("0"))
+        return {
+            "revenue": _money(revenue),
+            "zero_cost_sold_products": len(flagged),
+            "zero_cost_revenue": _money(zero_revenue),
+            "zero_cost_revenue_pct": _money(zero_revenue * 100 / revenue) if revenue else 0.0,
+            "zero_cost_top": [
+                {
+                    "name": item["name"],
+                    "revenue": _money(item["revenue"]),
+                }
+                for item in sorted(
+                    flagged.values(),
+                    key=lambda value: value["revenue"],
+                    reverse=True,
+                )[:8]
+            ],
+        }
+
+    return {
+        "products": len(products),
+        "active_products": len(active),
+        "active_products_with_zero_current_cost": len(actionable_zero),
+        "disabled_products_with_zero_current_cost": len(disabled_zero),
+        "externally_costed_products_with_zero_current_cost": len(external_zero),
+        "recent_days": RECENT_MENU_DAYS,
+        "recent": sales_quality(recent_sales),
+        "latest_day": sales_quality(latest_sales),
+    }
+
+
 def _movement_quality(
     latest: Iterable[Dict[str, Any]],
     previous: Iterable[Dict[str, Any]],
@@ -285,14 +392,17 @@ async def _fetch_store(
         previous_from = previous_start.strftime("%Y%m%d")
         previous_to = previous_end.strftime("%Y%m%d")
         report_to = report_date.strftime("%Y%m%d")
+        recent_from = (report_date - timedelta(days=RECENT_MENU_DAYS - 1)).strftime("%Y%m%d")
 
-        accounts, transactions, orders, products, current_sales, previous_sales, current_movement, previous_movement = await asyncio.gather(
+        accounts, transactions, orders, products, current_sales, previous_sales, recent_sales, latest_sales, current_movement, previous_movement = await asyncio.gather(
             client.get_accounts(),
             client.get_transactions(date_from=date_from, date_to=date_to),
             client._request("GET", "dash.getTransactions", params={"dateFrom": date_from, "dateTo": report_to}),
             client.get_products(),
             client._request("GET", "dash.getProductsSales", params={"dateFrom": current_from, "dateTo": report_to}),
             client._request("GET", "dash.getProductsSales", params={"dateFrom": previous_from, "dateTo": previous_to}),
+            client._request("GET", "dash.getProductsSales", params={"dateFrom": recent_from, "dateTo": report_to}),
+            client._request("GET", "dash.getProductsSales", params={"dateFrom": report_to, "dateTo": report_to}),
             client.get_ingredient_movements(current_from, report_to),
             client.get_ingredient_movements(previous_from, previous_to),
         )
@@ -316,6 +426,8 @@ async def _fetch_store(
             "products": products,
             "current_sales": current_sales.get("response", []),
             "previous_sales": previous_sales.get("response", []),
+            "recent_sales": recent_sales.get("response", []),
+            "latest_sales": latest_sales.get("response", []),
             "current_movement": current_movement,
             "previous_movement": previous_movement,
         }
@@ -363,12 +475,9 @@ def _store_summary(
             fetched["previous_movement"],
             revenue_ratio,
         ),
-        "menu_quality": {
-            "products": len(fetched["products"]),
-            "products_with_zero_current_cost": sum(
-                1 for row in fetched["products"] if _tenge(row.get("cost")) == 0
-            ),
-        },
+        "menu_quality": _current_menu_quality(
+            fetched["products"], fetched["recent_sales"], fetched["latest_sales"]
+        ),
     }
 
 
@@ -458,20 +567,28 @@ def _build_insights(report: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "question": "Проверьте крупнейшие поставки и разовые расходы этого отдела.",
             })
 
-        product = store["product_economics"]["current"]
-        if product["zero_cost_revenue_pct"] >= 10:
+        menu = store["menu_quality"]
+        recent_menu = menu["recent"]
+        latest_menu = menu["latest_day"]
+        if recent_menu["zero_cost_revenue_pct"] >= 10:
             insights.append({
                 "id": f"zero_cost_{store['store_id']}",
-                "severity": "critical" if product["zero_cost_revenue_pct"] >= 30 else "warning",
-                "title": f"Неполная себестоимость меню: {name}",
+                "severity": "critical" if recent_menu["zero_cost_revenue_pct"] >= 30 else "warning",
+                "title": f"Активные позиции без себестоимости: {name}",
                 "body": (
-                    f"У {product['zero_cost_sold_products']} продававшихся позиций нулевая себестоимость; "
-                    f"это {product['zero_cost_revenue_pct']:.1f}% выручки отдела."
+                    f"За последние {menu['recent_days']} дней продано "
+                    f"{recent_menu['zero_cost_sold_products']} активных позиций без текущей себестоимости; "
+                    f"это {recent_menu['zero_cost_revenue_pct']:.1f}% выручки отдела. "
+                    f"За последний день — {latest_menu['zero_cost_revenue_pct']:.1f}%."
                 ),
                 "evidence": {
-                    "zero_cost_products": product["zero_cost_sold_products"],
-                    "zero_cost_revenue_pct": product["zero_cost_revenue_pct"],
-                    "top": product["zero_cost_top"][:5],
+                    "active_zero_cost_products": menu["active_products_with_zero_current_cost"],
+                    "recent_zero_cost_sold_products": recent_menu["zero_cost_sold_products"],
+                    "recent_zero_cost_revenue_pct": recent_menu["zero_cost_revenue_pct"],
+                    "latest_zero_cost_revenue_pct": latest_menu["zero_cost_revenue_pct"],
+                    "excluded_disabled_products": menu["disabled_products_with_zero_current_cost"],
+                    "excluded_external_cost_products": menu["externally_costed_products_with_zero_current_cost"],
+                    "top": recent_menu["zero_cost_top"][:5],
                 },
                 "confidence": "high",
                 "question": "С каких самых продаваемых позиций начать проверку техкарт?",
@@ -617,7 +734,8 @@ async def collect_business_report(
         "daily_metrics": [*combined_daily, *[row for rows in store_daily for row in rows]],
         "data_limitations": [
             "Фактические остатки ингредиентов не подтверждены инвентаризацией.",
-            "Себестоимость Poster считается теоретической, если техкарты неполны.",
+            "Историческая себестоимость Poster не пересчитывается после последующего исправления техкарты.",
+            "Текущая полнота техкарт проверяется только по активным позициям и свежим продажам за 7 дней.",
             "Расчётный приход ингредиентов не равен их фактическому потреблению за тот же период.",
         ],
     }
@@ -685,11 +803,36 @@ async def generate_ai_commentary(report: Dict[str, Any]) -> Optional[Dict[str, A
     if not api_key or not report.get("success"):
         return None
 
+    ai_stores = []
+    for store in report["stores"]:
+        product = store["product_economics"]
+        ai_stores.append({
+            "store_id": store["store_id"],
+            "store_name": store["store_name"],
+            "current": store["current"],
+            "previous": store["previous"],
+            "changes": store["changes"],
+            "product_economics": {
+                "current": {
+                    "revenue": product["current"]["revenue"],
+                    "theoretical_cogs": product["current"]["theoretical_cogs"],
+                    "theoretical_cogs_pct": product["current"]["theoretical_cogs_pct"],
+                },
+                "previous": {
+                    "revenue": product["previous"]["revenue"],
+                    "theoretical_cogs": product["previous"]["theoretical_cogs"],
+                    "theoretical_cogs_pct": product["previous"]["theoretical_cogs_pct"],
+                },
+            },
+            "menu_quality": store["menu_quality"],
+            "inventory_quality": store["inventory_quality"],
+        })
+
     compact_facts = {
         "report_date": report["report_date"],
         "combined": report["combined"],
         "capital": {key: value for key, value in report["capital"].items() if key != "history"},
-        "stores": report["stores"],
+        "stores": ai_stores,
         "verified_insights": report["insights"],
         "limitations": report["data_limitations"],
     }
@@ -697,6 +840,9 @@ async def generate_ai_commentary(report: Dict[str, Any]) -> Optional[Dict[str, A
 Используй ТОЛЬКО JSON-факты ниже. Не придумывай числа, причины или события.
 Не называй кассовый результат бухгалтерской чистой прибылью.
 Если данные склада ненадёжны, формулируй гипотезу и проси физическую проверку.
+Состояние техкарт оценивай только по menu_quality и verified_insights: там уже исключены
+отключённые позиции, отдельно учитываемые категории и исправленные сегодня техкарты.
+Не называй исторические 30-дневные продажи доказательством текущей неполноты техкарт.
 Выбери один главный приоритет и один конкретный вопрос владельцу.
 Верни только JSON: {"summary":"до 350 символов","priority":"до 180 символов","question":"один вопрос"}.
 
