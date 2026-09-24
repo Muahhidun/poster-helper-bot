@@ -806,6 +806,8 @@ async def generate_ai_commentary(report: Dict[str, Any]) -> Optional[Dict[str, A
     ai_stores = []
     for store in report["stores"]:
         product = store["product_economics"]
+        menu = store["menu_quality"]
+        menu_action_required = menu["recent"]["zero_cost_revenue_pct"] >= 10
         ai_stores.append({
             "store_id": store["store_id"],
             "store_name": store["store_name"],
@@ -824,7 +826,15 @@ async def generate_ai_commentary(report: Dict[str, Any]) -> Optional[Dict[str, A
                     "theoretical_cogs_pct": product["previous"]["theoretical_cogs_pct"],
                 },
             },
-            "menu_quality": store["menu_quality"],
+            "menu_quality": {
+                "action_required": menu_action_required,
+                "recent_days": menu["recent_days"],
+                "recent_zero_cost_revenue_pct": menu["recent"]["zero_cost_revenue_pct"],
+                "latest_zero_cost_revenue_pct": menu["latest_day"]["zero_cost_revenue_pct"],
+                "active_zero_cost_products": menu["active_products_with_zero_current_cost"],
+                "excluded_disabled_products": menu["disabled_products_with_zero_current_cost"],
+                "excluded_external_cost_products": menu["externally_costed_products_with_zero_current_cost"],
+            },
             "inventory_quality": store["inventory_quality"],
         })
 
@@ -843,6 +853,8 @@ async def generate_ai_commentary(report: Dict[str, Any]) -> Optional[Dict[str, A
 Состояние техкарт оценивай только по menu_quality и verified_insights: там уже исключены
 отключённые позиции, отдельно учитываемые категории и исправленные сегодня техкарты.
 Не называй исторические 30-дневные продажи доказательством текущей неполноты техкарт.
+Не рекомендуй исправление техкарт, если menu_quality.action_required=false и среди
+verified_insights нет сигнала с id zero_cost для этого заведения.
 Выбери один главный приоритет и один конкретный вопрос владельцу.
 Верни только JSON: {"summary":"до 350 символов","priority":"до 180 символов","question":"один вопрос"}.
 
