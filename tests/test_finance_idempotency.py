@@ -113,9 +113,57 @@ def test_shift_transfer_retry_skips_operation_already_present_in_poster(app_clie
         assert len(payload['transfers']) == 2
         assert sum(1 for item in payload['transfers'] if item.get('already_exists')) == 1
         mock_client.create_transaction.assert_awaited_once()
-        assert mock_client.create_transaction.call_args.kwargs['comment'] == (
-            'Закрытие смены Pizzburg 30.08.2026 — Каспий → Вольт'
+        assert mock_client.create_transaction.call_args.kwargs['comment'] == 'Каспий → Вольт'
+    finally:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DELETE FROM shift_closings WHERE telegram_user_id = {placeholder} AND date = {placeholder}",
+            (TEST_USER_ID, date),
         )
+        conn.commit()
+        conn.close()
+
+
+def test_shift_transfer_retry_recognizes_previous_readable_comment(app_client, db):
+    from database import DB_TYPE
+
+    _login(app_client)
+    date = '2026-08-31'
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    placeholder = '?' if DB_TYPE == 'sqlite' else '%s'
+    cursor.execute(
+        f"DELETE FROM shift_closings WHERE telegram_user_id = {placeholder} AND date = {placeholder}",
+        (TEST_USER_ID, date),
+    )
+    conn.commit()
+    conn.close()
+
+    db.save_shift_closing(TEST_USER_ID, date, {
+        'collection': 200,
+        'wolt': 100,
+        'halyk': 0,
+        'cashless_diff': 0,
+    })
+
+    mock_client = AsyncMock()
+    mock_client.get_transactions.return_value = [{
+        'type': '2',
+        'comment': 'Закрытие смены Pizzburg 31.08.2026 — Инкассация → Оставил в кассе',
+    }]
+    mock_client.create_transaction.return_value = 992
+
+    try:
+        with patch('poster_client.PosterClient', return_value=mock_client):
+            response = app_client.post('/api/shift-closing/transfers', json={'date': date})
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload['created_count'] == 1
+        assert sum(1 for item in payload['transfers'] if item.get('already_exists')) == 1
+        mock_client.create_transaction.assert_awaited_once()
+        assert mock_client.create_transaction.call_args.kwargs['comment'] == 'Каспий → Вольт'
     finally:
         conn = db._get_connection()
         cursor = conn.cursor()

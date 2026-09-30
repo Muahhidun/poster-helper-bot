@@ -9231,7 +9231,14 @@ def api_cafe_transfers():
                             comment = _shift_operation_comment(
                                 'cafe', date, 'списание продаж WeDrink'
                             )
-                            if legacy_marker in existing_comments or comment in existing_comments:
+                            previous_comment = _legacy_shift_operation_comment(
+                                'cafe', date, 'списание продаж WeDrink'
+                            )
+                            if (
+                                legacy_marker in existing_comments
+                                or previous_comment in existing_comments
+                                or comment in existing_comments
+                            ):
                                 results.append({
                                     'name': 'Расход WeDrink',
                                     'amount': int(round(wedrink_sales)),
@@ -9265,7 +9272,12 @@ def api_cafe_transfers():
                 for t in transfers:
                     legacy_marker = _shift_operation_marker('cafe', date, t['from'], t['to'])
                     comment = _shift_operation_comment('cafe', date, t['name'])
-                    if legacy_marker in existing_comments or comment in existing_comments:
+                    previous_comment = _legacy_shift_operation_comment('cafe', date, t['name'])
+                    if (
+                        legacy_marker in existing_comments
+                        or previous_comment in existing_comments
+                        or comment in existing_comments
+                    ):
                         results.append({
                             'name': t['name'],
                             'amount': t['amount'],
@@ -9376,7 +9388,12 @@ def _shift_operation_marker(scope: str, date: str, account_from: int, account_to
 
 
 def _shift_operation_comment(scope: str, date: str, description: str) -> str:
-    """Human-readable, stable Poster comment for an automatic shift operation."""
+    """Concise Poster comment; the operation date is already visible in Poster."""
+    return description
+
+
+def _legacy_shift_operation_comment(scope: str, date: str, description: str) -> str:
+    """Previous readable format retained only for duplicate detection on retries."""
     department = 'Pizzburg Cafe' if scope == 'cafe' else 'Pizzburg'
     try:
         readable_date = datetime.strptime(date, '%Y-%m-%d').strftime('%d.%m.%Y')
@@ -9482,7 +9499,12 @@ def api_shift_closing_transfers():
                 for t in transfers:
                     legacy_marker = _shift_operation_marker('main', date, t['from'], t['to'])
                     comment = _shift_operation_comment('main', date, t['name'])
-                    if legacy_marker in existing_comments or comment in existing_comments:
+                    previous_comment = _legacy_shift_operation_comment('main', date, t['name'])
+                    if (
+                        legacy_marker in existing_comments
+                        or previous_comment in existing_comments
+                        or comment in existing_comments
+                    ):
                         results.append({
                             'name': t['name'],
                             'amount': t['amount'],
