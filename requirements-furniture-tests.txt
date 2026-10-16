@@ -1,0 +1,17 @@
+# Isolated local test environment only. Not a financial/MCP deployment dependency file.
+-r requirements-furniture-mcp.txt
+pytest==9.1.1
+Flask==3.0.0
+Flask-Limiter==4.1.1
+python-dotenv==1.0.0
+pytz==2024.1
+requests==2.32.5
+psycopg2-binary==2.9.9
+bcrypt==4.2.0
+python-dateutil==2.8.2
+pydantic==2.12.2
+anthropic==0.71.0
+rapidfuzz==3.6.1
+aiohttp==3.9.3
+openai==2.4.0
+PyYAML==6.0.3

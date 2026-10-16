@@ -1,0 +1,7 @@
+# Separate virtualenv/process. Do not install into the financial application's env.
+# Tested with Python 3.12; supported deployment target is Python 3.11+.
+mcp==2.3.0
+PyJWT[crypto]==2.15.1
+httpx2==2.13.1
+cryptography==50.0.2
+uvicorn==0.54.0

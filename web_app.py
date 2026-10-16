@@ -133,6 +133,10 @@ app.permanent_session_lifetime = timedelta(days=30)
 # Telegram Bot Token for WebApp validation
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
+# Optional, isolated archive. Registration performs no I/O and is disabled by default.
+from furniture_reader import register_reader
+register_reader(app, accounting_chat_ids=lambda: config.WHATSAPP_GROUP_ID)
+
 
 # ========================================
 # Authentication: Login/Logout + Middleware
@@ -227,6 +231,10 @@ def health_check():
 def check_auth():
     """Authentication middleware — check session and role for every request"""
     path = request.path
+
+    # This blueprint has its own scoped bearer auth; owner sessions never authorize it.
+    if request.blueprint == 'furniture_reader':
+        return None
 
     # Open paths — no auth needed
     for open_path in OPEN_PATHS:
@@ -1439,6 +1447,8 @@ def get_user_id_from_init_data(init_data: str) -> int:
 @app.before_request
 def validate_api_request():
     """Validate API requests — from Mini App (header) or web session"""
+    if request.blueprint == 'furniture_reader':
+        return None
     if request.path.startswith('/api/'):
         init_data = request.headers.get('X-Telegram-Init-Data', '')
 
@@ -10147,6 +10157,11 @@ def _scheduled_whatsapp_queue_tick():
         processor()
 
 
+def _scheduled_furniture_media_tick():
+    """Independent media jobs; never claim accounting WhatsApp work."""
+    app.extensions['furniture_reader'].media_tick()
+
+
 def start_background_sync():
     """Start background expense sync scheduler"""
     try:
@@ -10183,6 +10198,13 @@ def start_background_sync():
             max_instances=1,
             coalesce=True,
         )
+        if app.extensions['furniture_reader'].settings.enabled:
+            bg_scheduler.add_job(
+                _scheduled_furniture_media_tick,
+                'interval', seconds=10, id='furniture_media',
+                name='Private furniture archive media',
+                replace_existing=True, max_instances=1, coalesce=True,
+            )
         bg_scheduler.start()
         logger.info("✅ Background sync started (expenses + capital + WhatsApp queue)")
     except Exception as e:
@@ -11930,6 +11952,12 @@ def whatsapp_webhook():
             
         sender_data = payload.get('senderData', {})
         chat_id = sender_data.get('chatId', '')
+
+        # Return before any accounting DB/model/queue access for furniture/unknown chats.
+        furniture_result = app.extensions['furniture_reader'].route_webhook(
+            payload, request.headers.get('Authorization', ''))
+        if furniture_result is not None:
+            return furniture_result
         
         # Verify the message comes from the configured group ID
         if WHATSAPP_GROUP_ID:

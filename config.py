@@ -12,6 +12,10 @@ PROJECT_ROOT = Path(__file__).parent
 # Use Railway Volume if available, otherwise use local directories
 # Railway Volume provides persistent storage across deploys
 RAILWAY_VOLUME = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+# An explicitly designated furniture-only volume must not relocate accounting
+# users.db, catalogs, storage or logs when Railway injects its mount variable.
+if RAILWAY_VOLUME and RAILWAY_VOLUME == os.getenv("FURNITURE_VOLUME_MOUNT_PATH"):
+    RAILWAY_VOLUME = None
 if RAILWAY_VOLUME:
     # On Railway: use persistent volume
     DATA_DIR = Path(RAILWAY_VOLUME)
