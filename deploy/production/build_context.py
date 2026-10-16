@@ -9,10 +9,9 @@ _UNCHANGED_FILES = (
     "furniture_mcp/config.py", "furniture_mcp/server.py", "furniture_mcp/http_archive.py",
     "furniture_reader/__init__.py", "furniture_reader/config.py", "furniture_reader/store.py",
     "furniture_reader/http_contract.py", "deploy/production/railway.toml",
+    "deploy/production/Dockerfile", "deploy/production/Dockerfile.dockerignore",
 )
 FILES = {path: path for path in _UNCHANGED_FILES}
-FILES.update({"Dockerfile": "deploy/production/Dockerfile",
-              "Dockerfile.dockerignore": "deploy/production/Dockerfile.dockerignore"})
 
 
 def export_context(destination: Path):

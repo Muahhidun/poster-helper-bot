@@ -62,6 +62,10 @@ class PrivacyBoundary:
         if scope.get("query_string") or len(auth_headers) > 1:
             await JSONResponse({"error": "Invalid request"}, status_code=400)(scope, receive, private_send)
             return
+        if scope.get("path") == "/healthz" and scope.get("method") == "GET":
+            # Process liveness only; never checks or exposes archive data.
+            await JSONResponse({"status": "ok"})(scope, receive, private_send)
+            return
         await self.app(scope, receive, private_send)
 
 
