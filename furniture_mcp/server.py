@@ -207,15 +207,17 @@ def create_app(env: Mapping[str, str] | None = None, *, jwks_client=None, archiv
             allowed_hosts=[parsed.netloc], allowed_origins=[f"https://{parsed.netloc}"],
         ),
     )
-    # Advertise both scopes without globally requiring the attachment scope.
+    # Advertise read scopes and optional renewal without changing tool permissions.
+    # offline_access lets the OAuth client request refresh tokens; tools do not
+    # require it, and it never grants access to archive data by itself.
     # Resource metadata is public SDK output; its scopes describe available grants.
     # The SDK currently derives it from required_scopes, so use a wire response
     # wrapper limited to this public metadata response (no archive data).
-    return ResourceMetadataBoundary(PrivacyBoundary(app), list(SCOPES))
+    return ResourceMetadataBoundary(PrivacyBoundary(app), [*SCOPES, "offline_access"])
 
 
 class ResourceMetadataBoundary:
-    """Augment SDK-generated metadata with the optional per-tool attachment scope."""
+    """Advertise optional OAuth scopes without changing tool authorization."""
 
     def __init__(self, app, scopes):
         self.app, self.scopes = app, scopes

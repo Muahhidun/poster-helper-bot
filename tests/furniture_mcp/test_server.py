@@ -262,13 +262,13 @@ def test_discovery_list_and_call_wire_contracts(wire, version):
     assert {chat["chat_id"] for chat in chats["chats"]} == {CHAT_A, CHAT_B}
 
 
-def test_public_resource_metadata_contains_both_scopes_without_archive_access(wire):
+def test_public_resource_metadata_advertises_read_and_offline_scopes_without_archive_access(wire):
     response = wire.client.get("/.well-known/oauth-protected-resource/mcp")
     assert response.status_code == 200, response.text
     metadata = response.json()
     assert metadata["resource"] == RESOURCE
     assert metadata["authorization_servers"] == [ISSUER]
-    assert metadata["scopes_supported"] == [MESSAGE_SCOPE, ATTACHMENT_SCOPE]
+    assert metadata["scopes_supported"] == [MESSAGE_SCOPE, ATTACHMENT_SCOPE, "offline_access"]
     assert metadata["bearer_methods_supported"] == ["header"]
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
@@ -324,11 +324,25 @@ def test_invalid_rsa_signature_is_denied(wire, signing_key, tokens):
     assert len(wire.jwks_requests) == 1
 
 
-def test_missing_message_scope_is_http_403(wire, tokens):
-    response = wire.rpc("tools/list", token=tokens(scopes=(ATTACHMENT_SCOPE,)))
+@pytest.mark.parametrize("scopes", [
+    (ATTACHMENT_SCOPE,), ("offline_access",), (ATTACHMENT_SCOPE, "offline_access"),
+])
+def test_missing_message_scope_is_http_403(wire, tokens, scopes):
+    response = wire.rpc("tools/list", token=tokens(scopes=scopes))
     assert response.status_code == 403
     assert "insufficient_scope" in response.headers["www-authenticate"]
     assert MESSAGE_SCOPE in response.text
+
+
+def test_offline_scope_preserves_read_access_without_granting_attachment_access(wire, tokens):
+    token = tokens(scopes=(MESSAGE_SCOPE, "offline_access"))
+    assert tool_data(wire.tool("list_chats", token=token))["chats"]
+    response = wire.tool("read_attachment", {"attachment_id": PNG_ID}, token=token)
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "insufficient_scope" in result["_meta"]["mcp/www_authenticate"][0]
+    assert ATTACHMENT_SCOPE in result["_meta"]["mcp/www_authenticate"][0]
+    assert PNG_ID not in response.text
 
 
 @pytest.mark.parametrize("version", [LEGACY, MODERN])
