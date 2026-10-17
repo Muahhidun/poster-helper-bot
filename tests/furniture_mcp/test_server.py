@@ -252,7 +252,8 @@ def test_discovery_list_and_call_wire_contracts(wire, version):
     tools = listed.json()["result"]["tools"]
     assert {tool["name"] for tool in tools} == {"list_chats", "search_messages", "read_message", "read_attachment"}
     for tool in tools:
-        scopes = [MESSAGE_SCOPE, ATTACHMENT_SCOPE] if tool["name"] == "read_attachment" else [MESSAGE_SCOPE]
+        read_scopes = [MESSAGE_SCOPE, ATTACHMENT_SCOPE] if tool["name"] == "read_attachment" else [MESSAGE_SCOPE]
+        scopes = [*read_scopes, "offline_access"]
         assert tool["securitySchemes"] == [{"type": "oauth2", "scopes": scopes}]
         assert tool["_meta"]["securitySchemes"] == tool["securitySchemes"]
         assert tool["annotations"] == {"readOnlyHint": True, "destructiveHint": False,
@@ -357,6 +358,7 @@ def test_attachment_scope_challenge_is_tool_metadata(wire, tokens, version):
     assert len(challenges) == 1 and challenges[0].startswith("Bearer ")
     assert "insufficient_scope" in challenges[0]
     assert MESSAGE_SCOPE in challenges[0] and ATTACHMENT_SCOPE in challenges[0]
+    assert f'scope="{MESSAGE_SCOPE} {ATTACHMENT_SCOPE} offline_access"' in challenges[0]
     assert ORIGIN + "/.well-known/oauth-protected-resource/mcp" in challenges[0]
     assert len(result["content"]) == 1
     assert PNG_ID not in response.text

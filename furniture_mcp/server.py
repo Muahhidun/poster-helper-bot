@@ -22,6 +22,11 @@ from .auth import Auth0Verifier
 from .config import ATTACHMENT_SCOPE, MESSAGE_SCOPE, SCOPES, MCPSettings
 
 
+def _oauth_request_scopes(read_scopes):
+    """Request renewal at consent without requiring it for archive access."""
+    return [*read_scopes, "offline_access"]
+
+
 async def _security_descriptors(ctx, call_next):
     """Public SDK middleware: retain OpenAI's top-level auth extension on the wire.
 
@@ -123,7 +128,7 @@ def create_app(env: Mapping[str, str] | None = None, *, jwks_client=None, archiv
                                   idempotent_hint=True, open_world_hint=False)
 
     def metadata(scopes):
-        return {"securitySchemes": [{"type": "oauth2", "scopes": list(scopes)}]}
+        return {"securitySchemes": [{"type": "oauth2", "scopes": _oauth_request_scopes(scopes)}]}
 
     def guard(scopes):
         token = get_access_token()
@@ -137,7 +142,7 @@ def create_app(env: Mapping[str, str] | None = None, *, jwks_client=None, archiv
         error = "insufficient_scope" if valid else "invalid_token"
         challenge = (f'Bearer resource_metadata="{origin}/.well-known/oauth-protected-resource/mcp", '
                      f'error="{error}", error_description="Archive authorization required", '
-                     f'scope="{" ".join(scopes)}"')
+                     f'scope="{" ".join(_oauth_request_scopes(scopes))}"')
         return _result({"error": "Archive authorization required"}, error=True,
                        meta={"mcp/www_authenticate": [challenge]})
 
@@ -213,7 +218,7 @@ def create_app(env: Mapping[str, str] | None = None, *, jwks_client=None, archiv
     # Resource metadata is public SDK output; its scopes describe available grants.
     # The SDK currently derives it from required_scopes, so use a wire response
     # wrapper limited to this public metadata response (no archive data).
-    return ResourceMetadataBoundary(PrivacyBoundary(app), [*SCOPES, "offline_access"])
+    return ResourceMetadataBoundary(PrivacyBoundary(app), _oauth_request_scopes(SCOPES))
 
 
 class ResourceMetadataBoundary:
