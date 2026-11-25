@@ -87,6 +87,36 @@ def ingredient_distinctive_tokens(text: str) -> set:
     }
 
 
+def _ingredient_token_present(token: str, candidate_tokens: set) -> bool:
+    """A query word is present if it matches a candidate word up to typos/endings."""
+    for candidate in candidate_tokens:
+        if candidate == token:
+            return True
+        if len(token) >= 5 and len(candidate) >= 5 and token[:5] == candidate[:5]:
+            return True
+        if fuzz.ratio(token, candidate) >= 85:
+            return True
+    return False
+
+
+def missing_ingredient_tokens(query: str, candidate: str) -> int:
+    """Count identifying query words that the candidate name does not contain.
+
+    WRatio scores "огурцы равва" equally against "Маринованные огурцы" and
+    "Огурцы свежие Равва". The invoice words are what the supplier wrote, so a
+    candidate that drops one of them ("равва") is the weaker match.
+    """
+    candidate_tokens = ingredient_distinctive_tokens(candidate)
+    return sum(
+        1 for token in ingredient_distinctive_tokens(query)
+        if not _ingredient_token_present(token, candidate_tokens)
+    )
+
+
+# Score penalty for each identifying invoice word missing from a candidate.
+MISSING_TOKEN_PENALTY = 4
+
+
 def ingredient_form_markers(text: str) -> set:
     """Return explicit form markers that should break fuzzy-score ties."""
     tokens = set(re.findall(r'[a-zа-яё]+', normalize_ingredient_text(text)))
@@ -918,11 +948,12 @@ class IngredientMatcher:
                     logger.info(f"      ❌ Rejected alias priority match: '{text_lower}' → '{matched_alias}' (score={score:.1f})")
                     continue
 
+                alias_score = score - MISSING_TOKEN_PENALTY * missing_ingredient_tokens(text_lower, matched_alias)
                 for ingredient_id, account_name in self.aliases[matched_alias]:
                     ingredient = self.ingredients.get((ingredient_id, account_name))
                     if not ingredient:
                         continue
-                    all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], score, account_name))
+                    all_matches.append((ingredient_id, ingredient['name'], ingredient['unit'], alias_score, account_name))
 
         # 4. Fuzzy matching - search in names
         if not any(m[4] == primary_account for m in all_matches):
@@ -987,7 +1018,7 @@ class IngredientMatcher:
                     ingredient = self.ingredients.get((ingredient_id, account_name))
                     if not ingredient:
                         continue
-                    adjusted_score = score
+                    adjusted_score = score - MISSING_TOKEN_PENALTY * missing_ingredient_tokens(text_lower, matched_name)
                     query_markers = ingredient_form_markers(text_lower)
                     candidate_markers = ingredient_form_markers(matched_name)
                     if query_markers and query_markers & candidate_markers:
