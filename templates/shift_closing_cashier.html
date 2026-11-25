@@ -69,6 +69,33 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
 
 @media(max-width:374px){.sc{padding:6px 8px 20px}.sc-field input{font-size:16px;padding:9px 10px}}
 
+/* Cashier expense ledger */
+.sc-tabs{display:flex;gap:4px;padding:4px;background:#e5e5ea;border-radius:12px;margin-bottom:10px}
+.sc-tabs button{flex:1;padding:9px 4px;border:none;border-radius:9px;background:transparent;font-size:14px;font-weight:600;color:#6c6c70;cursor:pointer;font-family:inherit}
+.sc-tabs button.active{background:#fff;color:#1c1c1e;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.lg-add{display:grid;grid-template-columns:110px 1fr;gap:8px;margin-bottom:8px}
+.lg-add .sc-field{margin-bottom:0}
+.lg-add-actions{display:flex;gap:8px}
+.lg-add-actions .sc-btn{margin-bottom:0}
+.lg-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #e5e5ea}
+.lg-item:last-child{border-bottom:none}
+.lg-item.editing{background:#007aff10;border-radius:8px;padding-left:6px;padding-right:6px}
+.lg-item-main{flex:1;min-width:0;cursor:pointer}
+.lg-item-desc{font-size:15px;font-weight:500;color:#1c1c1e;overflow-wrap:anywhere}
+.lg-item-tag{display:inline-block;margin-top:3px;font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:6px}
+.lg-tag-float{background:#34c75920;color:#248a3d}
+.lg-tag-register{background:#ff950022;color:#c46a00}
+.lg-tag-split{background:#5856d620;color:#5856d6}
+.lg-tag-locked{background:#e5e5ea;color:#6c6c70;margin-left:4px}
+.lg-item-amount{font-size:16px;font-weight:700;color:#1c1c1e;font-variant-numeric:tabular-nums;white-space:nowrap}
+.lg-del{border:none;background:none;color:#ff3b30;font-size:20px;line-height:1;padding:4px 6px;cursor:pointer}
+.lg-empty{text-align:center;color:#8e8e93;font-size:14px;padding:14px 0}
+.lg-sum-row{display:flex;justify-content:space-between;padding:6px 0;font-size:15px;color:#3a3a3c}
+.lg-sum-row span:last-child{font-weight:600;font-variant-numeric:tabular-nums}
+.lg-sum-register{margin-top:6px;padding:12px 14px;border-radius:10px;background:#ff950018;font-size:16px;font-weight:700;color:#1c1c1e}
+.lg-sum-register span:last-child{font-size:20px}
+.lg-hint{font-size:12.5px;color:#8e8e93;margin-top:4px}
+
 {% if user_role == 'owner' %}
 .app-nav{background:#fff;border-bottom:1px solid #edf0f2;height:56px;position:sticky;top:0;z-index:100;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
 .app-nav .nav-inner{max-width:1600px;width:100%;height:100%;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between}
@@ -116,6 +143,56 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
         {% endif %}
     </div>
 
+    <div class="sc-tabs">
+        <button type="button" id="tabLedger" class="active" onclick="showTab('ledger')">Расходы за день</button>
+        <button type="button" id="tabClosing" onclick="showTab('closing')">Закрытие смены</button>
+    </div>
+
+    <!-- ==================== Expense ledger (тетрадь расходов) ==================== -->
+    <div id="ledger">
+        <div id="lgBanner" class="sc-banner hidden"></div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Оставлено на закуп</div>
+            <div class="sc-field">
+                <input type="number" id="lg_float" inputmode="numeric" placeholder="Сколько оставили денег на закуп" onchange="saveFloat()">
+                <div class="lg-hint" id="lgFloatHint">Сначала расходы идут из этих денег, потом — из кассы</div>
+            </div>
+        </div>
+
+        <div class="sc-card" id="lgAddCard">
+            <div class="sc-card-title" id="lgAddTitle">Новый расход</div>
+            <div class="lg-add">
+                <div class="sc-field">
+                    <label>Сумма</label>
+                    <input type="number" id="lg_amount" inputmode="numeric" placeholder="0" autocomplete="off">
+                </div>
+                <div class="sc-field">
+                    <label>На что</label>
+                    <input type="text" id="lg_desc" placeholder="Фарш, весы, Кюрдамир…" autocomplete="off" maxlength="200">
+                </div>
+            </div>
+            <div class="lg-add-actions">
+                <button class="sc-btn sc-btn-sec hidden" id="lgCancel" onclick="cancelEdit()">Отмена</button>
+                <button class="sc-btn" id="lgSubmit" onclick="submitEntry()">Добавить</button>
+            </div>
+        </div>
+
+        <div class="sc-card">
+            <div class="sc-card-title">Расходы</div>
+            <div id="lgList"><div class="lg-empty">Пока нет расходов</div></div>
+        </div>
+
+        <div class="sc-card">
+            <div class="lg-sum-row"><span>Потрачено всего</span><span id="lgTotal">0 ₸</span></div>
+            <div class="lg-sum-row"><span>Из закупа</span><span id="lgFromFloat">0 ₸</span></div>
+            <div class="lg-sum-row"><span>Осталось закупных</span><span id="lgFloatLeft">0 ₸</span></div>
+            <div class="lg-sum-row lg-sum-register"><span>Из кассы</span><span id="lgFromRegister">0 ₸</span></div>
+            <div class="lg-hint">«Из кассы» само подставится в закрытие смены</div>
+        </div>
+    </div>
+
+    <div id="closing" class="hidden">
     <!-- Step indicator -->
     <div class="sc-step-indicator">
         <div class="sc-step-dot active" id="dot1"></div>
@@ -222,7 +299,8 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
             <div class="sc-card-title">Расходы</div>
             <div class="sc-field">
                 <label>Расходы с кассы</label>
-                <input type="number" id="sd_expenses" inputmode="decimal" placeholder="0" value="0">
+                <input type="number" id="sd_expenses" inputmode="decimal" placeholder="0" value="0" oninput="expensesTouched = true">
+                <div class="lg-hint hidden" id="sdExpensesHint"></div>
             </div>
         </div>
 
@@ -237,6 +315,7 @@ body{background:#f2f2f7;font-family:'Inter',-apple-system,BlinkMacSystemFont,'SF
             <div style="font-size:14px;color:#8e8e93">Спасибо! Данные появятся на странице закрытия смены.</div>
         </div>
     </div>
+    </div><!-- /closing -->
 </div>
 
 <script>
@@ -248,10 +327,184 @@ let cashierCount = 2;
 let assistantTime = '10:00';
 let calculatedSalaries = null;
 
+// ==================== Expense ledger ====================
+
+let ledger = null;
+let editingId = null;
+let expensesTouched = false;
+
+function showTab(name) {
+    document.getElementById('ledger').classList.toggle('hidden', name !== 'ledger');
+    document.getElementById('closing').classList.toggle('hidden', name !== 'closing');
+    document.getElementById('tabLedger').classList.toggle('active', name === 'ledger');
+    document.getElementById('tabClosing').classList.toggle('active', name === 'closing');
+    if (name === 'closing') loadLedger();
+    window.scrollTo(0, 0);
+}
+
+function lgBanner(msg, type) {
+    var b = document.getElementById('lgBanner');
+    if (!msg) { b.className = 'sc-banner hidden'; return; }
+    b.textContent = msg;
+    b.className = 'sc-banner ' + (type || 'info');
+}
+
+async function ledgerRequest(url, options) {
+    var d;
+    try {
+        var r = await fetch(url, options);
+        d = await r.json();
+    } catch (e) {
+        lgBanner('Нет связи с сайтом. Попробуйте ещё раз.', 'error');
+        return null;
+    }
+    if (!d.success) {
+        lgBanner(d.error || 'Ошибка', 'error');
+        return null;
+    }
+    lgBanner('');
+    renderLedger(d);
+    return d;
+}
+
+function jsonOptions(method, body) {
+    return {method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+}
+
+async function loadLedger() {
+    await ledgerRequest(API_BASE + '/expenses');
+}
+
+async function saveFloat() {
+    var v = document.getElementById('lg_float').value;
+    await ledgerRequest(API_BASE + '/expenses/float', jsonOptions('POST', {amount: v}));
+}
+
+function ledgerTag(e) {
+    var html;
+    if (e.bucket === 'float') html = '<span class="lg-item-tag lg-tag-float">из закупа</span>';
+    else if (e.bucket === 'register') html = '<span class="lg-item-tag lg-tag-register">из кассы</span>';
+    else html = '<span class="lg-item-tag lg-tag-split">закуп ' + fmt(e.from_float) + ' + касса ' + fmt(e.from_register) + '</span>';
+    if (e.locked) html += '<span class="lg-item-tag lg-tag-locked">✓ проведён</span>';
+    return html;
+}
+
+function renderLedger(d) {
+    ledger = d;
+    var floatInput = document.getElementById('lg_float');
+    if (document.activeElement !== floatInput) {
+        floatInput.value = (d.purchase_float === null || d.purchase_float === undefined) ? '' : Math.round(d.purchase_float * 100) / 100;
+    }
+    var hint = document.getElementById('lgFloatHint');
+    if ((d.purchase_float === null || d.purchase_float === undefined) && d.entries.length) {
+        hint.textContent = 'Не указано, сколько оставили на закуп — пока все расходы считаются из кассы';
+        hint.style.color = '#c46a00';
+    } else {
+        hint.textContent = 'Сначала расходы идут из этих денег, потом — из кассы';
+        hint.style.color = '';
+    }
+
+    var list = document.getElementById('lgList');
+    if (!d.entries.length) {
+        list.innerHTML = '<div class="lg-empty">Пока нет расходов</div>';
+    } else {
+        list.innerHTML = d.entries.map(function(e) {
+            var canEdit = !IS_OWNER && !e.locked;
+            return '<div class="lg-item' + (e.id === editingId ? ' editing' : '') + '">' +
+                '<div class="lg-item-main"' + (canEdit ? ' onclick="startEdit(' + e.id + ')"' : '') + '>' +
+                    '<div class="lg-item-desc">' + escHtml(e.description) + '</div>' + ledgerTag(e) +
+                '</div>' +
+                '<div class="lg-item-amount">' + fmt(e.amount) + ' ₸</div>' +
+                (canEdit ? '<button class="lg-del" title="Удалить" onclick="deleteEntry(' + e.id + ')">×</button>' : '') +
+            '</div>';
+        }).join('');
+    }
+
+    document.getElementById('lgTotal').textContent = fmt(d.total) + ' ₸';
+    document.getElementById('lgFromFloat').textContent = fmt(d.from_float) + ' ₸';
+    document.getElementById('lgFloatLeft').textContent = fmt(d.float_left) + ' ₸';
+    document.getElementById('lgFromRegister').textContent = fmt(d.from_register) + ' ₸';
+
+    // Подставляем «Расходы с кассы» в закрытие смены
+    var sdHint = document.getElementById('sdExpensesHint');
+    if (d.entries.length) {
+        sdHint.textContent = 'По расходам за день из кассы: ' + fmt(d.from_register) + ' ₸';
+        sdHint.classList.remove('hidden');
+    } else {
+        sdHint.classList.add('hidden');
+    }
+    if (!IS_OWNER && !expensesTouched && d.entries.length) {
+        document.getElementById('sd_expenses').value = Math.round(d.from_register * 100) / 100;
+    }
+}
+
+async function submitEntry() {
+    var amountEl = document.getElementById('lg_amount');
+    var descEl = document.getElementById('lg_desc');
+    var amount = parseFloat(amountEl.value);
+    var description = descEl.value.trim();
+    if (!(amount > 0)) { lgBanner('Введите сумму', 'error'); amountEl.focus(); return; }
+    if (!description) { lgBanner('Напишите, на что потратили', 'error'); descEl.focus(); return; }
+
+    var btn = document.getElementById('lgSubmit');
+    btn.disabled = true;
+    var body = {amount: amount, description: description};
+    var d = editingId
+        ? await ledgerRequest(API_BASE + '/expenses/' + editingId, jsonOptions('PUT', body))
+        : await ledgerRequest(API_BASE + '/expenses', jsonOptions('POST', body));
+    btn.disabled = false;
+    if (d) {
+        cancelEdit();
+        amountEl.focus();
+    }
+}
+
+function startEdit(id) {
+    var e = ledger && ledger.entries.find(function(x) { return x.id === id; });
+    if (!e) return;
+    editingId = id;
+    document.getElementById('lg_amount').value = e.amount;
+    document.getElementById('lg_desc').value = e.description;
+    document.getElementById('lgAddTitle').textContent = 'Изменить расход';
+    document.getElementById('lgSubmit').textContent = 'Сохранить';
+    document.getElementById('lgCancel').classList.remove('hidden');
+    renderLedger(ledger);
+    document.getElementById('lgAddCard').scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
+function cancelEdit() {
+    editingId = null;
+    document.getElementById('lg_amount').value = '';
+    document.getElementById('lg_desc').value = '';
+    document.getElementById('lgAddTitle').textContent = 'Новый расход';
+    document.getElementById('lgSubmit').textContent = 'Добавить';
+    document.getElementById('lgCancel').classList.add('hidden');
+    if (ledger) renderLedger(ledger);
+}
+
+async function deleteEntry(id) {
+    var e = ledger && ledger.entries.find(function(x) { return x.id === id; });
+    if (!e) return;
+    if (!confirm('Удалить расход «' + e.description + '» на ' + fmt(e.amount) + ' ₸?')) return;
+    var d = await ledgerRequest(API_BASE + '/expenses/' + id, {method: 'DELETE'});
+    if (d && editingId === id) cancelEdit();
+}
+
 // ==================== Init ====================
 
 document.addEventListener('DOMContentLoaded', function() {
     loadLastEmployees();
+    loadLedger();
+
+    document.getElementById('lg_amount').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lg_desc').focus(); }
+    });
+    document.getElementById('lg_desc').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); submitEntry(); }
+    });
+    if (IS_OWNER) {
+        document.getElementById('lgAddCard').style.display = 'none';
+    }
 
     if (IS_OWNER) {
         // Owner: show all steps at once, readonly
