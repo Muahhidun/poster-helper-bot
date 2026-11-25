@@ -848,6 +848,9 @@ class UserDatabase:
         # Run migration for cashier access tokens and cashier_shift_data
         self._migrate_cashier_access()
 
+        # Cashier expense ledger (purchase float + expense_drafts.created_by)
+        self._migrate_cashier_expense_ledger()
+
         # Run migration for web_users (auth system)
         self._migrate_web_users()
 
@@ -4407,7 +4410,8 @@ class UserDatabase:
         is_income: bool = False,
         completion_status: str = "pending",
         poster_amount: float = None,
-        created_at: str = None
+        created_at: str = None,
+        created_by: str = None
     ) -> Optional[int]:
         """
         Создать один черновик расхода (для ручного ввода или синхронизации из Poster)
@@ -4466,6 +4470,13 @@ class UserDatabase:
                         RETURNING id
                     """, (telegram_user_id, amount, description, expense_type, category, source, account_id, poster_account_id, poster_transaction_id, is_income_int, completion_status, poster_amount))
                 draft_id = cursor.fetchone()[0]
+
+            if created_by:
+                ph = "?" if DB_TYPE == "sqlite" else "%s"
+                cursor.execute(
+                    f"UPDATE expense_drafts SET created_by = {ph} WHERE id = {ph}",
+                    (created_by, draft_id)
+                )
 
             conn.commit()
             conn.close()
@@ -5544,6 +5555,117 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to get cashier last employees: {e}")
             return None
+
+    # ==================== Cashier Expense Ledger ====================
+    # Электронная «тетрадь расходов» кассира: сумма, оставленная на закуп,
+    # и расходы за день. Каждый расход — обычный expense_draft (source='cash',
+    # created_by='cashier'), поэтому он сразу виден владельцу в «Наличке».
+
+    def _migrate_cashier_expense_ledger(self):
+        """Create cashier_purchase_float table and expense_drafts.created_by column"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if DB_TYPE == "sqlite":
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cashier_purchase_float (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_user_id INTEGER NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        amount REAL NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, poster_account_id, date)
+                    )
+                """)
+                try:
+                    cursor.execute("ALTER TABLE expense_drafts ADD COLUMN created_by TEXT")
+                except Exception:
+                    pass  # Column already exists
+            else:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS cashier_purchase_float (
+                        id SERIAL PRIMARY KEY,
+                        telegram_user_id BIGINT NOT NULL,
+                        poster_account_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        amount REAL NOT NULL DEFAULT 0,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(telegram_user_id, poster_account_id, date)
+                    )
+                """)
+                cursor.execute("ALTER TABLE expense_drafts ADD COLUMN IF NOT EXISTS created_by TEXT")
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Cashier expense ledger migration failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            conn.close()
+
+    def get_cashier_purchase_float(self, telegram_user_id: int, poster_account_id: int, date: str) -> Optional[float]:
+        """Сумма, оставленная кассиру на закуп за дату (None — ещё не вводили)"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                SELECT amount FROM cashier_purchase_float
+                WHERE telegram_user_id = {ph} AND poster_account_id = {ph} AND date = {ph}
+            """, (telegram_user_id, poster_account_id, date))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            value = row['amount'] if isinstance(row, dict) else row[0]
+            return float(value) if value is not None else None
+        finally:
+            conn.close()
+
+    def set_cashier_purchase_float(self, telegram_user_id: int, poster_account_id: int, date: str, amount: float) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            ph = "?" if DB_TYPE == "sqlite" else "%s"
+            cursor.execute(f"""
+                INSERT INTO cashier_purchase_float (telegram_user_id, poster_account_id, date, amount, updated_at)
+                VALUES ({ph}, {ph}, {ph}, {ph}, CURRENT_TIMESTAMP)
+                ON CONFLICT(telegram_user_id, poster_account_id, date)
+                DO UPDATE SET amount = excluded.amount, updated_at = CURRENT_TIMESTAMP
+            """, (telegram_user_id, poster_account_id, date, amount))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save cashier purchase float: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_cashier_expense_entries(self, telegram_user_id: int, poster_account_id: int, date: str) -> list:
+        """Расходы, внесённые кассиром за дату, в порядке ввода"""
+        conn = self._get_connection()
+        try:
+            if DB_TYPE == "sqlite":
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM expense_drafts
+                    WHERE telegram_user_id = ? AND poster_account_id = ?
+                      AND created_by = 'cashier' AND substr(created_at, 1, 10) = ?
+                    ORDER BY created_at ASC, id ASC
+                """, (telegram_user_id, poster_account_id, date))
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT * FROM expense_drafts
+                WHERE telegram_user_id = %s AND poster_account_id = %s
+                  AND created_by = 'cashier' AND CAST(created_at AS DATE) = %s
+                ORDER BY created_at ASC, id ASC
+            """, (telegram_user_id, poster_account_id, date))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
     # ==================== Web Users (Auth) Methods ====================
 

@@ -9912,6 +9912,211 @@ def api_cashier_shift_data_status():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ==================== Cashier Expense Ledger ====================
+# Электронная тетрадь расходов кассира. Кассир вводит сумму, оставленную на
+# закуп, и в течение дня — расходы (сумма + описание). Расходы сразу попадают
+# владельцу в «Наличку» на /expenses; категорию и тип владелец ставит сам.
+# Когда закупные деньги заканчиваются, остаток расходов считается «из кассы» —
+# эта сумма подставляется в «Расходы с кассы» при закрытии смены.
+
+def _cashier_business_date():
+    from datetime import timedelta
+    kz_now = _kz_now()
+    day = kz_now if kz_now.hour >= 6 else kz_now - timedelta(days=1)
+    return day.strftime('%Y-%m-%d')
+
+
+def _cashier_entry_locked(draft):
+    """Владелец уже отправил расход в Poster — кассир не может его менять."""
+    return (
+        (draft.get('status') or 'pending') != 'pending'
+        or (draft.get('completion_status') or 'pending') != 'pending'
+        or bool(draft.get('poster_transaction_id'))
+    )
+
+
+def _parse_ledger_amount(value):
+    try:
+        amount = round(float(str(value).replace(' ', '').replace(',', '.')), 2)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0 or amount > 100_000_000:
+        return None
+    return amount
+
+
+def _build_cashier_ledger(purchase_float, drafts):
+    """Разложить расходы по порядку ввода: сначала из закупа, потом из кассы."""
+    float_amount = float(purchase_float or 0)
+    remaining = float_amount
+    entries = []
+    total = 0.0
+    from_register = 0.0
+    for d in drafts:
+        amount = float(d.get('amount') or 0)
+        total += amount
+        part_float = min(amount, max(remaining, 0.0))
+        part_register = amount - part_float
+        remaining -= part_float
+        from_register += part_register
+        if part_register <= 0:
+            bucket = 'float'
+        elif part_float <= 0:
+            bucket = 'register'
+        else:
+            bucket = 'split'
+        entries.append({
+            'id': d['id'],
+            'amount': amount,
+            'description': d.get('description') or '',
+            'bucket': bucket,
+            'from_float': round(part_float, 2),
+            'from_register': round(part_register, 2),
+            'locked': _cashier_entry_locked(d),
+            'created_at': str(d.get('created_at') or ''),
+        })
+    return {
+        'purchase_float': purchase_float,
+        'entries': entries,
+        'total': round(total, 2),
+        'from_float': round(min(total, float_amount), 2),
+        'float_left': round(max(float_amount - total, 0.0), 2),
+        'from_register': round(from_register, 2),
+    }
+
+
+def _cashier_ledger_response(info, date_str):
+    db = get_database()
+    tid = info['telegram_user_id']
+    pid = info['poster_account_id']
+    ledger = _build_cashier_ledger(
+        db.get_cashier_purchase_float(tid, pid, date_str),
+        db.get_cashier_expense_entries(tid, pid, date_str),
+    )
+    return jsonify({'success': True, 'date': date_str, **ledger})
+
+
+def _get_cashier_ledger_draft(info, draft_id):
+    db = get_database()
+    draft = db.get_expense_draft(draft_id)
+    if (not draft
+            or draft.get('telegram_user_id') != info['telegram_user_id']
+            or draft.get('poster_account_id') != info['poster_account_id']
+            or draft.get('created_by') != 'cashier'):
+        return None, (jsonify({'success': False, 'error': 'Расход не найден'}), 404)
+    if _cashier_entry_locked(draft):
+        return None, (jsonify({'success': False, 'error': 'Расход уже проведён в Poster, изменить нельзя'}), 409)
+    return draft, None
+
+
+@app.route('/api/cashier/expenses', methods=['GET'])
+def api_cashier_expenses_list():
+    info = resolve_cashier_info()
+    return _cashier_ledger_response(info, _cashier_business_date())
+
+
+@app.route('/api/cashier/expenses/float', methods=['POST'])
+def api_cashier_expenses_float():
+    info = resolve_cashier_info()
+    data = request.get_json(silent=True) or {}
+    raw = data.get('amount')
+    if raw in (None, ''):
+        amount = 0.0
+    else:
+        try:
+            amount = round(float(str(raw).replace(' ', '').replace(',', '.')), 2)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Неверная сумма'}), 400
+        if amount < 0 or amount > 100_000_000:
+            return jsonify({'success': False, 'error': 'Неверная сумма'}), 400
+    date_str = _cashier_business_date()
+    if not get_database().set_cashier_purchase_float(
+            info['telegram_user_id'], info['poster_account_id'], date_str, amount):
+        return jsonify({'success': False, 'error': 'Не удалось сохранить'}), 500
+    return _cashier_ledger_response(info, date_str)
+
+
+@app.route('/api/cashier/expenses', methods=['POST'])
+def api_cashier_expenses_add():
+    info = resolve_cashier_info()
+    data = request.get_json(silent=True) or {}
+    amount = _parse_ledger_amount(data.get('amount'))
+    description = str(data.get('description') or '').strip()[:200]
+    if amount is None:
+        return jsonify({'success': False, 'error': 'Введите сумму'}), 400
+    if not description:
+        return jsonify({'success': False, 'error': 'Напишите, на что потратили'}), 400
+
+    date_str = _cashier_business_date()
+    kz_now = _kz_now()
+    # Запись после полуночи остаётся в текущей смене
+    time_part = kz_now.strftime('%H:%M:%S') if date_str == kz_now.strftime('%Y-%m-%d') else '23:59:59'
+    draft_id = get_database().create_expense_draft(
+        telegram_user_id=info['telegram_user_id'],
+        amount=amount,
+        description=description,
+        expense_type='transaction',
+        source='cash',
+        poster_account_id=info['poster_account_id'],
+        created_at=f"{date_str} {time_part}",
+        created_by='cashier',
+    )
+    if not draft_id:
+        return jsonify({'success': False, 'error': 'Не удалось сохранить расход'}), 500
+    logger.info(f"[CASHIER LEDGER] +{amount} '{description}' (draft #{draft_id}, account {info['poster_account_id']})")
+    return _cashier_ledger_response(info, date_str)
+
+
+@app.route('/api/cashier/expenses/<int:draft_id>', methods=['PUT'])
+def api_cashier_expenses_update(draft_id):
+    info = resolve_cashier_info()
+    draft, error = _get_cashier_ledger_draft(info, draft_id)
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    fields = {}
+    if 'amount' in data:
+        amount = _parse_ledger_amount(data.get('amount'))
+        if amount is None:
+            return jsonify({'success': False, 'error': 'Введите сумму'}), 400
+        fields['amount'] = amount
+    if 'description' in data:
+        description = str(data.get('description') or '').strip()[:200]
+        if not description:
+            return jsonify({'success': False, 'error': 'Напишите, на что потратили'}), 400
+        fields['description'] = description
+    if not fields:
+        return jsonify({'success': False, 'error': 'Нечего сохранять'}), 400
+
+    db = get_database()
+    if not db.update_expense_draft(draft_id, telegram_user_id=info['telegram_user_id'], **fields):
+        return jsonify({'success': False, 'error': 'Не удалось сохранить'}), 500
+    # Связанный черновик поставки должен знать новую сумму
+    if 'amount' in fields and draft.get('expense_type') == 'supply':
+        linked = next((s for s in db.get_supply_drafts(info['telegram_user_id'], status='pending')
+                       if s.get('linked_expense_draft_id') == draft_id), None)
+        if linked:
+            db.update_supply_draft(linked['id'], telegram_user_id=info['telegram_user_id'],
+                                   total_sum=fields['amount'])
+    return _cashier_ledger_response(info, _cashier_business_date())
+
+
+@app.route('/api/cashier/expenses/<int:draft_id>', methods=['DELETE'])
+def api_cashier_expenses_delete(draft_id):
+    info = resolve_cashier_info()
+    draft, error = _get_cashier_ledger_draft(info, draft_id)
+    if error:
+        return error
+    if draft.get('expense_type') == 'supply':
+        # Владелец уже начал оформлять поставку — не теряем его работу
+        return jsonify({'success': False,
+                        'error': 'Этот расход уже оформлен как поставка. Попросите владельца удалить его.'}), 409
+    db = get_database()
+    if not db.delete_expense_draft(draft_id, telegram_user_id=info['telegram_user_id']):
+        return jsonify({'success': False, 'error': 'Не удалось удалить'}), 500
+    return _cashier_ledger_response(info, _cashier_business_date())
+
+
 # ========================================
 # Background Expense Sync (every 5 min)
 # ========================================
