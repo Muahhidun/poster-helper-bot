@@ -938,6 +938,64 @@ def normalize_supply_item_measurements(
     matching_rule: Optional[Dict] = None,
     default_price: Optional[float] = None,
 ) -> Tuple[float, float, str, float, str, float]:
+    """Normalize packaging, then undo an obvious extra ×10/×100 on quantity.
+
+    Example from a real invoice: 3 canisters of frying oil (10 l each) for
+    27 000 ₸ became 300 l × 90 ₸ instead of 30 l × 900 ₸. The row total is
+    still right, so only the learned unit price can reveal the error.
+    """
+    result = _normalize_supply_item_measurements_once(
+        item, matched_name, matching_rule=matching_rule, default_price=default_price,
+    )
+    pack_factors = []
+    for value in (item.get('pack_size'), (matching_rule or {}).get('coefficient')):
+        try:
+            if value not in (None, ''):
+                pack_factors.append(float(value))
+        except (TypeError, ValueError):
+            pass
+    return repair_supply_scale_error(result, default_price, pack_factors, name=item.get('name') or matched_name)
+
+
+def repair_supply_scale_error(result, default_price, pack_factors=(), name: str = ''):
+    """Fix a quantity inflated by an exact factor, keeping the row total.
+
+    Applies only when the price is lower than the learned unit price by
+    almost exactly 10/100/1000 or by the pack size, and the corrected price
+    lands near the learned one. Anything less clear-cut is left unchanged.
+    """
+    qty, price, unit, parsed_qty, parsed_unit, parsed_price = result
+    try:
+        learned = float(default_price) if default_price not in (None, '') else 0.0
+    except (TypeError, ValueError):
+        return result
+    if learned <= 0 or price <= 0 or qty <= 0:
+        return result
+    ratio = learned / price
+    if ratio < 1.5:
+        return result
+    factors = {10.0, 100.0, 1000.0} | {float(f) for f in pack_factors if f and float(f) > 1}
+    for factor in sorted(factors):
+        if abs(ratio - factor) / factor > 0.1:
+            continue
+        fixed_price = price * factor
+        if abs(fixed_price - learned) / learned > 0.35:
+            continue
+        fixed_qty = qty / factor
+        logger.info(
+            "⚖️ Repaired ×%g quantity for '%s': %s × %s -> %s × %s (learned price %s)",
+            factor, name, qty, price, fixed_qty, fixed_price, learned,
+        )
+        return fixed_qty, fixed_price, unit, parsed_qty, parsed_unit, parsed_price
+    return result
+
+
+def _normalize_supply_item_measurements_once(
+    item: Dict,
+    matched_name: str,
+    matching_rule: Optional[Dict] = None,
+    default_price: Optional[float] = None,
+) -> Tuple[float, float, str, float, str, float]:
     """Apply a packaging conversion once while preserving the invoice total.
 
     Gemini now returns the original invoice values and the pack size whenever

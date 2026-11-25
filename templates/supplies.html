@@ -406,6 +406,20 @@ h1 { margin: 0; }
     color: #555;
 }
 
+/* Цена сильно отличается от прошлой — вероятно, не тот товар или не то количество */
+tr.price-suspect td {
+    background: #fff4f2;
+}
+
+tr.price-suspect .last-price-hint {
+    color: #d92d20;
+    font-weight: 700;
+}
+
+tr.price-suspect .item-input.price {
+    border-color: #f04438;
+}
+
 .ingredient-name {
     font-weight: 500;
 }
@@ -1709,8 +1723,10 @@ function renderItems(draftId) {
                  ${subTextHtml}
                </div>`;
 
+        const suspect = isPriceSuspect(item.price_per_unit, lastPrice);
+
         return `
-        <tr data-item-id="${item.id}">
+        <tr data-item-id="${item.id}" data-last-price="${lastPrice || ''}" class="${suspect ? 'price-suspect' : ''}">
             <td>
                 ${nameHtml}
             </td>
@@ -1726,7 +1742,7 @@ function renderItems(draftId) {
                     <input type="text" class="item-input price" value="${item.price_per_unit || 0}"
                            data-item-id="${item.id}" data-draft-id="${draftId}" placeholder="0">
                     ${lastPrice ?
-                        `<span class="last-price-hint" data-price="${lastPrice}" title="Последняя цена">${lastPrice}</span>` : ''}
+                        `<span class="last-price-hint" data-price="${lastPrice}" title="${suspect ? 'Цена сильно отличается от прошлой — проверьте товар и количество' : 'Последняя цена'}">${suspect ? '⚠ ' : ''}${lastPrice}</span>` : ''}
                 </div>
             </td>
             <td>
@@ -1801,6 +1817,7 @@ function renderItems(draftId) {
                 item.price_per_unit = price;
                 item.total = sum;
             }
+            updatePriceSuspect(row, price);
 
             // Update server
             const response = await fetch(`/supplies/update-item/${itemId}`, {
@@ -1927,6 +1944,25 @@ async function updateSupplyDraft(draftId, fields) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(fields)
     });
+}
+
+// Цена отличается от прошлой больше чем на 35% — строку стоит проверить
+function isPriceSuspect(price, lastPrice) {
+    const p = parseFloat(price);
+    const last = parseFloat(lastPrice);
+    if (!(p > 0) || !(last > 0)) return false;
+    return Math.abs(p - last) / last > 0.35;
+}
+
+function updatePriceSuspect(row, price) {
+    if (!row) return;
+    const suspect = isPriceSuspect(price, row.dataset.lastPrice);
+    row.classList.toggle('price-suspect', suspect);
+    const hint = row.querySelector('.last-price-hint');
+    if (hint) {
+        hint.textContent = (suspect ? '⚠ ' : '') + hint.dataset.price;
+        hint.title = suspect ? 'Цена сильно отличается от прошлой — проверьте товар и количество' : 'Последняя цена';
+    }
 }
 
 function updateTotals() {
