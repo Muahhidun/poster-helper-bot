@@ -938,12 +938,15 @@ def normalize_supply_item_measurements(
     matching_rule: Optional[Dict] = None,
     default_price: Optional[float] = None,
     item_type: Optional[str] = None,
+    reference_price: Optional[float] = None,
 ) -> Tuple[float, float, str, float, str, float]:
     """Normalize packaging, then undo an obvious extra ×10/×100 on quantity.
 
     Example from a real invoice: 3 canisters of frying oil (10 l each) for
     27 000 ₸ became 300 l × 90 ₸ instead of 30 l × 900 ₸. The row total is
     still right, so only the learned unit price can reveal the error.
+    ``reference_price`` (the last supply price of this exact item) is used
+    for that check when no learned price habit exists.
     """
     result = _normalize_supply_item_measurements_once(
         item, matched_name, matching_rule=matching_rule, default_price=default_price,
@@ -956,7 +959,8 @@ def normalize_supply_item_measurements(
                 pack_factors.append(float(value))
         except (TypeError, ValueError):
             pass
-    return repair_supply_scale_error(result, default_price, pack_factors, name=item.get('name') or matched_name)
+    learned = default_price if default_price not in (None, '') else reference_price
+    return repair_supply_scale_error(result, learned, pack_factors, name=item.get('name') or matched_name)
 
 
 def repair_supply_scale_error(result, default_price, pack_factors=(), name: str = ''):
@@ -1059,6 +1063,11 @@ def _normalize_supply_item_measurements_once(
     if original_qty_value not in (None, '') and pack_size and pack_size > 0:
         target_unit = (item.get('target_unit') or unit or 'шт').strip().lower()
         normalized_target = metric_unit_aliases.get(target_unit)
+        parsed_metric = metric_unit_aliases.get(parsed_unit.lower())
+        if parsed_metric and parsed_metric == normalized_target and parsed_qty > 0:
+            # The invoice already counts kilograms: «Мука 10 кг», 50 кг is
+            # 50 kg, not 50 bags. A pack size only converts bags/pieces.
+            return parsed_qty, row_sum / parsed_qty, parsed_metric, parsed_qty, parsed_unit, parsed_price
         explicit_same_unit = next((
             size for size, measure in explicit_metric_packs
             if metric_unit_aliases.get(measure) == normalized_target
@@ -4827,6 +4836,17 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
     habits = db.get_ingredient_habits(user_id)
     habits_dict = {(h['poster_ingredient_id'], h.get('account_name', '').strip()): h['default_price'] for h in habits if h['default_price']}
 
+    # Last supply price of each exact item (ID + name, since ingredient and
+    # product IDs overlap). Used only to catch a ×10/×100 quantity error.
+    last_prices = {}
+    try:
+        for record in db.get_price_history(telegram_user_id=user_id) or []:
+            key = (str(record.get('ingredient_id')), (record.get('ingredient_name') or '').strip().lower())
+            if key not in last_prices and record.get('price'):
+                last_prices[key] = float(record['price'])
+    except Exception as history_err:
+        logger.warning("Could not load price history for supply normalization: %s", history_err)
+
     for item in items:
         try:
             name = item.get('name', 'Товар')
@@ -4881,6 +4901,9 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
                     matching_rule=matching_rule,
                     default_price=default_price,
                     item_type=item_type,
+                    reference_price=last_prices.get(
+                        (str(item_id), (matched_name or '').strip().lower())
+                    ) if item_id else None,
                 )
             )
             if qty != original_qty or price != original_price:
