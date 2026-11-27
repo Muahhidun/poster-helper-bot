@@ -889,6 +889,21 @@ def find_explicit_supplier_name_and_id(user_id: int, text: str) -> Optional[tupl
         return None
 
 
+def _department_for_item(accounts, item_id, account_name):
+    """Poster department (id, name) for a matched item.
+
+    A catalogue cached without departments reports "Unknown"; such
+    single-account caches hold the primary department's IDs.
+    """
+    by_name = {acc['account_name']: acc['id'] for acc in accounts or []}
+    if account_name in by_name:
+        return by_name[account_name], account_name
+    if item_id and accounts:
+        primary = next((acc for acc in accounts if acc.get('is_primary')), accounts[0])
+        return primary['id'], primary['account_name']
+    return None, account_name
+
+
 def resolve_item_match(ing_matcher, prod_matcher, name: str, target_account: Optional[str] = None):
     """
     Match item against both ingredient and product catalogs.
@@ -960,15 +975,27 @@ def normalize_supply_item_measurements(
         except (TypeError, ValueError):
             pass
     learned = default_price if default_price not in (None, '') else reference_price
-    return repair_supply_scale_error(result, learned, pack_factors, name=item.get('name') or matched_name)
+    return repair_supply_scale_error(
+        result, learned, pack_factors, name=item.get('name') or matched_name,
+        allow_case_expansion=(item_type == 'product'),
+    )
 
 
-def repair_supply_scale_error(result, default_price, pack_factors=(), name: str = ''):
+# Typical number of bottles/cans in a case of drinks.
+DRINK_CASE_SIZES = (4, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24, 30, 36, 40, 48, 50, 60, 100)
+
+
+def repair_supply_scale_error(result, default_price, pack_factors=(), name: str = '',
+                              allow_case_expansion: bool = False):
     """Fix a quantity inflated by an exact factor, keeping the row total.
 
     Applies only when the price is lower than the learned unit price by
     almost exactly 10/100/1000 or by the pack size, and the corrected price
     lands near the learned one. Anything less clear-cut is left unchanged.
+
+    With ``allow_case_expansion`` (Poster products), the opposite error is
+    fixed too: 8 cases × 6311.76 ₸ when one bottle last cost 525.98 ₸ is
+    96 bottles × 525.98 ₸ (the ratio is a whole case size within 2%).
     """
     qty, price, unit, parsed_qty, parsed_unit, parsed_price = result
     try:
@@ -976,6 +1003,17 @@ def repair_supply_scale_error(result, default_price, pack_factors=(), name: str 
     except (TypeError, ValueError):
         return result
     if learned <= 0 or price <= 0 or qty <= 0:
+        return result
+    if allow_case_expansion and price / learned >= 3.5:
+        case_ratio = price / learned
+        sizes = set(DRINK_CASE_SIZES) | {float(f) for f in pack_factors if f and float(f) > 1}
+        for size in sorted(sizes):
+            if abs(case_ratio - size) / size <= 0.02:
+                logger.info(
+                    "📦 Expanded cases for '%s': %s × %s -> %s × %s (last price %s)",
+                    name, qty, price, qty * size, price / size, learned,
+                )
+                return qty * size, price / size, unit, parsed_qty, parsed_unit, parsed_price
         return result
     ratio = learned / price
     if ratio < 1.5:
@@ -2168,7 +2206,7 @@ def api_supply_ocr(draft_id):
             item_id, matched_name, _, item_type, account_name = resolve_item_match(
                 ing_matcher, prod_matcher, name, target_account=target_account
             )
-            account_id = account_name_to_id.get(account_name) if account_name else None
+            account_id, account_name = _department_for_item(accounts, item_id, account_name)
             
             # Add to draft
             db.add_supply_draft_item(
@@ -2786,6 +2824,19 @@ def _api_assistant_message_impl():
     chat_history = db.get_assistant_chat_history(user_id, limit=6)
     all_drafts = db.get_expense_drafts(user_id, status="all")
     active_drafts = [d for d in all_drafts if d.get('created_at') and str(d['created_at'])[:10] == date_str]
+    # Same supply context as the WhatsApp path, so the assistant can tell a
+    # filled supply from an expense whose invoice items are still missing.
+    for supply_draft in db.get_supply_drafts(user_id, status="pending"):
+        draft_with_items = db.get_supply_draft_with_items(supply_draft['id'])
+        if draft_with_items:
+            active_drafts.append({
+                'id': supply_draft['id'],
+                'type': 'supply',
+                'linked_expense_draft_id': supply_draft.get('linked_expense_draft_id'),
+                'supplier_name': supply_draft.get('supplier_name'),
+                'total_sum': supply_draft.get('total_sum'),
+                'items': draft_with_items.get('items', []),
+            })
 
     # Smart supplier profile filtering
     raw_supplier_profiles = db.get_supplier_ingredient_profiles(user_id)
@@ -4857,7 +4908,7 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
             item_id, matched_name, _, item_type, account_name = resolve_item_match(
                 ing_matcher, prod_matcher, name, target_account=target_account
             )
-            account_id = account_name_to_id.get(account_name) if account_name else None
+            account_id, account_name = _department_for_item(accounts, item_id, account_name)
 
             matching_rule = None
             default_price = None
@@ -5319,7 +5370,7 @@ def api_import_batch():
                             item_id, matched_name, _, item_type, account_name = resolve_item_match(
                                 ing_matcher, prod_matcher, name, target_account=target_account
                             )
-                            account_id = account_name_to_id.get(account_name) if account_name else None
+                            account_id, account_name = _department_for_item(accounts, item_id, account_name)
                                 
                             db.add_supply_draft_item(
                                 supply_draft_id=supply_draft_id,

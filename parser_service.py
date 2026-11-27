@@ -466,6 +466,7 @@ ASSISTANT_SYSTEM_PROMPT = """Ты — интеллектуальный помо�
    - Найди один подходящий существующий черновик расхода типа 'supply' по дате, поставщику, счёту и сумме. После этого добавь товары в связанную поставку действием add_supply_items.
    - Сумма товаров может отличаться от расхода на явно известную доставку или другое правило поставщика. В таком случае связь по поставщику, счёту и дате важнее буквального равенства сумм.
    - Если найден ровно один подходящий расход — обязательно используй add_supply_items и не создавай дубликат.
+   - Никогда не отказывайся обрабатывать присланную накладную со ссылкой на историю переписки («уже была добавлена ранее»). Владелец мог удалить прежний черновик, чтобы создать его заново. Актуальное состояние — только раздел «АКТИВНЫЕ ЧЕРНОВИКИ ДНЯ». Если там у подходящего расхода позиции ещё не добавлены, верни add_supply_items со всеми позициями. Защиту от дублей выполняет система, не ты.
    - Если подходящего расхода действительно нет — создай новый черновик расхода и связанный черновик поставки действием create_supply. Это нормальный сценарий для ещё не оплаченной накладной или когда владелец сначала отправляет накладные, а расходы проверяет позже.
    - Если подходят несколько существующих расходов, не угадывай и не создавай ещё один: перечисли кандидатов или попроси уточнить, вернув пустой actions.
    - create_expense разрешён только когда пользователь явно прислал отдельный список ещё не заведённых расходов (например, рукописный лист кассира), а не накладную поставщика.
@@ -1078,22 +1079,7 @@ class ParserService:
             history_formatted.append(f"{sender_name}: {msg['message_text']}")
         history_str = "\n".join(history_formatted)
 
-        drafts_formatted = []
-        for d in active_drafts:
-            if d.get('type') == 'supply':
-                linked_expense_id = d.get('linked_expense_draft_id')
-                item_count = len(d.get('items') or [])
-                drafts_formatted.append(
-                    f"- [Черновик поставки ID: {d['id']}; связанный Расход ID: {linked_expense_id}] "
-                    f"{d.get('supplier_name', '')} на сумму {d.get('total_sum', 0)}₸ "
-                    f"(позиций уже заполнено: {item_count})"
-                )
-            else:
-                drafts_formatted.append(
-                    f"- [Расход ID: {d['id']}] {d.get('description', '')} на сумму {d.get('amount', 0)}₸ "
-                    f"(Тип: {d.get('expense_type', 'transaction')}, Списание: {d.get('source', 'cash')}, Категория: {d.get('category', 'Прочее')})"
-                )
-        drafts_str = "\n".join(drafts_formatted) if drafts_formatted else "Нет активных черновиков."
+        drafts_str = format_active_drafts_for_assistant(active_drafts)
 
         profiles_str = json.dumps(supplier_profiles, ensure_ascii=False, indent=2)
 
@@ -1234,3 +1220,42 @@ def get_parser_service() -> ParserService:
     if _parser_service is None:
         _parser_service = ParserService()
     return _parser_service
+
+
+
+def format_active_drafts_for_assistant(active_drafts: List[Dict]) -> str:
+    """Describe the current drafts for the assistant prompt.
+
+    The chat history may mention a supply draft the owner has since deleted
+    in order to resend the invoice. The assistant must judge by this list,
+    so a supply expense without filled items is stated explicitly.
+    """
+    filled_expense_ids = {
+        d.get('linked_expense_draft_id')
+        for d in active_drafts
+        if d.get('type') == 'supply' and d.get('items')
+    }
+    lines = []
+    for d in active_drafts:
+        if d.get('type') == 'supply':
+            linked_expense_id = d.get('linked_expense_draft_id')
+            item_count = len(d.get('items') or [])
+            lines.append(
+                f"- [Черновик поставки ID: {d['id']}; связанный Расход ID: {linked_expense_id}] "
+                f"{d.get('supplier_name', '')} на сумму {d.get('total_sum', 0)}₸ "
+                f"(позиций уже заполнено: {item_count})"
+            )
+            continue
+        line = (
+            f"- [Расход ID: {d['id']}] {d.get('description', '')} на сумму {d.get('amount', 0)}₸ "
+            f"(Тип: {d.get('expense_type', 'transaction')}, Списание: {d.get('source', 'cash')}, "
+            f"Категория: {d.get('category', 'Прочее')})"
+        )
+        if (
+            (d.get('expense_type') or '') == 'supply'
+            and d.get('id') not in filled_expense_ids
+            and not d.get('poster_transaction_id')
+        ):
+            line += " — позиции накладной ещё НЕ добавлены (черновика поставки нет или он пуст)"
+        lines.append(line)
+    return "\n".join(lines) if lines else "Нет активных черновиков."

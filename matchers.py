@@ -47,8 +47,31 @@ def normalize_product_text(text: str) -> str:
     text = re.sub(r'\b(?:fuse|fuze|фьюз|фьюс)\b', 'фьюс', text)
     text = re.sub(r'\b(?:tea)\b', 'чай', text)
     text = re.sub(r'\bфьюс\s+чай\b', 'фьюс', text)
+    text = text.replace('ж/б', 'жб')
+    # "1лх12", "500млх24": the case size is not part of the product
+    text = re.sub(r'(\d+(?:[.,]\d+)?\s*(?:мл|м|л))\s*[хx×*]\s*\d+\b', r'\1', text)
+    # Millilitres to litres so "500мл" and "0,5л" are the same drink.
+    # Invoices also truncate it to "500м".
+    def _ml_to_litres(match):
+        return f"{float(match.group(1).replace(',', '.')) / 1000:g}л"
+    text = re.sub(r'(\d+(?:[.,]\d+)?)\s*мл\b', _ml_to_litres, text)
+    text = re.sub(r'(?<![\d.,])(\d{3,4})\s*м\b', _ml_to_litres, text)
     text = re.sub(r'(\d+(?:[.,]\d+)?)\s*(?:литр(?:а|ов)?|л)\b', r'\1л', text)
     return text.replace(',', '.')
+
+
+def product_volume_litres(text: str) -> Optional[float]:
+    """Volume of a drink in litres ("Кока-Кола 0,5л" -> 0.5), if stated."""
+    volumes = re.findall(r'(\d+(?:\.\d+)?)л\b', normalize_product_text(text))
+    return float(volumes[0]) if len(volumes) == 1 else None
+
+
+def product_volumes_compatible(query_volume: Optional[float], product_name: str) -> bool:
+    """A 0.5 l bottle must not become the 1 l product (cans 0.45 ≈ 0.5)."""
+    product_volume = product_volume_litres(product_name)
+    if query_volume is None or product_volume is None:
+        return True
+    return abs(query_volume - product_volume) <= 0.15 * max(query_volume, product_volume)
 
 
 def normalize_ingredient_text(text: str) -> str:
@@ -1474,9 +1497,15 @@ class ProductMatcher:
 
         # Normalize text for better matching
         text_lower = normalize_product_text(text)
+        query_volume = product_volume_litres(text)
 
         # Get all possible matches across all accounts
         all_matches = []
+
+        def drop_wrong_volume():
+            all_matches[:] = [
+                m for m in all_matches if product_volumes_compatible(query_volume, m[1])
+            ]
 
         # 1. Exact Poster catalogue name wins over any learned alias.
         if text_lower in self.names:
@@ -1492,6 +1521,8 @@ class ProductMatcher:
                 product = self.products.get((product_id, account_name))
                 if product:
                     all_matches.append((product_id, product['name'], product['unit'], 100, account_name))
+
+        drop_wrong_volume()
 
         # 3. Fuzzy matching - search in aliases first
         if not any(m[4] == primary_account for m in all_matches) and self.aliases:
@@ -1541,6 +1572,8 @@ class ProductMatcher:
                         continue
                     all_matches.append((product_id, product['name'], product['unit'], score, account_name))
 
+        drop_wrong_volume()
+
         # 4. Fuzzy matching - search in names
         if not any(m[4] == primary_account for m in all_matches):
             names_list = list(self.names.keys())
@@ -1583,6 +1616,7 @@ class ProductMatcher:
                         continue
                     all_matches.append((product['id'], product['name'], product['unit'], score, account_name))
 
+        drop_wrong_volume()
         if not all_matches:
             logger.warning(f"Product not matched (priority search): '{text}'")
             return None
