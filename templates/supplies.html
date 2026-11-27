@@ -964,45 +964,54 @@ function evaluateExpression(str) {
 // Cache for last prices by ingredient ID
 const lastPriceCache = {};
 
-// Fetch last price for an ingredient
-async function fetchLastPrice(ingredientId) {
-    if (lastPriceCache[ingredientId] !== undefined) {
-        return lastPriceCache[ingredientId];
+// Ingredient and product IDs overlap in Poster (product 15 «Кока-Кола 1л»
+// and ingredient 15 are different things), so the name is part of the key.
+function lastPriceKey(ingredientId, name) {
+    return `${ingredientId}|${(name || '').trim().toLowerCase()}`;
+}
+
+// Fetch last price for an item
+async function fetchLastPrice(ingredientId, name) {
+    const key = lastPriceKey(ingredientId, name);
+    if (lastPriceCache[key] !== undefined) {
+        return lastPriceCache[key];
     }
     try {
-        const response = await fetch(`/api/items/price-history/${ingredientId}`);
+        const query = name ? `?name=${encodeURIComponent(name)}` : '';
+        const response = await fetch(`/api/items/price-history/${ingredientId}${query}`);
         const data = await response.json();
         if (data.history && data.history.length > 0) {
-            lastPriceCache[ingredientId] = parseFloat(data.history[0].price);
+            lastPriceCache[key] = parseFloat(data.history[0].price);
         } else {
-            lastPriceCache[ingredientId] = null;
+            lastPriceCache[key] = null;
         }
     } catch (e) {
         console.log('Could not fetch price history:', e);
-        lastPriceCache[ingredientId] = null;
+        lastPriceCache[key] = null;
     }
-    return lastPriceCache[ingredientId];
+    return lastPriceCache[key];
 }
 
 // Load last prices for all items in all drafts
 async function loadAllLastPrices() {
-    const allIngredientIds = new Set();
+    const allItems = new Map();
     Object.values(supplyItems).forEach(items => {
         items.forEach(item => {
             if (item.poster_ingredient_id) {
-                allIngredientIds.add(item.poster_ingredient_id);
+                allItems.set(lastPriceKey(item.poster_ingredient_id, item.poster_ingredient_name),
+                             [item.poster_ingredient_id, item.poster_ingredient_name]);
             }
         });
     });
 
     // Fetch all prices in parallel
-    await Promise.all([...allIngredientIds].map(id => fetchLastPrice(id)));
+    await Promise.all([...allItems.values()].map(([id, name]) => fetchLastPrice(id, name)));
 
     // Update items with last prices
     Object.keys(supplyItems).forEach(draftId => {
         supplyItems[draftId].forEach(item => {
             if (item.poster_ingredient_id && !item.lastPrice) {
-                item.lastPrice = lastPriceCache[item.poster_ingredient_id];
+                item.lastPrice = lastPriceCache[lastPriceKey(item.poster_ingredient_id, item.poster_ingredient_name)];
             }
         });
         renderItems(parseInt(draftId));
@@ -1537,14 +1546,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const itemType = item.dataset.itemType || 'ingredient';
 
             // Fetch last price using cached function
-            const lastPrice = await fetchLastPrice(ingredientId);
+            const lastPrice = await fetchLastPrice(ingredientId, ingredientName);
 
             // Check if we have last supply data for this ingredient
             let autoQty = 0;
             let autoPrice = 0;
             const lastSupply = lastSupplyByDraft[draftId];
             if (lastSupply && lastSupply.items) {
-                const lastItem = lastSupply.items.find(i => i.id === ingredientId || i.name === ingredientName);
+                const lastItem = lastSupply.items.find(i => i.name === ingredientName);
                 if (lastItem) {
                     autoQty = lastItem.quantity || 1;
                     autoPrice = lastItem.price || 0;
@@ -1695,9 +1704,7 @@ function renderItems(draftId) {
         // Get last price: from item itself or from last supply data
         let lastPrice = item.lastPrice;
         if (!lastPrice && lastSupply && lastSupply.items) {
-            const lastItem = lastSupply.items.find(li =>
-                li.id === item.poster_ingredient_id || li.name === item.poster_ingredient_name
-            );
+            const lastItem = lastSupply.items.find(li => li.name === item.poster_ingredient_name);
             if (lastItem) lastPrice = lastItem.price;
         }
 
