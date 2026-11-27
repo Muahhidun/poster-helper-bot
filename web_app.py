@@ -937,6 +937,7 @@ def normalize_supply_item_measurements(
     matched_name: str,
     matching_rule: Optional[Dict] = None,
     default_price: Optional[float] = None,
+    item_type: Optional[str] = None,
 ) -> Tuple[float, float, str, float, str, float]:
     """Normalize packaging, then undo an obvious extra ×10/×100 on quantity.
 
@@ -946,6 +947,7 @@ def normalize_supply_item_measurements(
     """
     result = _normalize_supply_item_measurements_once(
         item, matched_name, matching_rule=matching_rule, default_price=default_price,
+        counted_in_pieces=(item_type == 'product'),
     )
     pack_factors = []
     for value in (item.get('pack_size'), (matching_rule or {}).get('coefficient')):
@@ -995,8 +997,13 @@ def _normalize_supply_item_measurements_once(
     matched_name: str,
     matching_rule: Optional[Dict] = None,
     default_price: Optional[float] = None,
+    counted_in_pieces: bool = False,
 ) -> Tuple[float, float, str, float, str, float]:
     """Apply a packaging conversion once while preserving the invoice total.
+
+    ``counted_in_pieces`` is set for Poster products (drinks and other goods
+    sold by the piece). A bottle size in the name ("Кока-кола 0.5л") must not
+    turn 120 bottles into 60 litres for them.
 
     Gemini now returns the original invoice values and the pack size whenever
     it applies a memory rule. Those fields make the operation idempotent: even
@@ -1034,6 +1041,20 @@ def _normalize_supply_item_measurements_once(
         'шт', 'штук', 'штука', 'штуки', 'уп', 'уп.', 'упак', 'упаковка',
         'пачка', 'пачки', 'ведро', 'ведра', 'канистра', 'канистры',
     }
+
+    if counted_in_pieces:
+        target_unit = (item.get('target_unit') or unit or 'шт').strip().lower()
+        if target_unit in metric_unit_aliases:
+            # Never litres/kilograms for a product. If the model already
+            # converted bottles to litres, go back to the invoice count.
+            if original_qty_value not in (None, '') and parsed_qty > 0:
+                qty, unit = parsed_qty, parsed_unit
+        elif original_qty_value not in (None, '') and pack_size and pack_size > 0:
+            # A box of 12 bottles -> 12 pieces is a legitimate count conversion.
+            qty, unit = parsed_qty * pack_size, target_unit
+        if qty > 0 and row_sum > 0:
+            price = row_sum / qty
+        return qty, price, unit, parsed_qty, parsed_unit, parsed_price
 
     if original_qty_value not in (None, '') and pack_size and pack_size > 0:
         target_unit = (item.get('target_unit') or unit or 'шт').strip().lower()
@@ -1841,6 +1862,16 @@ def api_item_price_history(item_id):
             ingredient_id=item_id,
             supplier_id=supplier_id
         )
+
+        # Ingredient and product IDs overlap, so an ID alone can return the
+        # price of a different item. When the caller knows the name, keep only
+        # records for that exact item.
+        name = (request.args.get('name') or '').strip().lower()
+        if name:
+            history = [
+                r for r in history
+                if (r.get('ingredient_name') or '').strip().lower() == name
+            ]
 
         # Limit to last 10 records
         history = history[:10] if len(history) > 10 else history
@@ -4849,6 +4880,7 @@ def _add_items_to_supply_draft(db, user_id, supply_draft_id, items):
                     matched_name or name,
                     matching_rule=matching_rule,
                     default_price=default_price,
+                    item_type=item_type,
                 )
             )
             if qty != original_qty or price != original_price:
