@@ -78,12 +78,42 @@ _GENERIC_INGREDIENT_TOKENS = {
 }
 
 
+# Prepositions say nothing about the product: "соус для донера" and
+# "соус томатный для пиццы" share only "соус" and "для".
+_INGREDIENT_STOPWORDS = {'для', 'без', 'под', 'при', 'над', 'или', 'из-под'}
+
+_RU_ENDINGS = tuple(sorted((
+    'ями', 'ами', 'ого', 'его', 'ому', 'ему', 'ыми', 'ими',
+    'ая', 'яя', 'ое', 'ее', 'ые', 'ие', 'ый', 'ий', 'ой', 'ую', 'юю',
+    'ом', 'ем', 'ах', 'ях', 'ов', 'ев',
+    'а', 'я', 'ы', 'и', 'у', 'ю', 'е', 'о', 'й', 'ь',
+), key=len, reverse=True))
+
+
+def ingredient_word_stem(word: str) -> str:
+    """Drop a Russian case/adjective ending: «пиццы», «пицца» -> «пицц»."""
+    if len(word) < 5 or not re.fullmatch(r'[а-яё]+', word):
+        return word
+    for ending in _RU_ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            return word[:-len(ending)]
+    return word
+
+
+def ingredient_stem_text(text: str) -> str:
+    """Normalized text with every word reduced to its stem (for fuzzy search)."""
+    normalized = normalize_ingredient_text(text)
+    return ' '.join(ingredient_word_stem(w) for w in re.findall(r'[a-zа-яё0-9]+', normalized))
+
+
 def ingredient_distinctive_tokens(text: str) -> set:
     """Return identifying words, excluding generic form/packaging labels."""
     normalized = normalize_ingredient_text(text)
     return {
         token for token in re.findall(r'[a-zа-яё]+', normalized)
-        if token not in _GENERIC_INGREDIENT_TOKENS and len(token) >= 3
+        if token not in _GENERIC_INGREDIENT_TOKENS
+        and token not in _INGREDIENT_STOPWORDS
+        and len(token) >= 3
     }
 
 
@@ -94,9 +124,20 @@ def _ingredient_token_present(token: str, candidate_tokens: set) -> bool:
             return True
         if len(token) >= 5 and len(candidate) >= 5 and token[:5] == candidate[:5]:
             return True
+        if ingredient_word_stem(token) == ingredient_word_stem(candidate) and len(ingredient_word_stem(token)) >= 4:
+            return True
         if fuzz.ratio(token, candidate) >= 85:
             return True
     return False
+
+
+def ingredient_tokens_overlap(query: str, candidate: str) -> bool:
+    """True when the texts share an identifying word (endings ignored)."""
+    candidate_tokens = ingredient_distinctive_tokens(candidate)
+    return any(
+        _ingredient_token_present(token, candidate_tokens)
+        for token in ingredient_distinctive_tokens(query)
+    )
 
 
 def missing_ingredient_tokens(query: str, candidate: str) -> int:
@@ -115,6 +156,11 @@ def missing_ingredient_tokens(query: str, candidate: str) -> int:
 
 # Score penalty for each identifying invoice word missing from a candidate.
 MISSING_TOKEN_PENALTY = 4
+
+# Pizzburg is preferred over Cafe only between comparably good candidates.
+# A clearly better Cafe-only item (e.g. «Соус Цезарь») must not lose to a
+# weak Pizzburg guess («Майонез»).
+PRIMARY_PREFERENCE_MARGIN = 10
 
 
 def ingredient_form_markers(text: str) -> set:
@@ -903,15 +949,32 @@ class IngredientMatcher:
                 score_cutoff=score_cutoff,
                 limit=10  # Get top 10 to find best across accounts
             )
+            # Same search with word endings dropped, so that «соус для пиццы»
+            # finds the confirmed alias «пицца соус».
+            stemmed_aliases = getattr(self, '_stemmed_aliases', None)
+            if stemmed_aliases is None or len(stemmed_aliases) != len(self.aliases):
+                stemmed_aliases = {}
+                for alias_key in aliases_list:
+                    stemmed_aliases.setdefault(ingredient_stem_text(alias_key), alias_key)
+                self._stemmed_aliases = stemmed_aliases
+            best_alias_scores = {alias: score for alias, score, _ in alias_matches}
+            for stemmed_alias, score, _ in process.extract(
+                ingredient_stem_text(text_lower),
+                list(stemmed_aliases.keys()),
+                scorer=fuzz.token_set_ratio,
+                score_cutoff=score_cutoff,
+                limit=10,
+            ):
+                alias_key = stemmed_aliases[stemmed_alias]
+                if score > best_alias_scores.get(alias_key, -1):
+                    best_alias_scores[alias_key] = score
+            alias_matches = [(alias, score, None) for alias, score in best_alias_scores.items()]
 
             for matched_alias, score, _ in alias_matches:
                 text_words = set(text_lower.split())
                 matched_words = set(matched_alias.split())
                 common_tokens = text_words & matched_words
-                distinctive_overlap = (
-                    ingredient_distinctive_tokens(text_lower)
-                    & ingredient_distinctive_tokens(matched_alias)
-                )
+                distinctive_overlap = ingredient_tokens_overlap(text_lower, matched_alias)
                 
                 # Stricter rejection for aliases 
                 is_suspicious = (
@@ -970,10 +1033,7 @@ class IngredientMatcher:
                 text_words = set(text_lower.split())
                 matched_words = set(matched_name.split())
                 common_tokens = text_words & matched_words
-                distinctive_overlap = (
-                    ingredient_distinctive_tokens(text_lower)
-                    & ingredient_distinctive_tokens(matched_name)
-                )
+                distinctive_overlap = ingredient_tokens_overlap(text_lower, matched_name)
                 
                 # Stricter rejection for raw names 
                 is_suspicious = (
@@ -1044,7 +1104,26 @@ class IngredientMatcher:
             # fallback only when no primary candidate passed the safety gates.
             return (is_primary, is_target, m[3])
 
-        best_match = max(all_matches, key=sort_key)
+        # The highest-scoring candidate competes with every candidate that is
+        # comparably good or names the same thing (all its identifying words,
+        # e.g. «Айсберг (Салат)» in Cafe vs «Салат листья (Айсберг)»).
+        top = max(all_matches, key=lambda m: (m[3], m[4] == primary_account))
+
+        def size_numbers(name):
+            return {n.replace(',', '.') for n in re.findall(r'\d+(?:[.,]\d+)?', name or '')}
+
+        def names_same_item(name):
+            return bool(
+                ingredient_distinctive_tokens(top[1])
+                and missing_ingredient_tokens(top[1], name) == 0
+                and size_numbers(top[1]) <= size_numbers(name)
+            )
+
+        contenders = [
+            m for m in all_matches
+            if m[3] >= top[3] - PRIMARY_PREFERENCE_MARGIN or names_same_item(m[1])
+        ]
+        best_match = max(contenders, key=sort_key)
         logger.info(f"✅ Found ingredient match: '{text}' -> {best_match[1]} (score={best_match[3]}, account={best_match[4]})")
         return best_match
 
